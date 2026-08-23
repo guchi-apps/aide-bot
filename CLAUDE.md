@@ -206,6 +206,26 @@ Prismaスキーマのフィールド削除・関数やエクスポートの改�
 `uses:` を見るのが確実。**`uses:` のタグと `prompts-ref` は必ず同じ値にする**
 （片方だけ上げると新しいワークフローで古いプロンプトが動く）。
 
+### callerに書ける `with:` は、参照しているタグ時点の再利用ワークフローが持つ入力だけ
+
+**存在しない入力を渡すと `startup_failure` になる。** ジョブが1つも作られず、ログも残らないため
+原因が分かりにくい。タグを上げるときも、増やした入力がそのタグに実在するかを確かめる。
+
+実際に踏んだ形（aide-bot#1）。`workflows/v25` 時点で次の2つがある。
+
+- **`database-name` を受け取るのは `reusable-issue-dispatch.yml` だけ。**
+  `reusable-claude-ci-fix.yml`・`reusable-claude-conflict-resolve.yml` には無い。
+  DBを使うリポジトリで揃えたくなるが、渡してはいけない
+- **`reusable-deploy-retry.yml` は `workflows/v25` に存在しない**（issue-deckのdevelopにはある）。
+  そのため `deploy-retry.yml` のcallerは置いていない。入れるのは、これを含むタグへ上げてから
+
+確認は次のコマンドでできる（issue-deckのチェックアウトが手元にある場合）。
+
+```bash
+cd ~/apps/issue-deck
+git show workflows/v25:.github/workflows/reusable-claude-ci-fix.yml | awk '/^  workflow_call:/,/^jobs:/'
+```
+
 無人実行のたびに `.shared-context/`（共有知識）と `.shared-prompts/`（issue-deck側の
 実装プロンプト）がワークツリーへcheckoutされる。**どちらもこのリポジトリの管理対象ではない。**
 `.gitignore` 済みなので、**編集・`git add`・コミットを一切行わないこと。**

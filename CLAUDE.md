@@ -78,6 +78,25 @@ VPSへ配ってPM2で再起動する（VPS上で `next build` はしない。メ
 値を変えたときだけ `scripts/sync-github-secrets.sh` でGitHubへ同期する
 （実行時に1Passwordを読まない理由は guchi-apps/issue-deck#1302・#1307）。
 
+### 初回デプロイの前に埋めるもの（#4）
+
+**GitHubのsecret / variableは新規リポジトリでは空のまま**で、`deploy.yml` の `env:` は空文字を渡す。
+`${{ secrets.X }}` は未登録でもエラーにならないため、失敗するのは値を実際に使う場所になる。
+aide-botでは build ジョブの「Construct DATABASE_URL」が
+`DB_NAME: DB_NAME is required` で落ちた（run 32648571956）。
+
+初回は上流の1Passwordアイテムごと存在しないので、次の順で埋める。**どれもエージェントは代行できない**
+（1Passwordへの書き込み・Signalyのチャンネル作成・本番デプロイの実行はいずれも人の操作）。
+
+1. Signalyでこのアプリ用の通知チャンネルを作り、Webhook URLを控える
+2. 1Passwordの `apps` ボールトに `aide-bot` アイテムを作り、`target-dir` / `db-name` /
+   `allowed-google-emails` / `ci-webhook-url` を登録する。値の形は他アプリのアイテムに揃える
+   （`target-dir` は `/home/github-user/apps/aide-bot`、`db-name` は `app_aide_bot`）
+3. `eval $(op signin)` の後に `scripts/sync-github-secrets.sh --dry-run` → 本実行。
+   **個人アカウントで実行する**（サービスアカウントは日次1,000リクエストの共有枠を消費する）
+4. `gh api repos/guchi-apps/aide-bot/actions/secrets --jq .total_count` で登録件数を確かめてから
+   Deploy to Production を再実行する
+
 ---
 
 # Issueごとの複数Claude Codeエージェント運用

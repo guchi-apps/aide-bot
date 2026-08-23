@@ -1,0 +1,45 @@
+{
+  "name": "aide-bot",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.34.5+sha512.a4ee05f2f73658255bd6a89859c065a45c28a57daefae2c893a168ee2b73168c37b91e83e57ea67654ad03f03031746430e8bce38e362e042605fb8abc80192e",
+  "scripts": {
+    "dev": "bash scripts/dev.sh",
+    "build": "prisma generate && next build",
+    "build:ci": "prisma generate && next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm lint && pnpm typecheck",
+    "postinstall": "prisma generate",
+    "env:init": "cp -n .env.local.example .env.local && echo '.env.local を編集してください（DB / Supabase / 許可メール）'",
+    "db:setup": "bash scripts/setup-db.sh",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:seed:ci": "node scripts/seed-ci-db.mjs",
+    "db:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "@supabase/ssr": "^0.12.4",
+    "@supabase/supabase-js": "^2.112.2",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.30.0",
+    "next": "^16.3.0",
+    "prisma": "^6.19.3",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "tailwind-merge": "^3.6.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^20.19.43",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "dotenv": "^17.4.2",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.3.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3"
+  }
+}

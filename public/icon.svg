@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="秘書アプリ">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e3a8a"/>
+      <stop offset="1" stop-color="#0f766e"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <path d="M136 128h240a40 40 0 0 1 40 40v144a40 40 0 0 1-40 40H248l-72 60v-60h-40a40 40 0 0 1-40-40V168a40 40 0 0 1 40-40z" fill="#f8fafc"/>
+  <circle cx="200" cy="240" r="18" fill="#1e3a8a"/>
+  <circle cx="256" cy="240" r="18" fill="#1e3a8a"/>
+  <circle cx="312" cy="240" r="18" fill="#1e3a8a"/>
+</svg>

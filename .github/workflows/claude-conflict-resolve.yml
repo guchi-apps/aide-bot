@@ -1,0 +1,67 @@
+name: Claude Conflict Resolve
+
+# develop向けPRがdevelopとの間でコンフリクトした際、Claude Codeが解消を試みるワークフローの、
+# aide-bot側のトリガー定義。ジョブ本体は持たず、issue-deckの再利用可能ワークフローを
+# 参照する（guchi-apps/issue-deck#1066・#1090）。
+#
+# `uses:`のタグと`prompts-ref`は必ず同じ値にする（claude-issue-dispatch.ymlと同じ理由）。
+#
+# トリガー:
+# - workflow_run(CI / requested / develop): developへ新たな変更が入るとOPENなPRが
+#   コンフリクトしうるため、その都度検知する（最も速報性が高い経路）。本来はpush(develop)で
+#   直接受けたいが、claude-code-actionはpushイベントに対応しておらず必ず失敗する
+#   （guchi-apps/issue-deck#1330）。このリポジトリのci.ymlがpush(develop)で走るため、その
+#   `requested`（=CI実行がキューされた時点）を代理のpush通知として使う。
+#   購読先は**ci.ymlの`name:`（`CI`）**であってファイル名ではない。
+# - pull_request(develop向け、opened/reopened): 作成時点で既にコンフリクトしている場合を拾う。
+#   synchronizeは含めない（実装エージェントのpushのたびに走るとキューが詰まる）。
+# - schedule(15分おき): GitHubのmergeable判定がUNKNOWNのままだった分を拾い直す安全網。
+# - workflow_dispatch: issue-deckの画面の「コンフリクトを自動解消」ボタン。
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - requested
+    branches:
+      - develop
+  pull_request:
+    types:
+      - opened
+      - reopened
+    branches:
+      - develop
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "対象のIssue番号（未指定ならdevelop向けの全OPEN PRを走査する）"
+        required: false
+        type: string
+
+jobs:
+  conflict-resolve:
+    uses: guchi-apps/issue-deck/.github/workflows/reusable-claude-conflict-resolve.yml@workflows/v25
+    with:
+      runtime-setup: node-db
+      package-manager: pnpm
+      node-version: "24"
+      # 再利用ワークフロー内のinputsコンテキストはworkflow_callのinputsを指すため、
+      # 呼び出し元のworkflow_dispatch入力はここで明示的に渡す。
+      issue-number: ${{ inputs.issue_number }}
+      # プロンプトへそのまま埋め込まれるため、文末まで含めて1行で書く。
+      verify-commands: "`pnpm lint`（Lint）・`pnpm typecheck`（型チェック）・`pnpm build:ci`（ビルド）を実行し、問題がないことを確認する（.github/workflows/ci.ymlのlint-and-buildジョブと同じ3つ。ビルド用の環境変数はこのステップに設定済みで、外部サービスへは接続しないため起動も不要）"
+      # 実シークレットはここに書かない（secrets: inheritで別途渡る）。
+      build-env: |
+        DATABASE_URL=mysql://placeholder:placeholder@127.0.0.1:3306/app_aide_bot
+        NEXT_PUBLIC_SUPABASE_URL=https://ci-placeholder.supabase.co
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=ci-placeholder
+      prompts-ref: workflows/v25
+    secrets: inherit
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+      id-token: write

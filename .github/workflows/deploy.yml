@@ -1,0 +1,359 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-aide-bot-production
+  cancel-in-progress: true
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Create Git tag
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          HEAD_SHA=$(git rev-parse HEAD)
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            TAG_SHA=$(git rev-parse "$TAG")
+            if [ "$TAG_SHA" = "$HEAD_SHA" ]; then
+              echo "Tag ${TAG} already points to HEAD"
+              exit 0
+            fi
+            echo "::error::Tag ${TAG} already exists on ${TAG_SHA}, but HEAD is ${HEAD_SHA}. Bump package.json version before merging."
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [tag, deploy]
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect prerelease
+        id: meta
+        run: |
+          TAG="${{ needs.tag.outputs.tag }}"
+          if [[ "$TAG" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.tag.outputs.tag }}
+          generate_release_notes: true
+          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
+          skip_if_release_exists: true
+
+  build:
+    runs-on: ubuntu-latest
+    needs: tag
+
+    # GitHub側の値をここで明示的に渡す。以前は実行のたびに1Passwordから読んで
+    # いたが、サービスアカウントの日次レート制限を使い切ってフリート全体の
+    # デプロイが止まった（guchi-apps/issue-deck#1302）。SERVER_*・SHARED_DB_*・
+    # SUPABASE_* はorganizationの共通値。
+    #
+    # このブロックは scripts/generate-workflow-env-block.sh で生成する（guchi-apps/issue-deck#1307）。
+    env:
+      SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_PRIVATE_KEY }}
+      HOST: ${{ secrets.SERVER_HOST }}
+      USERNAME: ${{ secrets.SERVER_USERNAME }}
+      SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
+      DB_HOST: ${{ secrets.SHARED_DB_HOST }}
+      DB_PORT: ${{ secrets.SHARED_DB_PORT }}
+      DB_USER: ${{ secrets.SHARED_DB_USER }}
+      DB_PASSWORD: ${{ secrets.SHARED_DB_PASSWORD }}
+      MIGRATE_DB_USER: ${{ secrets.SHARED_DB_MIGRATE_USER }}
+      MIGRATE_DB_PASSWORD: ${{ secrets.SHARED_DB_MIGRATE_PASSWORD }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ vars.SUPABASE_PROJECT_URL }}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+      TARGET_DIR: ${{ secrets.TARGET_DIR }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+      ALLOWED_GOOGLE_EMAILS: ${{ secrets.ALLOWED_GOOGLE_EMAILS }}
+      SIGNALY_WEBHOOK_URL: ${{ secrets.SIGNALY_WEBHOOK_URL }}
+      PORT: ${{ vars.PORT }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Construct DATABASE_URL
+        run: bash scripts/construct-database-url.sh
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build:ci
+        env:
+          NODE_ENV: production
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          # NEXT_PUBLIC_* はビルド時にバンドルへ埋め込まれるため、ここにも渡す。
+          NEXT_PUBLIC_SUPABASE_URL: ${{ env.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
+
+      - name: Create archive
+        run: |
+          tar -czf deploy.tar.gz \
+            package.json \
+            pnpm-lock.yaml \
+            public \
+            .next \
+            prisma \
+            deploy \
+            scripts/construct-database-url.sh \
+            scripts/update-env-file.sh \
+            next.config.ts
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifact
+          path: deploy.tar.gz
+          if-no-files-found: error
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+
+    # GitHub側の値をここで明示的に渡す。以前は実行のたびに1Passwordから読んで
+    # いたが、サービスアカウントの日次レート制限を使い切ってフリート全体の
+    # デプロイが止まった（guchi-apps/issue-deck#1302）。SERVER_*・SHARED_DB_*・
+    # SUPABASE_* はorganizationの共通値。
+    #
+    # このブロックは scripts/generate-workflow-env-block.sh で生成する（guchi-apps/issue-deck#1307）。
+    env:
+      SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_PRIVATE_KEY }}
+      HOST: ${{ secrets.SERVER_HOST }}
+      USERNAME: ${{ secrets.SERVER_USERNAME }}
+      SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
+      DB_HOST: ${{ secrets.SHARED_DB_HOST }}
+      DB_PORT: ${{ secrets.SHARED_DB_PORT }}
+      DB_USER: ${{ secrets.SHARED_DB_USER }}
+      DB_PASSWORD: ${{ secrets.SHARED_DB_PASSWORD }}
+      MIGRATE_DB_USER: ${{ secrets.SHARED_DB_MIGRATE_USER }}
+      MIGRATE_DB_PASSWORD: ${{ secrets.SHARED_DB_MIGRATE_PASSWORD }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ vars.SUPABASE_PROJECT_URL }}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+      TARGET_DIR: ${{ secrets.TARGET_DIR }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+      ALLOWED_GOOGLE_EMAILS: ${{ secrets.ALLOWED_GOOGLE_EMAILS }}
+      SIGNALY_WEBHOOK_URL: ${{ secrets.SIGNALY_WEBHOOK_URL }}
+      PORT: ${{ vars.PORT }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+          path: ./
+
+      - name: Construct DATABASE_URL
+        run: bash scripts/construct-database-url.sh
+
+      - name: Install SSH key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          known_hosts: placeholder
+          if_key_exists: replace
+
+      - name: Add known hosts
+        run: ssh-keyscan -p "${SSH_PORT}" -H "${HOST}" >> ~/.ssh/known_hosts
+        env:
+          HOST: ${{ env.HOST }}
+          SSH_PORT: ${{ env.SSH_PORT }}
+
+      - name: Upload archive
+        run: scp -P "${SSH_PORT}" deploy.tar.gz "${USERNAME}@${HOST}:${TARGET_DIR}/deploy.tar.gz"
+        env:
+          HOST: ${{ env.HOST }}
+          USERNAME: ${{ env.USERNAME }}
+          SSH_PORT: ${{ env.SSH_PORT }}
+          TARGET_DIR: ${{ env.TARGET_DIR }}
+
+      - name: Deploy and restart
+        uses: appleboy/ssh-action@v1
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          MIGRATE_DATABASE_URL: ${{ env.MIGRATE_DATABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ env.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
+          ALLOWED_GOOGLE_EMAILS: ${{ env.ALLOWED_GOOGLE_EMAILS }}
+          TARGET_DIR: ${{ env.TARGET_DIR }}
+          APP_PORT: ${{ env.PORT }}
+        with:
+          host: ${{ env.HOST }}
+          username: ${{ env.USERNAME }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: ${{ env.SSH_PORT }}
+          # ここに無い変数はSSH先に存在しない。env: と同じ名前を必ず並べる。
+          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,ALLOWED_GOOGLE_EMAILS,TARGET_DIR,APP_PORT
+          script: |
+            set -euo pipefail
+            cd "${TARGET_DIR}"
+
+            PORT="${APP_PORT:-3103}"
+
+            echo "Cleaning up old release files..."
+            # 配布物を増やしたらこの行にも足す。永続させたいディレクトリは絶対に入れない。
+            rm -rf .next public package.json pnpm-lock.yaml prisma deploy next.config.ts
+
+            echo "Extracting archive..."
+            tar -xzf deploy.tar.gz
+            rm deploy.tar.gz
+
+            update_env() {
+              bash scripts/update-env-file.sh .env "$1" "$2"
+            }
+
+            echo "Updating .env..."
+            update_env NODE_ENV production
+            update_env PORT "$PORT"
+            update_env DATABASE_URL "$DATABASE_URL"
+            update_env NEXT_PUBLIC_SUPABASE_URL "$NEXT_PUBLIC_SUPABASE_URL"
+            update_env NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY "$NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"
+            update_env ALLOWED_GOOGLE_EMAILS "$ALLOWED_GOOGLE_EMAILS"
+
+            echo "Installing production dependencies..."
+            corepack enable pnpm >/dev/null 2>&1 || true
+            pnpm install --prod --frozen-lockfile
+
+            echo "Applying database migrations..."
+            DATABASE_URL="$MIGRATE_DATABASE_URL" pnpm exec prisma migrate deploy
+
+            echo "Restarting PM2..."
+            if command -v pm2 >/dev/null 2>&1; then
+              pm2 delete aide-bot 2>/dev/null || true
+              PORT="$PORT" pm2 start deploy/ecosystem.config.js --env production
+              pm2 save
+            else
+              echo "pm2 is required on the server. Install: npm install -g pm2"
+              exit 1
+            fi
+
+            echo "Health check..."
+            # Next.js は起動完了までに数秒かかる。1回だけのcurlでは起動が間に合わずに
+            # 失敗するため、一定時間リトライする。
+            for i in $(seq 1 30); do
+              if curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/"; then
+                echo "Deployment successful."
+                exit 0
+              fi
+              sleep 2
+            done
+
+            echo "Health check failed after 60s."
+            pm2 describe aide-bot || true
+            pm2 logs aide-bot --lines 50 --nostream || true
+            exit 1
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [tag, build, deploy]
+    if: always()
+
+    env:
+      SIGNALY_WEBHOOK_URL: ${{ secrets.SIGNALY_WEBHOOK_URL }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine workflow status
+        id: status
+        run: |
+          tag="${{ needs.tag.result }}"
+          build="${{ needs.build.result }}"
+          deploy="${{ needs.deploy.result }}"
+          if [ "$tag" = "success" ] && [ "$build" = "success" ] && [ "$deploy" = "success" ]; then
+            result=success
+          elif [ "$tag" = "cancelled" ] || [ "$build" = "cancelled" ] || [ "$deploy" = "cancelled" ]; then
+            result=cancelled
+          else
+            result=failure
+          fi
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+
+      - name: Signaly に通知
+        # 通知はCIやデプロイの合否そのものではない。ここが失敗してもrun全体を
+        # 落とさない（guchi-apps/issue-deck#1302）。
+        continue-on-error: true
+        env:
+          SIGNALY_WEBHOOK_URL: ${{ env.SIGNALY_WEBHOOK_URL }}
+          NOTIFY_APP: aide-bot
+          NOTIFY_KIND: デプロイ
+          NOTIFY_STATUS: ${{ steps.status.outputs.result }}
+        run: bash .github/scripts/signaly-notify.sh
+
+  notify-release:
+    runs-on: ubuntu-latest
+    needs: [tag, deploy, release]
+    if: always() && needs.release.result != 'skipped'
+
+    env:
+      SIGNALY_WEBHOOK_URL: ${{ secrets.SIGNALY_WEBHOOK_URL }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Signaly に通知
+        continue-on-error: true
+        env:
+          SIGNALY_WEBHOOK_URL: ${{ env.SIGNALY_WEBHOOK_URL }}
+          NOTIFY_STATUS: ${{ needs.release.result }}
+          NOTIFY_APP: aide-bot
+          NOTIFY_KIND: リリース
+          NOTIFY_VERSION: ${{ needs.tag.outputs.tag }}
+        run: bash .github/scripts/signaly-notify.sh

@@ -1,0 +1,44 @@
+name: Issue Labels
+
+# Issueの進捗（Project Status）の状態遷移をイベント駆動で保証するワークフローの、
+# aide-bot側のトリガー定義。
+#
+# ジョブ本体はguchi-apps/issue-deckのreusable-issue-labels.ymlにあり、ここでは`uses:`で参照する
+# だけにしている。呼ばれる側でも`github`コンテキストは呼び出し元（このリポジトリ）のものになる
+# ため、ジョブ定義側にaide-bot固有の書き換えは不要。
+#
+# 参照はタグ固定にする。issue-deck側は`./`のローカルパス参照で常に最新を動かすカナリアであり、
+# 他アプリはタグを上げるPRを出すまで影響を受けない構成になっている。タグを上げる際は
+# claude-issue-dispatch.ymlの`uses:`・`prompts-ref`もあわせて確認する。
+#
+# 対象issueの番号はブランチ名 issue-<番号> から特定するため、この命名規約に従わない
+# ブランチ・PRは全て対象外になる。
+on:
+  push:
+    branches:
+      - "issue-*"
+  pull_request:
+    types: [opened, synchronize, closed]
+    branches:
+      - develop
+      - main
+  issues:
+    types: [opened, edited, closed]
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  labels:
+    uses: guchi-apps/issue-deck/.github/workflows/reusable-issue-labels.yml@workflows/v25
+    # 呼ばれる側の権限はcallerの付与範囲を超えられない。cleanup-on-closeジョブが
+    # contents: write を要求するため、あわせてここで付与する。
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
+    # 進捗をissue-deckの報告API（POST /api/progress）へ送るための共有シークレット。
+    # organization secretとして解決される。secrets: inherit ではなく個別に渡し、
+    # 呼ばれる側へ渡る秘密を最小限に保つ。未設定でも報告ステップがスキップされるだけ。
+    secrets:
+      PROGRESS_REPORT_SECRET: ${{ secrets.PROGRESS_REPORT_SECRET }}

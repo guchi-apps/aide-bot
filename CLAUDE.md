@@ -10,7 +10,7 @@ NotionやAIDE（`guchi-apps/aide`）などを参照し、チャットボット�
 
 | 項目 | 値 |
 |---|---|
-| 本番URL | `https://aide.gucchii.com/` |
+| 本番URL | `https://aide-bot.gucchii.com/` |
 | 本番ポート | `3103`（PM2 プロセス名 `aide-bot`） |
 | 配布先 | VPS の `/apps/aide-bot/` |
 | データベース | `app_aide_bot`（MariaDB / Prisma） |

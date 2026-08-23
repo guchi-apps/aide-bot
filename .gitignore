@@ -1,0 +1,38 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files（実シークレットはコミットしない。テンプレートのみ管理対象）
+.env*
+!.env.example
+!.env.local.example
+
+# 共有知識リポジトリ（GitHub Actions実行時にcheckoutされる。読み取り専用）
+/.shared-context/
+
+# issue-deck側の実装プロンプトのcheckout先（prompts-ref指定時）。同じくリポジトリ管理外。
+/.shared-prompts/
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts

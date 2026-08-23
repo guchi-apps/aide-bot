@@ -1,0 +1,24 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// --- 認証 ---
+// セッション管理はSupabase Auth側が行うため、Account/Session/VerificationTokenは持たない。
+// SupabaseのユーザーID（auth.users.id）を外部キーとして紐付ける。
+//
+// 会話履歴・連携設定などaide-bot固有のモデルは、機能ごとのIssueでこのUserに紐づけて足す。
+model User {
+  id             String  @id @default(cuid())
+  supabaseUserId String  @unique
+  email          String? @unique
+  name           String?
+  image          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

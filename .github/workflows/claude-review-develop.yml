@@ -1,0 +1,50 @@
+name: Claude Code Review (develop向けPR)
+
+# develop向けPRの作成・更新時に、機械的リスク判定・Claude Codeによる自動レビュー・
+# 低リスクPRの自動マージを行うワークフローの、aide-bot側のトリガー定義。
+#
+# ジョブ本体は持たず、issue-deckの再利用可能ワークフローを参照する
+# （guchi-apps/issue-deck#1078・#1090）。
+#
+# aide-bot固有の差異はwith:で吸収する。
+#   lock-files   このリポジトリはpnpm（pnpm-lock.yaml）
+#   risk-paths   認証はSupabase Auth + Google OAuthで、セッション判定の本体は
+#                src/proxy.ts と src/lib/supabase/**。許可ユーザー判定は
+#                src/lib/allowed-users.ts。いずれもパス名にauthを含まないが
+#                認証・認可カテゴリとして扱う。
+#                .github/workflows/** ・.env* ・**/auth/** ・.shared-context/** ・
+#                prisma/migrations/** は再利用ワークフロー側に内蔵されているため書かない
+#                （入力はリスクを追加できるが削減はできない）。
+#   prompts-ref  uses:と同じタグを指定すること
+#
+# dependency-checkは既定（major）のまま。通常のnpm依存を持つため、メジャー更新のみを
+# リスクとみなす。
+#
+# concurrency: 新しいpushが来たら古い実行を丸ごとキャンセルする。呼び出し元の
+# ワークフローレベルに置くことで、呼び出し先のジョブも一緒にキャンセルされる。
+concurrency:
+  group: claude-review-develop-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - develop
+
+jobs:
+  review:
+    uses: guchi-apps/issue-deck/.github/workflows/reusable-claude-review-develop.yml@workflows/v25
+    with:
+      lock-files: "pnpm-lock.yaml"
+      risk-paths: |
+        ^src/(proxy\.ts$|lib/(supabase/|allowed-users\.ts$)) :: 認証・セッション・許可ユーザー判定の変更 (src/proxy.ts, src/lib/supabase/**, src/lib/allowed-users.ts)
+        ^deploy/|^\.github/secrets-manifest\.tsv$ :: 本番環境設定の変更 (deploy/**, .github/secrets-manifest.tsv)
+      prompts-ref: workflows/v25
+    secrets: inherit
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+      id-token: write

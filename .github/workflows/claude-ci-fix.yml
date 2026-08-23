@@ -1,0 +1,55 @@
+name: Claude CI Fix
+
+# develop向けPRのCIが失敗した際、Claude Codeが原因を調べて修正するワークフローの、
+# aide-bot側のトリガー定義。ジョブ本体は持たず、issue-deckの再利用可能ワークフローを
+# 参照する（guchi-apps/issue-deck#1066）。
+#
+# 参照はタグ固定にする。@developを参照するとissue-deck側の不具合が即座に波及するため。
+#
+# トリガー:
+# - workflow_run(CI / completed): CIの失敗を検知する。**このリポジトリのCI
+#   ワークフローの名前と一致していること**を確認する（違う名前なら発火しない）。
+#   なお workflow_run はデフォルトブランチ上のワークフローファイルでのみ発火する。
+# - workflow_dispatch: 手動実行と、issue-deckの画面の「CI失敗を自動修正」ボタン。
+on:
+  workflow_run:
+    workflows:
+      - "CI"
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "対象のIssue番号（develop向けPRのissue-<番号>ブランチのIssue番号）"
+        required: true
+        type: number
+
+jobs:
+  ci-fix:
+    uses: guchi-apps/issue-deck/.github/workflows/reusable-claude-ci-fix.yml@workflows/v25
+    with:
+      runtime-setup: node-db
+      package-manager: pnpm
+      node-version: "24"
+      # 再利用ワークフロー内のinputsコンテキストはworkflow_callのinputsを指すため、
+      # 本ワークフローのworkflow_dispatch入力はここで明示的に渡す。
+      issue-number: ${{ inputs.issue_number }}
+      # プロンプトへそのまま埋め込まれるため、文末まで含めて1行で書く。
+      verify-commands: "`pnpm lint`（Lint）・`pnpm typecheck`（型チェック）・`pnpm build:ci`（ビルド）を実行し、問題がないことを確認する（.github/workflows/ci.ymlのlint-and-buildジョブと同じ3つ。ビルド用の環境変数はこのステップに設定済みで、外部サービスへは接続しないため起動も不要）"
+      # pnpm build:ciの実行に必要。.github/workflows/ci.ymlのenvと同じプレースホルダー値を使う
+      # （実際の外部サービスには接続しない）。実シークレットはここに書かない
+      # （secrets: inheritで別途渡る）。
+      build-env: |
+        DATABASE_URL=mysql://placeholder:placeholder@127.0.0.1:3306/app_aide_bot
+        NEXT_PUBLIC_SUPABASE_URL=https://ci-placeholder.supabase.co
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=ci-placeholder
+      # 上の uses: と同じタグを指定する。片方だけ上げると新しいワークフローで
+      # 古いプロンプトが使われる。
+      prompts-ref: workflows/v25
+    secrets: inherit
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+      id-token: write

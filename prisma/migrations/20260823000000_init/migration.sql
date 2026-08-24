@@ -1,4 +1,3 @@
-◇ injected env (0) from .env.local // tip: ◈ encrypted .env [www.dotenvx.com]
 -- CreateTable
 CREATE TABLE `User` (
     `id` VARCHAR(191) NOT NULL,

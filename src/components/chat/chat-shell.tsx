@@ -1,11 +1,13 @@
 "use client";
 
-import { Menu, Plus, X } from "lucide-react";
-import Link from "next/link";
+import { Menu, X } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { cn } from "@/lib/utils";
+
 import { ConversationRail } from "./conversation-rail";
+import { useTalkMode } from "./talk-mode-context";
 import type { ConversationSummary } from "./types";
 
 type Props = {
@@ -102,17 +104,46 @@ export function ChatShell({ conversations, userLabel, userEmail, children }: Pro
             {activeTitle}
           </h1>
 
-          <Link
-            href="/"
-            className="grid size-[34px] shrink-0 place-items-center rounded-[10px] border border-border bg-background transition-colors hover:bg-rail-active md:hidden"
-          >
-            <Plus className="size-4" aria-hidden="true" />
-            <span className="sr-only">新しい相談</span>
-          </Link>
+          <TalkModeSwitch />
         </header>
 
         {children}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 「話す / 書く」の切り替え。既定は「話す」で、選んだ方はCookieに残る（#27）。
+ *
+ * スマホでは「新しい相談」のボタンがあった位置に置いている。相談を分けるより、
+ * 話すか書くかを切り替える方が桁違いに多い操作のため。新しい相談は左の一覧から作る。
+ */
+function TalkModeSwitch() {
+  const { mode, setMode } = useTalkMode();
+
+  return (
+    <div
+      role="group"
+      aria-label="相談のしかた"
+      className="flex shrink-0 items-center gap-0.5 rounded-full bg-rail-active p-0.5"
+    >
+      {(["voice", "write"] as const).map((candidate) => (
+        <button
+          key={candidate}
+          type="button"
+          onClick={() => setMode(candidate)}
+          aria-pressed={mode === candidate}
+          className={cn(
+            "rounded-full px-3.5 py-1.5 text-xs transition-colors",
+            mode === candidate
+              ? "bg-surface font-bold text-foreground shadow-sm"
+              : "text-muted hover:text-foreground",
+          )}
+        >
+          {candidate === "voice" ? "話す" : "書く"}
+        </button>
+      ))}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
+import { parseStreamEvent, readString } from "@/lib/sse";
 import { cn } from "@/lib/utils";
 
 import { Markdown } from "./markdown";
@@ -17,34 +18,6 @@ type Props = {
 };
 
 type Status = "idle" | "thinking" | "streaming";
-
-type StreamEvent = { name: string; data: Record<string, unknown> };
-
-/** SSEの1ブロック（空行区切り）をイベント名とJSONに分ける。 */
-function parseStreamEvent(block: string): StreamEvent | null {
-  let name = "message";
-  const dataLines: string[] = [];
-
-  for (const line of block.split("\n")) {
-    if (line.startsWith("event:")) name = line.slice("event:".length).trim();
-    else if (line.startsWith("data:")) dataLines.push(line.slice("data:".length).trim());
-  }
-
-  if (dataLines.length === 0) return null;
-
-  try {
-    const data = JSON.parse(dataLines.join("\n")) as unknown;
-    if (typeof data !== "object" || data === null) return null;
-    return { name, data: data as Record<string, unknown> };
-  } catch {
-    return null;
-  }
-}
-
-function readString(data: Record<string, unknown>, key: string): string | null {
-  const value = data[key];
-  return typeof value === "string" ? value : null;
-}
 
 export function ChatPanel({ conversationId, initialMessages }: Props) {
   const router = useRouter();

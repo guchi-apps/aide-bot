@@ -20,6 +20,10 @@ NotionやAIDE（`guchi-apps/aide`）などを参照し、チャットボット�
 **ポートの正は `vps` リポジトリのアプリ一覧**（[ports.md](https://github.com/guchi-apps/docs/blob/main/standards/ports.md)）。
 `deploy/ecosystem.config.js` と `.github/workflows/deploy.yml` の既定値がそれに揃っている。
 
+**`PORT` はシークレットではなく設定値として扱う。** 1Passwordにも `.github/secrets-manifest.tsv` にも置かず、
+`deploy.yml` のSSHスクリプト内に平文で持つ（ports.md「ポート番号は 1Password で管理しない」）。
+GitHub変数 `vars.PORT` は使わない。マニフェストへ戻さないこと（#5）。
+
 ## このリポジトリの構成（エージェント向けの前提）
 
 ```
@@ -77,6 +81,52 @@ VPSへ配ってPM2で再起動する（VPS上で `next build` はしない。メ
 `scripts/generate-workflow-env-block.sh` で生成する。1Passwordは「人が管理する唯一の正」として残り、
 値を変えたときだけ `scripts/sync-github-secrets.sh` でGitHubへ同期する
 （実行時に1Passwordを読まない理由は guchi-apps/issue-deck#1302・#1307）。
+
+### 初回デプロイの前に埋めるもの（#4）
+
+**GitHubのsecret / variableは新規リポジトリでは空のまま**で、`deploy.yml` の `env:` は空文字を渡す。
+`${{ secrets.X }}` は未登録でもエラーにならないため、失敗するのは値を実際に使う場所になる。
+aide-botでは build ジョブの「Construct DATABASE_URL」が
+`DB_NAME: DB_NAME is required` で落ちた（run 32648571956）。
+
+初回は上流の1Passwordアイテムごと存在しないので、次の順で埋める。**どれもエージェントは代行できない**
+（1Passwordへの書き込み・Signalyのチャンネル作成・本番デプロイの実行はいずれも人の操作）。
+
+1. Signalyでこのアプリ用の通知チャンネルを作り、Webhook URLを控える
+2. 1Passwordの `apps` ボールトに `aide-bot` アイテムを作り、`target-dir` / `db-name` /
+   `allowed-google-emails` / `ci-webhook-url` を登録する。値の形は他アプリのアイテムに揃える
+   （`target-dir` は `/home/github-user/apps/aide-bot`、`db-name` は `app_aide_bot`）
+3. `eval $(op signin)` の後に `scripts/sync-github-secrets.sh --dry-run` → 本実行。
+   **個人アカウントで実行する**（サービスアカウントは日次1,000リクエストの共有枠を消費する）
+4. `gh api repos/guchi-apps/aide-bot/actions/secrets --jq .total_count` で登録件数を確かめてから
+   Deploy to Production を再実行する
+
+**secretを埋めてもまだ公開はされない。** `deploy.yml` のヘルスチェックはVPS内の
+`http://127.0.0.1:3103/` を叩くだけなので、Apacheのvhostが無くてもdeployジョブは成功する。
+`https://aide-bot.gucchii.com/` を通すには `guchi-apps/vps` 側でvhostとTLS証明書を用意し、
+アプリ一覧へ3103を登録する必要がある（`curl` でTLSハンドシェイクが
+`no alternative certificate subject name matches` になる間は未設定）。
+
+### マイグレーションSQLにdotenvの出力を混ぜない（#9）
+
+`prisma.config.ts` の `loadEnv()` には **`quiet: true` を必ず付ける**。dotenv v17は読み込み時の
+案内文を**stdout**へ出力し、Prismaは同じstdoutへ `migrate dev` / `migrate diff --script` の
+SQLを書き出すため、案内文がそのまま `migration.sql` の1行目に入り込む。
+
+ローカルでは誰も実行しないので気付けず、本番の `prisma migrate deploy` で初めて
+MariaDBの構文エラー（1064 / P3018）として出る。実際に `20260823000000_init` がこの形で壊れ、
+初回デプロイが失敗した（run 32720715118）。
+
+マイグレーションを追加したら、コミット前に生成物と突き合わせる。
+
+```bash
+pnpm exec prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script
+```
+
+**本番で一度失敗したマイグレーションは、直したSQLを配っても自動では復旧しない。**
+`_prisma_migrations` に失敗として記録が残り、以後の `migrate deploy` はP3009で止まる。
+VPS上で `pnpm exec prisma migrate resolve --rolled-back <マイグレーション名>` を実行してから
+デプロイし直す。
 
 ---
 

@@ -101,6 +101,33 @@ aide-botでは build ジョブの「Construct DATABASE_URL」が
 4. `gh api repos/guchi-apps/aide-bot/actions/secrets --jq .total_count` で登録件数を確かめてから
    Deploy to Production を再実行する
 
+**secretを埋めてもまだ公開はされない。** `deploy.yml` のヘルスチェックはVPS内の
+`http://127.0.0.1:3103/` を叩くだけなので、Apacheのvhostが無くてもdeployジョブは成功する。
+`https://aide-bot.gucchii.com/` を通すには `guchi-apps/vps` 側でvhostとTLS証明書を用意し、
+アプリ一覧へ3103を登録する必要がある（`curl` でTLSハンドシェイクが
+`no alternative certificate subject name matches` になる間は未設定）。
+
+### マイグレーションSQLにdotenvの出力を混ぜない（#9）
+
+`prisma.config.ts` の `loadEnv()` には **`quiet: true` を必ず付ける**。dotenv v17は読み込み時の
+案内文を**stdout**へ出力し、Prismaは同じstdoutへ `migrate dev` / `migrate diff --script` の
+SQLを書き出すため、案内文がそのまま `migration.sql` の1行目に入り込む。
+
+ローカルでは誰も実行しないので気付けず、本番の `prisma migrate deploy` で初めて
+MariaDBの構文エラー（1064 / P3018）として出る。実際に `20260823000000_init` がこの形で壊れ、
+初回デプロイが失敗した（run 32720715118）。
+
+マイグレーションを追加したら、コミット前に生成物と突き合わせる。
+
+```bash
+pnpm exec prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script
+```
+
+**本番で一度失敗したマイグレーションは、直したSQLを配っても自動では復旧しない。**
+`_prisma_migrations` に失敗として記録が残り、以後の `migrate deploy` はP3009で止まる。
+VPS上で `pnpm exec prisma migrate resolve --rolled-back <マイグレーション名>` を実行してから
+デプロイし直す。
+
 ---
 
 # Issueごとの複数Claude Codeエージェント運用

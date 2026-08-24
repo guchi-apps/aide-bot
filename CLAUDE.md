@@ -20,6 +20,10 @@ NotionやAIDE（`guchi-apps/aide`）などを参照し、チャットボット�
 **ポートの正は `vps` リポジトリのアプリ一覧**（[ports.md](https://github.com/guchi-apps/docs/blob/main/standards/ports.md)）。
 `deploy/ecosystem.config.js` と `.github/workflows/deploy.yml` の既定値がそれに揃っている。
 
+**`PORT` はシークレットではなく設定値として扱う。** 1Passwordにも `.github/secrets-manifest.tsv` にも置かず、
+`deploy.yml` のSSHスクリプト内に平文で持つ（ports.md「ポート番号は 1Password で管理しない」）。
+GitHub変数 `vars.PORT` は使わない。マニフェストへ戻さないこと（#5）。
+
 ## このリポジトリの構成（エージェント向けの前提）
 
 ```

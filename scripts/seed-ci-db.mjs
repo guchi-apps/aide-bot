@@ -1,8 +1,127 @@
-// CI（無人実行のスクリーンショット撮影など）で使う、空DBへの最小の初期データ投入。
+#!/usr/bin/env node
+// 開発／CI用のダミーデータを投入する。
 //
 // 共有ワークフロー（issue-deckのreusable-issue-dispatch.yml）が `db:seed:ci` という
 // 名前で `--if-present` 付きで呼ぶ。**スクリプト名を変えると無言でスキップされる。**
+// ローカルからは `pnpm db:seed:dev`（scripts/seed-dev-db.sh）が接続先を確かめてから呼ぶ。
 //
-// いまはスキーマにUserしか無く、投入すべき固定データが無い。ファイルとスクリプト名だけ
-// 先に用意しておき、CI用のデータが要るモデルが増えた時点でここへ足す。
-console.log("[aide-bot] db:seed:ci — 投入するCI用データはまだありません。");
+// ここで作るユーザーは、開発用ログイン（#25）で入るバイパス対象のダミーユーザー。
+// supabaseUserId の値は src/lib/ci-auth-bypass.ts の CI_BYPASS_SUPABASE_USER_ID と
+// **必ず一致させること**（プレーンJSのスクリプトのためTSファイルを直接importせず、
+// 値をこのファイルに直書きしている）。一致していないと、ログインは通るのに
+// getCurrentUser() がnullを返し、画面が /login へ戻り続ける。
+
+import { PrismaClient } from "@prisma/client";
+
+const CI_BYPASS_SUPABASE_USER_ID = "ci-screenshot-bot";
+
+const db = new PrismaClient();
+
+// ダミーの相談。一覧の見出し（今日 / 今週 / それ以前）が分かれて見えるよう、
+// 更新時刻を散らしてある。基準時刻は実行時のnow。
+const now = new Date();
+const daysAgo = (days) => new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+
+const CONVERSATION_SEEDS = [
+  {
+    title: "引っ越しの段取りを整理する",
+    startedAt: daysAgo(0),
+    messages: [
+      "来月の頭に引っ越すんだけど、やることの抜けがないか整理したい。単身で、いまの部屋は賃貸。",
+      [
+        "期日が決まっているものから片づけると抜けにくいです。",
+        "",
+        "#### 先に日付を押さえるもの",
+        "",
+        "- **解約の連絡** — 多くの賃貸契約は**退去の1か月前まで**。契約書の「解約予告期間」を今日中に確認してください",
+        "- **引っ越し業者の予約** — 月初は繁忙期に当たりやすいので、日程が決まった時点で押さえる",
+        "- **電気・ガス・水道の停止／開始** — ガスの開栓は立ち会いが要るため、当日の枠を先に取る",
+        "",
+        "#### 役所での手続き",
+        "",
+        "| 手続き | いつ |",
+        "|---|---|",
+        "| 転出届 | 引っ越しの14日前から |",
+        "| 転入届 | 引っ越し後14日以内 |",
+        "| マイナンバーの住所変更 | 転入届と同時に済ませられます |",
+      ].join("\n"),
+      "1Kで、大物は洗濯機と冷蔵庫くらい。",
+    ],
+  },
+  {
+    title: "今月の食費が想定より多い件",
+    startedAt: daysAgo(3),
+    messages: [
+      "今月の食費が予算より1万円ほど多い。どこを見ればいい？",
+      "内訳を「外食」「中食（惣菜・弁当）」「自炊の材料費」の3つに割ってみてください。どれが伸びたかで打ち手が変わります。まとめて減らそうとすると続きません。",
+    ],
+  },
+  {
+    title: "自転車の買い替え候補",
+    startedAt: daysAgo(30),
+    messages: [
+      "通勤用の自転車を買い替えたい。片道5kmくらい。",
+      "片道5kmなら**クロスバイク**が扱いやすい距離です。予算と、駐輪場所が屋内か屋外かを教えてください。屋外なら防犯と防錆の条件が先に効きます。",
+    ],
+  },
+];
+
+async function main() {
+  const user = await db.user.upsert({
+    where: { supabaseUserId: CI_BYPASS_SUPABASE_USER_ID },
+    update: {},
+    create: {
+      supabaseUserId: CI_BYPASS_SUPABASE_USER_ID,
+      email: "ci-screenshot-bot@example.com",
+      name: "開発用ダミーユーザー",
+    },
+  });
+
+  console.log(`[aide-bot] バイパス用ユーザーをupsertしました: id=${user.id} name=${user.name}`);
+
+  // 相談スレッドと発言（#24）。認証を抜けても画面が空のままでは、一覧・Markdown表示・
+  // スレッド切り替えのどれも確かめられない。
+  //
+  // 繰り返し流しても増えないよう、タイトルで引いてから作る。Conversationのタイトルには
+  // 一意制約が無いのでupsertは使えない。
+  for (const seed of CONVERSATION_SEEDS) {
+    const existing = await db.conversation.findFirst({
+      where: { userId: user.id, title: seed.title },
+      select: { id: true },
+    });
+    if (existing) continue;
+
+    // createdAt / updatedAt は明示的に入れる。updatedAt は @updatedAt なので、
+    // 渡さないと全件が実行時刻になり、一覧の見出しが「今日」だけになる。
+    const lastMessageAt = new Date(seed.startedAt.getTime() + (seed.messages.length - 1) * 60_000);
+
+    await db.conversation.create({
+      data: {
+        userId: user.id,
+        title: seed.title,
+        createdAt: seed.startedAt,
+        updatedAt: lastMessageAt,
+        messages: {
+          create: seed.messages.map((message, index) => ({
+            role: index % 2 === 0 ? "USER" : "ASSISTANT",
+            // createdAtが同一だと並び順が不定になるため、1分ずつずらす。
+            createdAt: new Date(seed.startedAt.getTime() + index * 60_000),
+            content: message,
+          })),
+        },
+      },
+    });
+  }
+
+  const conversationCount = await db.conversation.count({ where: { userId: user.id } });
+  console.log(`[aide-bot] 相談スレッドを投入しました: ${conversationCount}件`);
+}
+
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await db.$disconnect();
+  });

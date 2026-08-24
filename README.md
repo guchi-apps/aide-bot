@@ -32,6 +32,32 @@ pnpm dev                      # http://localhost:3000
   Redirect URLs に登録する（生のLAN IPではOAuthのリダイレクトが失敗する）
 - `PORT` を `.env.local` に書くと開発サーバーのポートを変えられる（既定は3000）
 
+## 開発用ログイン（Cookieバイパス）
+
+全画面がSupabase Auth（Google OAuth）の背後にあり、GUIの無い環境（SSH越しの作業・CIの無人実行）
+からは対話的な同意を完了できずログインできない。開発環境に限り、Supabaseを経由せず
+ダミーユーザーとして入る導線を用意している。
+
+```bash
+pnpm db:seed:dev   # ダミーユーザーを投入し、CI_LOGIN_BYPASS_SECRET を .env.local へ生成する
+pnpm dev           # 生成した値は再起動しないと効かない
+```
+
+ブラウザではログイン画面に出る「開発用ダミーユーザーでログイン」ボタンを押す。
+コマンドだけで確認する場合は次のとおり。
+
+```bash
+curl -s -c /tmp/cookies.txt -o /dev/null -w '%{http_code} -> %{redirect_url}\n' \
+  -X POST http://localhost:3000/api/dev/login    # 303 -> / なら成功
+curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:3000/   # 200
+```
+
+- **本番では二重に無効化している。** `NODE_ENV=production` では常に無効、
+  `CI_LOGIN_BYPASS_SECRET` が未設定でも無効。片方だけ緩めないこと
+- シークレットの実値はコミットしない（`.env.local` はgit管理外）
+- ボタンが出ない・`/api/dev/login` が404を返すときは `CI_LOGIN_BYPASS_SECRET` が空。
+  worktreeを新しく作った直後は `.env.local` が無いことがあるので `pnpm env:init` からやり直す
+
 ## よく使うコマンド
 
 | コマンド | 内容 |
@@ -41,6 +67,7 @@ pnpm dev                      # http://localhost:3000
 | `pnpm typecheck` | 型チェック |
 | `pnpm build:ci` | CIと同じビルド |
 | `pnpm db:migrate:dev` | マイグレーション作成・適用（開発） |
+| `pnpm db:seed:dev` | 開発用ダミーデータの投入＋開発用ログインの有効化 |
 | `pnpm db:studio` | Prisma Studio |
 
 ## 環境変数
@@ -52,6 +79,7 @@ pnpm dev                      # http://localhost:3000
 | `ALLOWED_GOOGLE_EMAILS` | 利用を許可するGoogleアカウント（カンマ区切り）。**未設定だと全員ログイン不可** |
 | `ANTHROPIC_API_KEY` | チャットの返答生成に使うClaude APIのキー。**未設定だと送信が503で弾かれる**（画面は開く） |
 | `SIGNALY_WEBHOOK_URL` | CI／デプロイ結果の通知先 |
+| `CI_LOGIN_BYPASS_SECRET` | 開発用ログイン（Cookieバイパス）のシークレット。**本番には設定しない** |
 
 変数名の一覧は `.env.example`、ローカルの記入例は `.env.local.example`、
 デプロイ時の取得元は `.github/secrets-manifest.tsv` を参照する。

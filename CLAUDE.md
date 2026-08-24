@@ -28,6 +28,7 @@ GitHub変数 `vars.PORT` は使わない。マニフェストへ戻さないこ�
 
 ```
 src/app/          画面とRoute Handler（App Router）
+src/components/   画面のUIコンポーネント（機能ごとのディレクトリに分ける）
 src/lib/          Supabaseクライアント・Prismaクライアント・共通ユーティリティ
 src/proxy.ts      Next.js 16のミドルウェア。全リクエストのセッション検証を担う
 prisma/           スキーマとマイグレーション
@@ -48,6 +49,22 @@ scripts/          開発・デプロイ補助スクリプト
 - ログイン・ログアウトの導線はクライアントJSに依存させない。開始は `/auth/signin`（Route Handlerが
   認可URLを組み立てて302）、ログアウトはフォームのPOSTで `/auth/signout`。
   ハイドレーション前でも押せるようにするため
+
+## チャット（相談）
+
+- 相談は話題ごとの `Conversation` に分ける。**対話相手は常に同じ「秘書」1人**で、
+  相手を選ぶ・切り替える導線は作らない。スレッドは相手の分け目ではなく話題の分け目（#24）
+- 返答の生成は `POST /api/chat`。`src/lib/anthropic.ts` の `CHAT_MODEL`（`claude-opus-5`）を
+  Messages APIのストリーミングで叩き、Server-Sent Eventsで逐次返す
+- **`ANTHROPIC_API_KEY` はモジュールの読み込み時に検証しない。** ビルド時にはこの値が無く
+  （CIもActions上のビルドも持たない）、importの時点で投げると `next build` が落ちる。
+  `getAnthropicClient()` の中で見る
+- 履歴は毎回まるごと送り直すため、`HISTORY_LIMIT`（直近30発言）で頭を切る。上限を外すと
+  長いスレッドほど1往復の入力トークンが際限なく伸びる
+- **`Conversation.updatedAt` は発言を足しても動かない。** 一覧の並び順はこの列だけを見ている
+  ので、発言を保存するときは同じトランザクションで `conversation.update` も呼ぶ
+- 入力欄のEnter送信は `event.nativeEvent.isComposing` で必ず弾く。日本語入力の変換確定の
+  Enterがそのまま送信になる
 
 ## 検証コマンド
 

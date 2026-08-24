@@ -50,10 +50,23 @@ pnpm dev                      # http://localhost:3000
 | `DATABASE_URL` | MariaDB接続。本番は `DB_*` から `scripts/construct-database-url.sh` が組み立てる |
 | `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase Auth（他アプリと共有のプロジェクト） |
 | `ALLOWED_GOOGLE_EMAILS` | 利用を許可するGoogleアカウント（カンマ区切り）。**未設定だと全員ログイン不可** |
+| `ANTHROPIC_API_KEY` | チャットの返答生成に使うClaude APIのキー。**未設定だと送信が503で弾かれる**（画面は開く） |
 | `SIGNALY_WEBHOOK_URL` | CI／デプロイ結果の通知先 |
 
 変数名の一覧は `.env.example`、ローカルの記入例は `.env.local.example`、
 デプロイ時の取得元は `.github/secrets-manifest.tsv` を参照する。
+
+## 画面
+
+| パス | 内容 |
+|---|---|
+| `/` | 新しい相談。最初の送信でスレッドが作られ `/c/<ID>` へ移る |
+| `/c/<ID>` | 既存の相談スレッド |
+| `/login` | ログイン |
+
+チャットの返答は `POST /api/chat` がServer-Sent Eventsで逐次返す。相談は話題ごとの
+スレッド（`Conversation`）に分かれるが、**対話相手は常に同じ「秘書」1人**で、相手を
+選ぶ・切り替える導線は無い。
 
 ## デプロイ
 

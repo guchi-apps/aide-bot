@@ -96,6 +96,35 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:30
 スレッド（`Conversation`）に分かれるが、**対話相手は常に同じ「秘書」1人**で、相手を
 選ぶ・切り替える導線は無い。
 
+### 話す / 書く
+
+相談画面には2つのモードがあり、ヘッダーの切り替えで行き来する。**既定は「話す」**で、
+選んだモードはCookie（`aide-bot-talk-mode`）に1年残る。どちらで話しても同じスレッドへ
+残るため、声で相談した内容も「書く」に切り替えれば文字で読み返せる。
+
+| モード | 入力 | 出力 |
+|---|---|---|
+| 話す | マイク（`SpeechRecognition`・`ja-JP`） | 画面の字幕＋読み上げ（`speechSynthesis`） |
+| 書く | キーボード | 画面のMarkdown表示 |
+
+- 聞き取りと読み上げは**ブラウザ内蔵のWeb Speech API**で行う。音声を外部サービスへ送らない
+  ため、追加のAPIキーも実費も要らない。代わりに**対応はChrome / Edge / Safariに限られる**
+  （Firefoxは聞き取りに非対応）。使えない端末では画面に案内が出て「書く」へ寄せる
+- 音声モードでは `POST /api/chat` に `mode: "voice"` を渡す。返答が読み上げ向きの短さになり、
+  見出しや表を使わなくなる（`VOICE_STYLE_INSTRUCTION`）。保存の仕方は「書く」と同じ
+- **マイクはHTTPS（またはlocalhost）でしか開けない**（secure context 限定）。**スマホ実機での
+  確認に `sslip.io` は使えない**——http でしか開けず、画面は出るのにマイクが起動しない。
+  Tailscale越しのHTTPSで開く
+
+  ```bash
+  # サブPCで一度だけ（Tailscale管理画面でHTTPS証明書を有効にしてある前提）
+  tailscale serve --bg --https=443 24027
+  # → iPhoneのSafariで https://subpc.<tailnet>.ts.net/ を開く
+  ```
+
+  `next.config.ts` の `allowedDevOrigins` に `**.ts.net` が入っているので追加の設定は要らない。
+  片付けるときは `tailscale serve --https=443 off`
+
 ## デプロイ
 
 `main` へのpushで `.github/workflows/deploy.yml` が動く。GitHub Actions側でビルドし、

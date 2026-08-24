@@ -32,6 +32,38 @@ function fail(message: string, status: number) {
 }
 
 /**
+ * 保存してある発言を、Messages APIへ渡せる形に均す。
+ *
+ * 保存された並びは、そのままでは2つの理由でAPIの前提を外れる。
+ *
+ * - `HISTORY_LIMIT` で頭を切るため、窓の先頭がassistantの発言になることがある
+ * - 返答の生成に失敗した往復では返答が保存されないため、userの発言が2つ続くことがある
+ *
+ * どちらもリクエスト全体が400で弾かれる。ここで先頭を落とし、続いた同じ役割はまとめる。
+ */
+function toPromptMessages(
+  entries: { role: "USER" | "ASSISTANT"; content: string }[],
+): Anthropic.MessageParam[] {
+  const result: { role: "user" | "assistant"; content: string }[] = [];
+
+  for (const entry of entries) {
+    const role = entry.role === "USER" ? ("user" as const) : ("assistant" as const);
+
+    if (result.length === 0 && role !== "user") continue;
+
+    const last = result[result.length - 1];
+    if (last && last.role === role) {
+      last.content = `${last.content}\n\n${entry.content}`;
+      continue;
+    }
+
+    result.push({ role, content: entry.content });
+  }
+
+  return result;
+}
+
+/**
  * 相談の送信を受け、発言を保存しつつ秘書の返答をストリーミングで返す。
  *
  * proxy.ts は `/api/*` をリダイレクトせず素通しする設計のため、ログイン判定はここで行う。
@@ -90,12 +122,7 @@ export async function POST(request: Request) {
     select: { role: true, content: true },
   });
 
-  const promptMessages: Anthropic.MessageParam[] = history
-    .reverse()
-    .map((entry) => ({
-      role: entry.role === "USER" ? ("user" as const) : ("assistant" as const),
-      content: entry.content,
-    }));
+  const promptMessages = toPromptMessages(history.reverse());
 
   let client: Anthropic;
   try {
@@ -173,8 +200,8 @@ export async function POST(request: Request) {
       "Content-Type": "text/event-stream; charset=utf-8",
       // no-transform が無いと、間に挟まるプロキシが応答をまとめてしまい逐次表示にならない。
       "Cache-Control": "no-store, no-transform",
+      // 逆に間のプロキシへ「溜めるな」と伝える。効くのはnginxだけだが害はない。
       "X-Accel-Buffering": "no",
-      Connection: "keep-alive",
     },
   });
 }

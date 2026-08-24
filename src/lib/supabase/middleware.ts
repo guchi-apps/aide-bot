@@ -2,6 +2,11 @@ import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { SUPABASE_USER_ID_HEADER } from "@/lib/auth-header";
+import {
+  CI_BYPASS_COOKIE_NAME,
+  CI_BYPASS_SUPABASE_USER_ID,
+  isCiBypassRequest,
+} from "@/lib/ci-auth-bypass";
 import { getRequestOrigin } from "@/lib/request-origin";
 import { safeInternalPath } from "@/lib/safe-path";
 
@@ -12,6 +17,14 @@ function isPublicPath(pathname: string): boolean {
 }
 
 export async function updateSession(request: NextRequest) {
+  // 開発／CI専用のログインバイパス（#25）。本番では isCiBypassRequest が常に偽になる。
+  // ここで先に返すことでSupabaseへの往復自体を行わず、後段へはダミーユーザーのIDを渡す。
+  if (isCiBypassRequest(request.cookies.get(CI_BYPASS_COOKIE_NAME)?.value)) {
+    const bypassHeaders = new Headers(request.headers);
+    bypassHeaders.set(SUPABASE_USER_ID_HEADER, CI_BYPASS_SUPABASE_USER_ID);
+    return NextResponse.next({ request: { headers: bypassHeaders } });
+  }
+
   // セッション更新でSupabaseが発行したCookieは、最終的に返すレスポンスへ必ず載せる必要がある。
   // 素通しとリダイレクトのどちらを返すかはユーザーの有無を見てからでないと決まらないため、
   // ここではいったん溜めておき、レスポンスを組み立てる時点でまとめて付ける。

@@ -49,6 +49,29 @@ scripts/          開発・デプロイ補助スクリプト
   認可URLを組み立てて302）、ログアウトはフォームのPOSTで `/auth/signout`。
   ハイドレーション前でも押せるようにするため
 
+### 開発用ログイン（Cookieバイパス）
+
+**エージェントは対話的なOAuthを完了できないため、ログイン後の画面はこの導線からしか見られない。**
+判定は `src/lib/ci-auth-bypass.ts` に閉じてあり、`src/lib/supabase/middleware.ts` と
+`src/lib/auth-user.ts` の**両方**が同じ判定を行う（middlewareだけ通してもデータが引けない）。
+
+```bash
+pnpm db:seed:dev   # ダミーユーザーを投入し CI_LOGIN_BYPASS_SECRET を .env.local へ生成する
+pnpm dev           # 生成した値は再起動しないと効かない
+curl -s -c /tmp/cookies.txt -o /dev/null -w '%{http_code} -> %{redirect_url}\n' \
+  -X POST http://localhost:<ポート>/api/dev/login          # 303 -> /
+curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<ポート>/   # 200
+```
+
+- **本番で有効にならないことを二重に塞いでいる。** `NODE_ENV=production` での無効化と、
+  `CI_LOGIN_BYPASS_SECRET` 未設定での無効化。**片方だけ緩めない**
+- ダミーユーザーの `supabaseUserId` は `ci-screenshot-bot`。値は `src/lib/ci-auth-bypass.ts` と
+  `scripts/seed-ci-db.mjs` に二重に持っている（後者はプレーンJSでTSをimportできない）。
+  **片方だけ変えると、ログインは通るのに画面が `/login` へ戻り続ける**
+- **画面に出るモデルを追加したIssueは、同じPRで `scripts/seed-ci-db.mjs` へダミーデータも足す。**
+  認証を抜けても開発DBが空なら画面は空のままで検証にならない
+- シークレットの実値はコミット・PR本文・Issueコメント・ログのいずれにも書かない
+
 ## 検証コマンド
 
 ```bash
@@ -71,6 +94,19 @@ pnpm dev                 # http://localhost:3000
 ```
 
 Supabase の Redirect URLs に、開発で使うオリジンの `/auth/callback` を登録しておく必要がある。
+
+### worktreeで画面を確認するときの注意
+
+- **`.env.local` の `DATABASE_URL` は全worktreeで同じローカルDB（`app_aide_bot`）を指す。**
+  別Issueのセッションが `prisma migrate dev` を流していると、こちらのスキーマには無いテーブルが
+  すでに存在する。壊し合わないよう、検証で書き込みを伴う場合はDB名を変えて隔離する
+  （`CREATE DATABASE app_aide_bot_issue<番号>` → `pnpm db:migrate:deploy` → 確認後に `DROP`）
+- **Next.js 16の `next dev` は同じディレクトリで2つ起動できない**（`Another next dev server is
+  already running.` で終了する）。ポートを変えても回避できないので、環境変数を変えて起動し直す
+  検証では、先に動いているサーバーを落とす
+- **`next start` も `.env.local` を読む。** 本番相当（`NODE_ENV=production`）での無効化を
+  確かめるときは、開発用の値が読み込まれていることを `/proc/<pid>/environ` で確認したうえで
+  試す。読み込まれていないだけなら「シークレット未設定」側の錠が効いただけで、確認にならない
 
 ## デプロイ
 
@@ -177,7 +213,7 @@ VPS上で `pnpm exec prisma migrate resolve --rolled-back <マイグレーショ
 | `21.plan-required` | 実装前に計画を提示し、承認を得てから実装に入る |
 | `22.merge-confirm-required` | 内容によらず、developへのマージ前に必ず `00.check-user` を付ける |
 | `23.preview-required` | PR作成前に開発サーバーの画面で確認し、承認を得る |
-| `24.screenshot-required` | PR作成前にスクリーンショットで確認し、承認を得る。**無人実行では現状使えない**（全画面がSupabase Auth + Google OAuthの背後にあり、CIログインバイパスもPlaywright依存も無いため） |
+| `24.screenshot-required` | PR作成前にスクリーンショットで確認し、承認を得る。**無人実行ではまだ使えない**（開発用ログイン（Cookieバイパス）は#25で入ったが、スクリーンショットを撮るPlaywright依存とワークフロー側の手当てが無いため） |
 | `25.artifact-required` | 実装着手前に見た目のアーティファクトを公開し、承認を得る（ローカル実行専用） |
 | `11.local` | 付いている間、無人実行ワークフローが計画・実装・分割・追加対応を行わない。ローカルのClaude Codeセッションと二重に進めないための停止フラグ |
 | `71.manual-step` | エージェントが代行できないユーザー自身の手作業を追跡するIssue |

@@ -113,8 +113,13 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 - **localStorageの値をuseStateの初期値やuseEffectで入れない。** ESLintの
   `react-hooks/set-state-in-effect` に掛かり、ハイドレーションもずれる。
   `useSyncExternalStore`（`src/lib/speech/voice-settings.ts`）で外部ストアとして扱う
-- **マイクはHTTPS（またはlocalhost）でしか開けない。** LAN内の実機確認は `sslip.io` で
-  ホスト名化したURLを使う（生のIPでは開けず、OAuthのリダイレクトも失敗する）
+- **マイクはHTTPS（またはlocalhost）でしか開けない**（secure context 限定）。
+  **`sslip.io` はスマホ実機での音声確認に使えない**——http でしか開けないため、画面は出るのに
+  マイクが起動しない（`scripts/dev.sh` は `next dev` を素で起動しTLSを張らない）。
+  実機で音声を確かめるときは `tailscale serve --bg --https=443 <ポート>` でHTTPSを付け、
+  `https://subpc.<tailnet>.ts.net/` を開く。`allowedDevOrigins` には `**.ts.net` が入っている。
+  **サブPCのTailnetはHTTPS証明書が未有効**（`tailscale status --json` の `CertDomains` が
+  `null`）なので、初回は管理画面での有効化が要る（#32）
 
 ## 検証コマンド
 

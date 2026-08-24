@@ -5,11 +5,10 @@ import { NextResponse } from "next/server";
 import {
   CHAT_MODEL,
   HISTORY_LIMIT,
-  MAX_OUTPUT_TOKENS,
-  SECRETARY_SYSTEM_PROMPT,
-  VOICE_MAX_OUTPUT_TOKENS,
-  VOICE_STYLE_INSTRUCTION,
   getAnthropicClient,
+  maxOutputTokens,
+  secretarySystemPrompt,
+  type ReplyStyle,
 } from "@/lib/anthropic";
 import { getCurrentUser } from "@/lib/auth-user";
 import { MAX_MESSAGE_LENGTH, buildConversationTitle } from "@/lib/conversation";
@@ -130,7 +129,7 @@ export async function POST(request: Request) {
 
   // 音声で聞くかどうかはこの1往復ぶんの都合なので、スレッドには持たせず毎回受け取る。
   // 同じスレッドを「話す」と「書く」で行き来しても、履歴はそのまま繋がる。
-  const isVoice = body.mode === "voice";
+  const style: ReplyStyle = body.mode === "voice" ? "voice" : "text";
 
   let client: Anthropic;
   try {
@@ -153,10 +152,8 @@ export async function POST(request: Request) {
         const messageStream = client.messages.stream(
           {
             model: CHAT_MODEL,
-            max_tokens: isVoice ? VOICE_MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS,
-            system: isVoice
-              ? `${SECRETARY_SYSTEM_PROMPT}\n\n${VOICE_STYLE_INSTRUCTION}`
-              : SECRETARY_SYSTEM_PROMPT,
+            max_tokens: maxOutputTokens(style),
+            system: secretarySystemPrompt(style),
             messages: promptMessages,
           },
           { signal: request.signal },

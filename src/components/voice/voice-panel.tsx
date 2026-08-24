@@ -1,12 +1,11 @@
 "use client";
 
 import { Keyboard, Mic, Repeat, Settings2, Square, Volume2, VolumeX, X } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { ChatMessage } from "@/components/chat/types";
 import { useTalkMode } from "@/components/chat/talk-mode-context";
-import { parseStreamEvent, readString } from "@/lib/sse";
+import type { ChatMessage } from "@/components/chat/types";
+import { useChatStream } from "@/components/chat/use-chat-stream";
 import { startRecognition, type RecognitionHandle } from "@/lib/speech/recognition";
 import {
   RATE_MAX,
@@ -50,8 +49,8 @@ const STATUS_LABEL: Record<OrbState, string> = {
  * 聞き返して延々と往復し続けるのを防ぐため。
  */
 export function VoicePanel({ conversationId, initialMessages }: Props) {
-  const router = useRouter();
   const { setMode } = useTalkMode();
+  const { send: sendMessage, abort } = useChatStream(conversationId);
 
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [status, setStatus] = useState<OrbState>("idle");
@@ -68,7 +67,6 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
 
   const recognitionRef = useRef<RecognitionHandle | null>(null);
   const readerRef = useRef<SpeechReader | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
   const finalRef = useRef("");
   const primedRef = useRef(false);
   const reactTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -101,9 +99,8 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
     recognitionRef.current = null;
     readerRef.current?.cancel();
     readerRef.current = null;
-    abortRef.current?.abort();
-    abortRef.current = null;
-  }, []);
+    abort();
+  }, [abort]);
 
   useEffect(() => {
     return () => {
@@ -114,9 +111,6 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
 
   const send = useCallback(
     async (text: string) => {
-      const controller = new AbortController();
-      abortRef.current = controller;
-
       setError(null);
       setLastUser(text);
       setReply("");
@@ -126,6 +120,8 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
         { id: `local-user-${previous.length}`, role: "USER", content: text },
       ]);
 
+      // 返答は届いた端から文の切れ目で読み上げる。全部揃うまで待つと、字幕が出ているのに
+      // 声が始まらない時間ができる。
       const reader =
         settingsRef.current.speak && isSpeechSynthesisSupported()
           ? new SpeechReader({
@@ -142,96 +138,45 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
       readerRef.current = reader;
 
       let answer = "";
-      let createdConversationId: string | null = null;
-      let failed = false;
 
-      try {
-        const response = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          // 音声で聞くと伝える。返答が読み上げ向きの短さになる。
-          body: JSON.stringify({ conversationId, message: text, mode: "voice" }),
-          signal: controller.signal,
-        });
+      const result = await sendMessage(text, {
+        mode: "voice",
+        onDelta: (delta) => {
+          answer += delta;
+          setReply(answer);
+          reader?.push(delta);
+        },
+        onError: setError,
+      });
 
-        if (!response.ok || !response.body) {
-          const detail = (await response.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(
-            detail?.error ?? "送信できませんでした。通信状況を確認して、もう一度お試しください。",
-          );
-        }
-
-        const streamReader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        for (;;) {
-          const { done, value } = await streamReader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          // SSEのイベント区切りは空行。最後の断片は次のチャンクと繋げる。
-          const blocks = buffer.split("\n\n");
-          buffer = blocks.pop() ?? "";
-
-          for (const block of blocks) {
-            const event = parseStreamEvent(block);
-            if (!event) continue;
-
-            if (event.name === "meta") {
-              createdConversationId = readString(event.data, "conversationId");
-            } else if (event.name === "delta") {
-              const delta = readString(event.data, "text") ?? "";
-              answer += delta;
-              setReply(answer);
-              reader?.push(delta);
-            } else if (event.name === "error") {
-              failed = true;
-              setError(readString(event.data, "message") ?? "返答の生成に失敗しました。");
-            }
-          }
-        }
-      } catch (caught) {
-        // 「止める」を押した場合もここに来る。利用者が止めたものはエラーとして出さない。
-        if (!controller.signal.aborted) {
-          failed = true;
-          setError(caught instanceof Error ? caught.message : "送信できませんでした。");
-        }
-      } finally {
-        abortRef.current = null;
-
-        if (answer.trim() !== "") {
-          setMessages((previous) => [
-            ...previous,
-            { id: `local-assistant-${previous.length}`, role: "ASSISTANT", content: answer },
-          ]);
-        }
-
-        if (controller.signal.aborted) {
-          // 利用者が止めた。読み上げも一緒に畳んで待機へ戻す。
-          reader?.cancel();
-          readerRef.current = null;
-          setStatus("idle");
-        } else if (reader && !failed && answer.trim() !== "") {
-          // ここから先は読み上げが終わるのを待つ。次の状態は onDrain が決める。
-          reader.finish();
-        } else {
-          reader?.cancel();
-          readerRef.current = null;
-          // 失敗したときに聞き取りへ戻すと、同じ失敗を繰り返しかねない。待機で止める。
-          if (!failed && settingsRef.current.continuous) beginListeningRef.current();
-          else setStatus("idle");
-        }
-
-        if (conversationId === null && createdConversationId !== null) {
-          // 新しく作られたスレッドのURLへ移す。同じ内容がDBにあるので表示は変わらない。
-          router.replace(`/c/${createdConversationId}`);
-        }
-        // 一覧の並び順とタイトルを取り直す。
-        router.refresh();
+      if (result.answer.trim() !== "") {
+        setMessages((previous) => [
+          ...previous,
+          { id: `local-assistant-${previous.length}`, role: "ASSISTANT", content: result.answer },
+        ]);
       }
+
+      if (result.aborted) {
+        // 利用者が止めた。読み上げも一緒に畳んで待機へ戻す。
+        reader?.cancel();
+        readerRef.current = null;
+        setStatus("idle");
+        return;
+      }
+
+      if (reader && !result.failed && result.answer.trim() !== "") {
+        // ここから先は読み上げが終わるのを待つ。次の状態は onDrain が決める。
+        reader.finish();
+        return;
+      }
+
+      reader?.cancel();
+      readerRef.current = null;
+      // 失敗したときに聞き取りへ戻すと、同じ失敗を繰り返しかねない。待機で止める。
+      if (!result.failed && settingsRef.current.continuous) beginListeningRef.current();
+      else setStatus("idle");
     },
-    [conversationId, router],
+    [sendMessage],
   );
 
   useEffect(() => {

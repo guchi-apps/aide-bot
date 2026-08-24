@@ -112,8 +112,18 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:30
   （Firefoxは聞き取りに非対応）。使えない端末では画面に案内が出て「書く」へ寄せる
 - 音声モードでは `POST /api/chat` に `mode: "voice"` を渡す。返答が読み上げ向きの短さになり、
   見出しや表を使わなくなる（`VOICE_STYLE_INSTRUCTION`）。保存の仕方は「書く」と同じ
-- **HTTPS（またはlocalhost）でないとマイクを開けない。** LAN内の他端末から確認する場合は
-  `sslip.io` でホスト名化したURLを使う
+- **マイクはHTTPS（またはlocalhost）でしか開けない**（secure context 限定）。**スマホ実機での
+  確認に `sslip.io` は使えない**——http でしか開けず、画面は出るのにマイクが起動しない。
+  Tailscale越しのHTTPSで開く
+
+  ```bash
+  # サブPCで一度だけ（Tailscale管理画面でHTTPS証明書を有効にしてある前提）
+  tailscale serve --bg --https=443 24027
+  # → iPhoneのSafariで https://subpc.<tailnet>.ts.net/ を開く
+  ```
+
+  `next.config.ts` の `allowedDevOrigins` に `**.ts.net` が入っているので追加の設定は要らない。
+  片付けるときは `tailscale serve --https=443 off`
 
 ## デプロイ
 

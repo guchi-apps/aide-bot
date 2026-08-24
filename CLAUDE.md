@@ -95,6 +95,19 @@ pnpm dev                 # http://localhost:3000
 
 Supabase の Redirect URLs に、開発で使うオリジンの `/auth/callback` を登録しておく必要がある。
 
+### worktreeで画面を確認するときの注意
+
+- **`.env.local` の `DATABASE_URL` は全worktreeで同じローカルDB（`app_aide_bot`）を指す。**
+  別Issueのセッションが `prisma migrate dev` を流していると、こちらのスキーマには無いテーブルが
+  すでに存在する。壊し合わないよう、検証で書き込みを伴う場合はDB名を変えて隔離する
+  （`CREATE DATABASE app_aide_bot_issue<番号>` → `pnpm db:migrate:deploy` → 確認後に `DROP`）
+- **Next.js 16の `next dev` は同じディレクトリで2つ起動できない**（`Another next dev server is
+  already running.` で終了する）。ポートを変えても回避できないので、環境変数を変えて起動し直す
+  検証では、先に動いているサーバーを落とす
+- **`next start` も `.env.local` を読む。** 本番相当（`NODE_ENV=production`）での無効化を
+  確かめるときは、開発用の値が読み込まれていることを `/proc/<pid>/environ` で確認したうえで
+  試す。読み込まれていないだけなら「シークレット未設定」側の錠が効いただけで、確認にならない
+
 ## デプロイ
 
 `main` へのpushで `.github/workflows/deploy.yml` が動く。GitHub Actions側でビルドし、成果物を

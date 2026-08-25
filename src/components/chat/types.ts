@@ -11,4 +11,6 @@ export type ChatMessage = {
   id: string;
   role: "USER" | "ASSISTANT";
   content: string;
+  /** 利用者に割り込まれて途中で終わった返答（#48）。USERの発言では常にfalse。 */
+  interrupted?: boolean;
 };

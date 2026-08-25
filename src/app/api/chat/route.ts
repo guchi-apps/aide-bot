@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import {
   CHAT_MODEL,
   HISTORY_LIMIT,
+  INTERRUPTED_NOTE,
   getAnthropicClient,
   maxOutputTokens,
   secretarySystemPrompt,
@@ -35,6 +36,33 @@ function fail(message: string, status: number) {
 }
 
 /**
+ * 生成中のスレッドと、その後片付けが終わるまでのプロミス（#48）。
+ *
+ * 利用者は返答の途中でも次の発言を送れる。そのとき走っている生成は打ち切られ、そこまでの
+ * 返答が保存されるが、**保存されるのは打ち切られた側のリクエストの中**なので、割り込んだ
+ * リクエストが先に発言を保存すると、遮られた返答の方が後ろの時刻で入る。一覧は
+ * `createdAt` 順に並べるため、再読み込みしたときに秘書の返答が自分の次の発言より下へ回る。
+ *
+ * 同じスレッドの生成が畳まれるまで、次のリクエストをここで待たせて順序を保つ。
+ * プロセス内のMapで足りるのは、PM2で1プロセスしか動かさないため（`deploy/ecosystem.config.js`）。
+ * 前提が変わって複数プロセスになっても、順序が保証されなくなるだけで壊れはしない。
+ */
+const pendingGenerations = new Map<string, Promise<void>>();
+
+/** 待つ上限。生成側が畳み損ねても、次の発言をここで止め続けない。 */
+const PENDING_WAIT_MS = 5000;
+
+async function waitForPendingGeneration(conversationId: string): Promise<void> {
+  const pending = pendingGenerations.get(conversationId);
+  if (!pending) return;
+
+  await Promise.race([
+    pending,
+    new Promise<void>((resolve) => setTimeout(resolve, PENDING_WAIT_MS)),
+  ]);
+}
+
+/**
  * 保存してある発言を、Messages APIへ渡せる形に均す。
  *
  * 保存された並びは、そのままでは2つの理由でAPIの前提を外れる。
@@ -43,9 +71,12 @@ function fail(message: string, status: number) {
  * - 返答の生成に失敗した往復では返答が保存されないため、userの発言が2つ続くことがある
  *
  * どちらもリクエスト全体が400で弾かれる。ここで先頭を落とし、続いた同じ役割はまとめる。
+ *
+ * あわせて、割り込まれた返答には注記を添える（#48）。DBの本文はそのまま画面へ出すため
+ * 汚さず、モデルへ渡すときにだけ「ここで遮られた」と分かる形にする。
  */
 function toPromptMessages(
-  entries: { role: "USER" | "ASSISTANT"; content: string }[],
+  entries: { role: "USER" | "ASSISTANT"; content: string; interrupted: boolean }[],
 ): Anthropic.MessageParam[] {
   const result: { role: "user" | "assistant"; content: string }[] = [];
 
@@ -54,13 +85,18 @@ function toPromptMessages(
 
     if (result.length === 0 && role !== "user") continue;
 
+    const content =
+      role === "assistant" && entry.interrupted
+        ? `${entry.content}\n\n${INTERRUPTED_NOTE}`
+        : entry.content;
+
     const last = result[result.length - 1];
     if (last && last.role === role) {
-      last.content = `${last.content}\n\n${entry.content}`;
+      last.content = `${last.content}\n\n${content}`;
       continue;
     }
 
-    result.push({ role, content: entry.content });
+    result.push({ role, content });
   }
 
   return result;
@@ -90,6 +126,12 @@ export async function POST(request: Request) {
   }
   if (message.length > MAX_MESSAGE_LENGTH) {
     return fail(`一度に送れるのは${MAX_MESSAGE_LENGTH.toLocaleString()}文字までです。`, 400);
+  }
+
+  // 割り込みで打ち切られた生成が、そこまでの返答を保存し終えるのを待つ（#48）。
+  // 待たずに進めると、遮られた返答が今回の発言より後ろの時刻で入り、並びが入れ替わる。
+  if (body.conversationId) {
+    await waitForPendingGeneration(body.conversationId);
   }
 
   // 他人のスレッドへ書き込めないよう、必ずuserIdとの組で引く。
@@ -122,7 +164,7 @@ export async function POST(request: Request) {
     where: { conversationId: conversation.id },
     orderBy: { createdAt: "desc" },
     take: HISTORY_LIMIT,
-    select: { role: true, content: true },
+    select: { role: true, content: true, interrupted: true },
   });
 
   const promptMessages = toPromptMessages(history.reverse());
@@ -140,64 +182,90 @@ export async function POST(request: Request) {
     return fail("返答の生成に必要な設定がサーバー側にありません。管理者に連絡してください。", 503);
   }
 
+  // 次に割り込んでくるリクエストへ「この生成の後片付けが終わった」と伝えるための錠（#48）。
+  // ストリームの外で作るのは、`start` が動くより先にMapへ載せておく必要があるため。
+  let releasePending = () => {};
+  const pending = new Promise<void>((resolve) => {
+    releasePending = resolve;
+  });
+  pendingGenerations.set(conversation.id, pending);
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      // 新規スレッドのIDは、これを受け取るまでクライアント側が知らない。最初に流す。
-      controller.enqueue(sse("meta", { conversationId: conversation.id, title: conversation.title }));
-
-      let answer = "";
-      let errorMessage: string | null = null;
-
       try {
-        const messageStream = client.messages.stream(
-          {
-            model: CHAT_MODEL,
-            max_tokens: maxOutputTokens(style),
-            system: secretarySystemPrompt(style),
-            messages: promptMessages,
-          },
-          { signal: request.signal },
-        );
+        // 新規スレッドのIDは、これを受け取るまでクライアント側が知らない。最初に流す。
+        controller.enqueue(sse("meta", { conversationId: conversation.id, title: conversation.title }));
 
-        for await (const event of messageStream) {
-          if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-            answer += event.delta.text;
-            controller.enqueue(sse("delta", { text: event.delta.text }));
+        let answer = "";
+        let errorMessage: string | null = null;
+        // 利用者に遮られたか。割り込んだ側の発言に答えられるよう、保存時に印を付ける（#48）。
+        let interrupted = false;
+
+        try {
+          const messageStream = client.messages.stream(
+            {
+              model: CHAT_MODEL,
+              max_tokens: maxOutputTokens(style),
+              system: secretarySystemPrompt(style),
+              messages: promptMessages,
+            },
+            { signal: request.signal },
+          );
+
+          for await (const event of messageStream) {
+            if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+              answer += event.delta.text;
+              controller.enqueue(sse("delta", { text: event.delta.text }));
+            }
+          }
+        } catch (error) {
+          // 割り込まれた場合・「止める」を押された場合・タブを閉じられた場合はここに来る。
+          // 異常ではないので、そこまでの返答を保存して静かに終える。
+          if (error instanceof APIUserAbortError || request.signal.aborted) {
+            interrupted = true;
+          } else {
+            console.error("[aide-bot] 返答の生成に失敗した", error);
+            errorMessage = "返答の生成に失敗しました。少し待ってからもう一度お試しください。";
           }
         }
-      } catch (error) {
-        // 「止める」を押された場合とタブを閉じられた場合はここに来る。異常ではないので、
-        // そこまでの返答を保存して静かに終える。
-        if (!(error instanceof APIUserAbortError) && !request.signal.aborted) {
-          console.error("[aide-bot] 返答の生成に失敗した", error);
-          errorMessage = "返答の生成に失敗しました。少し待ってからもう一度お試しください。";
-        }
-      }
 
-      // 途中で切れていても、そこまでの返答は残す。消えると何を聞いたかだけが残る。
-      if (answer.trim() !== "") {
+        // 途中で切れていても、そこまでの返答は残す。消えると何を聞いたかだけが残る。
+        if (answer.trim() !== "") {
+          try {
+            await db.$transaction([
+              db.message.create({
+                data: {
+                  conversationId: conversation.id,
+                  role: "ASSISTANT",
+                  content: answer,
+                  interrupted,
+                },
+              }),
+              db.conversation.update({
+                where: { id: conversation.id },
+                data: { updatedAt: new Date() },
+              }),
+            ]);
+          } catch (error) {
+            console.error("[aide-bot] 返答の保存に失敗した", error);
+            errorMessage ??= "返答を保存できませんでした。この内容は再読み込みで消えます。";
+          }
+        }
+
+        // 相手が既にいない場合、enqueue/closeは例外になる。伝える相手がいないだけなので黙って畳む。
         try {
-          await db.$transaction([
-            db.message.create({
-              data: { conversationId: conversation.id, role: "ASSISTANT", content: answer },
-            }),
-            db.conversation.update({
-              where: { id: conversation.id },
-              data: { updatedAt: new Date() },
-            }),
-          ]);
-        } catch (error) {
-          console.error("[aide-bot] 返答の保存に失敗した", error);
-          errorMessage ??= "返答を保存できませんでした。この内容は再読み込みで消えます。";
+          controller.enqueue(errorMessage ? sse("error", { message: errorMessage }) : sse("done", {}));
+          controller.close();
+        } catch {
+          // 何もしない
         }
-      }
-
-      // 相手が既にいない場合、enqueue/closeは例外になる。伝える相手がいないだけなので黙って畳む。
-      try {
-        controller.enqueue(errorMessage ? sse("error", { message: errorMessage }) : sse("done", {}));
-        controller.close();
-      } catch {
-        // 何もしない
+      } finally {
+        // 待たせている割り込みを通す。返答の保存が済んだこの時点で外すこと（#48）。
+        // 途中で投げても必ず外れるよう、finallyから呼ぶ。
+        if (pendingGenerations.get(conversation.id) === pending) {
+          pendingGenerations.delete(conversation.id);
+        }
+        releasePending();
       }
     },
   });

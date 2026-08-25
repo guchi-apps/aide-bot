@@ -89,6 +89,29 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 - 入力欄のEnter送信は `event.nativeEvent.isComposing` で必ず弾く。日本語入力の変換確定の
   Enterがそのまま送信になる
 
+### 返答への割り込み（#48）
+
+**返答の途中でも次の発言を送れる。** 「書く」は入力欄からの送信、「話す」はマイクを押した時点で、
+走っている生成を打ち切ってそのまま次の往復へ入る。
+
+- **打ち切られた返答を保存するのは、打ち切られた側のリクエスト**（`request.signal` が落ちて
+  ストリームのループを抜けた後）。割り込んだリクエストが先に発言を保存すると、遮られた返答の方が
+  後ろの `createdAt` で入り、**再読み込みしたときだけ秘書の返答が自分の次の発言より下へ回る。**
+  `src/app/api/chat/route.ts` の `pendingGenerations`（プロセス内のMap）で、同じスレッドの生成が
+  畳まれるまで次のリクエストを待たせている。PM2で1プロセスしか動かさないことが前提
+- **画面側も同じ順序を守る。** 打ち切られた往復が「そこまでの返答」を並べ終えるのを待ってから
+  次の発言を足す（`ChatPanel` の `turnRef` / `VoicePanel` の `turnRef`）。待たずに足すと、
+  DBの並びは正しいのに画面上だけ順序が入れ替わる
+- **途中で切れた返答は `Message.interrupted` で区別する。** 本文へ注記を混ぜず、モデルへ渡す
+  ときだけ `INTERRUPTED_NOTE`（`src/lib/anthropic.ts`）を添える。印が無いと、モデルからは
+  「短く言い切った返答」と見分けが付かず、続きを最初から言い直す
+- **新しい相談の1通目を割り込むと、`router.replace()` が効く前に2通目が飛ぶ。**
+  propsの `conversationId` はまだ `null` なので、そのまま送るとスレッドがもう1本作られる。
+  `useChatStream` が `meta` で受け取ったIDを覚えて使う
+- **「話す」では読み上げ中にマイクを開かない方針を変えていない。** 割り込みは「押した瞬間に
+  黙ってから聞き取りを開く」形で、読み上げ中もマイクを開きっぱなしにする常時バージインは
+  採っていない（自分の声を拾って往復が止まらなくなるため）
+
 ## 音声対話（話す / 書く）
 
 **このアプリの本来の使い方は音声**で、文字入力は声を出せない場面と言い直しのために残している（#27）。
@@ -176,6 +199,17 @@ pnpm build:ci    # prisma generate && next build
 
 CI（`.github/workflows/ci.yml`）はこの3つを実行する。ビルドは外部サービスへ接続しないため、
 `DATABASE_URL` と `NEXT_PUBLIC_SUPABASE_*` はCI専用のプレースホルダーでよい。
+
+### 返答の生成をキー無しで確かめる
+
+`ANTHROPIC_API_KEY` が手元に無くても、**`ANTHROPIC_BASE_URL` をローカルのスタブへ向ければ
+`/api/chat` を丸ごと動かせる。** SDKは `${ANTHROPIC_BASE_URL}/v1/messages` を叩くだけなので、
+Messages APIのSSE（`message_start` → `content_block_delta`×n → `message_stop`）を1秒あたり数個の
+ペースで返すHTTPサーバーを立てれば、ストリーミング・中断・保存・履歴の組み立てまで実キーも
+実費もなしに確かめられる。受け取った `messages` をファイルへ書き出しておくと、モデルへ実際に
+渡している履歴（割り込みの注記など）もそのまま読める。
+
+`curl -sN` を `timeout` で切れば「利用者が途中で止めた」経路をそのまま再現できる。
 
 **検証用に一時的なページを足して消したら、`rm -rf .next` してから型チェックする。**
 `next dev` が生成する `.next/dev/types/validator.ts` は消したルートを参照したまま残り、

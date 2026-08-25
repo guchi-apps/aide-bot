@@ -153,8 +153,15 @@ const PROBE_TIMEOUT_MS = 2000;
 /** 疎通の判定を使い回す時間。長くすると、subpcが復帰しても切り替わらない。 */
 const PROBE_CACHE_MS = 60_000;
 
-/** ENGINEの合成にかける上限。長い文でも数秒で返る想定で、返らなければ落とす。 */
-const ENGINE_TIMEOUT_MS = 30_000;
+/**
+ * ENGINEの合成にかける上限。
+ *
+ * ひと固まりは長くても `FORCED_BREAK_LENGTH`（60文字）なので、届いていれば数秒で返る。
+ * **上限が無いと、疎通を確かめた後にtailnetから出た端末で `fetch` がTCPのタイムアウト
+ * （数十秒）まで戻らず、「声を用意しています」に張り付く。** #52で潰した「返事が来ていない
+ * ように見える」状態がそのまま再発するので、会話として待てる長さで切る。
+ */
+const ENGINE_TIMEOUT_MS = 10_000;
 
 export type VoicevoxAudio = {
   /** `<audio>` の `src` に入れるURL。 */

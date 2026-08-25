@@ -257,8 +257,10 @@ Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として
   マイクが起動しない（`scripts/dev.sh` は `next dev` を素で起動しTLSを張らない）。
   実機で音声を確かめるときは `tailscale serve --bg --https=443 <ポート>` でHTTPSを付け、
   `https://subpc.<tailnet>.ts.net/` を開く。`allowedDevOrigins` には `**.ts.net` が入っている。
-  **サブPCのTailnetはHTTPS証明書が未有効**（`tailscale status --json` の `CertDomains` が
-  `null`）なので、初回は管理画面での有効化が要る（#32）
+  **サブPCのTailnet HTTPS証明書は有効済み**（#32で管理画面から有効化した。`tailscale status --json`
+  の `CertDomains` に `subpc.<tailnet>.ts.net` が入っている）。以前ここには「未有効」と書いてあり、
+  #57 で実際に確かめて訂正した。**判断の前に `tailscale status --json | jq .CertDomains` を見ること**
+  （`null` なら未有効で、管理画面での有効化が要る）
 
 ## アイコン
 

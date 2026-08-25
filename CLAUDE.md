@@ -183,9 +183,10 @@ Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として
   音声を外部へ送らないので追加のAPIキーも実費も無い。対応はChrome / Edge / Safariに限られ、
   **Firefoxは聞き取りに非対応**。使えない端末には案内を出して「書く」へ寄せる。
   外部STTへ寄せる判断をするときは、依存とキーと実費が増えることをIssueで先に確認する
-- **読み上げだけは外へ出る経路がある。** 声にVOICEVOXの話者（ずんだもん等）を選んだときに限り、
-  返答の文面がWEB版VOICEVOX API（`api.tts.quest`。VOICEVOX公式ではない第三者のサービス）へ
-  送られる（#41、`src/lib/speech/voicevox.ts`）。**既定は端末内蔵の声のまま**にしてあり、
+- **読み上げだけは外へ出る経路がある。** 声にVOICEVOXの話者（ずんだもん等）を選び、かつ
+  **自前のVOICEVOX ENGINEが設定されていない（または届かない）ときに限り**、返答の文面が
+  WEB版VOICEVOX API（`api.tts.quest`。VOICEVOX公式ではない第三者のサービス）へ
+  送られる（#41・#57、`src/lib/speech/voicevox.ts`）。**既定は端末内蔵の声のまま**にしてあり、
   APIキー・依存パッケージ・サーバー側のルートはいずれも増やしていない（CORSが開いているので
   ブラウザから直接呼ぶ）。話者を増減させるときは `VOICEVOX_SPEAKERS` を直す。
   一覧を返すエンドポイントは公開されていないため、IDと名前は合成の応答（`speakerName`）で確かめる
@@ -205,6 +206,22 @@ Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として
   **最大2回に分ける**——1文目が揃った時点で1回目を依頼して返答の生成中に合成を進め、残りは
   1回目が鳴り始めてから依頼する（そこまでで7秒前後経つので5秒の制限に触れない）。
   実測で「返答が出てから声が始まるまで」が約7秒→約0.5秒になった
+- **合成の宛先は2つある**（#57、`resolveVoicevoxSource()`）。自前のVOICEVOX ENGINEのURLが
+  設定されていて `GET /version` が届けばそちら、駄目ならWEB版API。**判定は端末ごと・
+  一定時間だけキャッシュ**する（tailnet内のsubpcで動かす想定で、tailnet外の端末からは届かない）。
+  届かない端末では調べる時間ぶん最初のひと声が遅れるので、マイクを押した時点で
+  `warmVoicevoxSource()` を呼んで先に済ませておく
+- **ENGINEのURLは環境変数で配らない。端末ごとの設定（localStorage）に持つ**（#57）。
+  tailnetのホスト名であり、**このリポジトリも本番サイトも公開されている**ため、
+  `NEXT_PUBLIC_*` に置くとJSバンドル越しに誰でも読める（ログイン前のページでも配信される）。
+  `PORT` のような「設定値だから平文でよい」とは別の判断になる
+- **ENGINEはWEB版とAPIの形が違う。** `POST /audio_query?text=&speaker=`（本文なし）でJSONを
+  受け取り、それをそのまま `POST /synthesis?speaker=` の本文へ渡すとWAVが返る。
+  **`mp3StreamingUrl` のような「合成しながら流す」仕組みは無く、合成し終えてから返る**ので、
+  まとめて投げると長い返答ほど鳴り始めが遅くなる。そこで**ENGINEのときだけ文の切れ目で刻む**
+  （レート制限が無いので刻める）。次のぶんの合成が前のぶんの再生に隠れる。
+  ブラウザから直接叩くため、ENGINE側でCORSを開ける必要がある（`--cors_policy_mode all`）。
+  返ってくるのはBlobなので、鳴らし終えたら `URL.revokeObjectURL()` で手放す
 - **待っていることを必ず画面へ出す**（`onPreparing` → `RobotState` の `preparing`）。
   「考えています」のままにすると返事が来ていないように見え、利用者がマイクを押して
   割り込む——割り込みは読み上げを取り消すので、**一度も鳴らないまま終わる**
@@ -240,8 +257,10 @@ Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として
   マイクが起動しない（`scripts/dev.sh` は `next dev` を素で起動しTLSを張らない）。
   実機で音声を確かめるときは `tailscale serve --bg --https=443 <ポート>` でHTTPSを付け、
   `https://subpc.<tailnet>.ts.net/` を開く。`allowedDevOrigins` には `**.ts.net` が入っている。
-  **サブPCのTailnetはHTTPS証明書が未有効**（`tailscale status --json` の `CertDomains` が
-  `null`）なので、初回は管理画面での有効化が要る（#32）
+  **サブPCのTailnet HTTPS証明書は有効済み**（#32で管理画面から有効化した。`tailscale status --json`
+  の `CertDomains` に `subpc.<tailnet>.ts.net` が入っている）。以前ここには「未有効」と書いてあり、
+  #57 で実際に確かめて訂正した。**判断の前に `tailscale status --json | jq .CertDomains` を見ること**
+  （`null` なら未有効で、管理画面での有効化が要る）
 
 ## アイコン
 

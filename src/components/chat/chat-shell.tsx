@@ -14,6 +14,7 @@ type Props = {
   conversations: ConversationSummary[];
   userLabel: string;
   userEmail: string | null;
+  appVersion: string;
   children: React.ReactNode;
 };
 
@@ -24,7 +25,7 @@ type Props = {
  * 取っているため。100dvhのままだと合計が画面より高くなり、ページ全体が数十pxだけ
  * 縦スクロールする（ホーム画面から起動したiOSで顕著）。
  */
-export function ChatShell({ conversations, userLabel, userEmail, children }: Props) {
+export function ChatShell({ conversations, userLabel, userEmail, appVersion, children }: Props) {
   const pathname = usePathname();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -52,6 +53,7 @@ export function ChatShell({ conversations, userLabel, userEmail, children }: Pro
           activeId={activeId}
           userLabel={userLabel}
           userEmail={userEmail}
+          appVersion={appVersion}
         />
       </aside>
 
@@ -75,6 +77,7 @@ export function ChatShell({ conversations, userLabel, userEmail, children }: Pro
               activeId={activeId}
               userLabel={userLabel}
               userEmail={userEmail}
+              appVersion={appVersion}
               onNavigate={() => setDrawerOpen(false)}
             />
             <button

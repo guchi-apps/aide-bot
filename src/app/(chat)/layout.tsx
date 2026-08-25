@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 
 import { ChatShell } from "@/components/chat/chat-shell";
 import { TalkModeProvider } from "@/components/chat/talk-mode-context";
+import { APP_VERSION } from "@/lib/app-version";
 import { getCurrentUser } from "@/lib/auth-user";
 import { conversationGroupLabel } from "@/lib/conversation";
 import { db } from "@/lib/db";
@@ -43,6 +44,7 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
         }))}
         userLabel={user.name ?? user.email ?? "ログイン中"}
         userEmail={user.email}
+        appVersion={APP_VERSION}
       >
         {children}
       </ChatShell>

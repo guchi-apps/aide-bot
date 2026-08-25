@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import {
   CHAT_MODEL,
   INTERRUPTED_NOTE,
+  MCP_BETA,
   getAnthropicClient,
   historyWindowSkip,
   maxOutputTokens,
@@ -14,6 +15,20 @@ import {
 import { getCurrentUser } from "@/lib/auth-user";
 import { MAX_MESSAGE_LENGTH, buildConversationTitle } from "@/lib/conversation";
 import { db } from "@/lib/db";
+import {
+  listConnectedServers,
+  toMcpRequestParts,
+  type ConnectedServer,
+} from "@/lib/mcp/connections";
+
+/**
+ * 1回の送信で回すモデルとのやり取りの上限（#46）。
+ *
+ * MCPのツール実行はAnthropic側で完結するため、通常は1回で返答まで終わる。ただし
+ * 長く掛かった回は `pause_turn` で一旦返ってくるので、そこまでの内容を渡して続きを頼む。
+ * 上限が無いと、止まらない回に付き合い続けることになる。
+ */
+const MAX_TURNS = 4;
 
 // 返答を逐次流すため、実行のたびに動的に扱わせる。
 export const dynamic = "force-dynamic";
@@ -109,7 +124,7 @@ const CACHE_CONTROL = { type: "ephemeral" } as const;
  */
 function toPromptMessages(
   entries: { role: "USER" | "ASSISTANT"; content: string; interrupted: boolean }[],
-): Anthropic.MessageParam[] {
+): Anthropic.Beta.BetaMessageParam[] {
   const merged: { role: "user" | "assistant"; content: string }[] = [];
 
   for (const entry of entries) {
@@ -245,6 +260,19 @@ export async function POST(request: Request) {
   // 同じスレッドを「話す」と「書く」で行き来しても、履歴はそのまま繋がる。
   const style: ReplyStyle = body.mode === "voice" ? "voice" : "text";
 
+  // 繋いでいる外部サービス（#46）。読み出しに失敗しても相談そのものは通す。
+  // 繋がっていないぶんは答えられないだけで、送信ごと弾くより実害が小さい。
+  let servers: ConnectedServer[] = [];
+  try {
+    servers = await listConnectedServers(user.id);
+  } catch (error) {
+    console.error("[aide-bot] 接続の読み出しに失敗した", error);
+  }
+
+  const { mcpServers, tools } = toMcpRequestParts(servers);
+  // ツール実行を画面へ出すとき、利用者に見せるのはslugではなく付けた名前。
+  const labelBySlug = new Map(servers.map((server) => [server.slug, server.label]));
+
   let client: Anthropic;
   try {
     client = getAnthropicClient();
@@ -272,54 +300,89 @@ export async function POST(request: Request) {
         let errorMessage: string | null = null;
         // 利用者に遮られたか。割り込んだ側の発言に答えられるよう、保存時に印を付ける（#48）。
         let interrupted = false;
-        // このリクエストで使ったトークン数（#51）。
+        // このリクエストで使ったトークン数（#51）。数える単位は「API呼び出し1回」なので、
+        // `pause_turn` で続きを頼み直した往復ではここに複数並ぶ。
+        const usages: GenerationUsage[] = [];
+        // いま流れている呼び出しぶん。`usages` へ載せた実体をそのまま書き換える。
         let usage: GenerationUsage | null = null;
 
         try {
-          const messageStream = client.messages.stream(
-            {
-              model: CHAT_MODEL,
-              max_tokens: maxOutputTokens(style),
-              // システムプロンプトにはブレークポイントを置かない（#56）。単体では
-              // キャッシュできる最小の長さに届かず、置いても黙って無視されるだけ。履歴側の
-              // ブレークポイントがここを含む前半まとめてをキャッシュするので、往復が続けば
-              // システムプロンプトも一緒に乗る。
-              system: secretarySystemPrompt(style),
-              messages: promptMessages,
-            },
-            { signal: request.signal },
-          );
+          // `pause_turn` で戻ってきたときは、そこまでの内容を足して続きを頼む（#46）。
+          const turns: Anthropic.Beta.BetaMessageParam[] = [...promptMessages];
 
-          for await (const event of messageStream) {
-            if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-              answer += event.delta.text;
-              controller.enqueue(sse("delta", { text: event.delta.text }));
-              continue;
+          for (let turn = 0; turn < MAX_TURNS; turn += 1) {
+            const messageStream = client.beta.messages.stream(
+              {
+                // 繋いでいないときはベータもツールも渡さない（#46）。従来どおりのリクエストに戻す。
+                ...(mcpServers.length > 0
+                  ? { betas: [MCP_BETA], mcp_servers: mcpServers, tools }
+                  : {}),
+                model: CHAT_MODEL,
+                max_tokens: maxOutputTokens(style, mcpServers.length > 0),
+                // システムプロンプトにはブレークポイントを置かない（#56）。単体では
+                // キャッシュできる最小の長さに届かず、置いても黙って無視されるだけ。履歴側の
+                // ブレークポイントがここを含む前半まとめてをキャッシュするので、往復が続けば
+                // システムプロンプトも一緒に乗る。
+                system: secretarySystemPrompt(
+                  style,
+                  servers.map((server) => server.label),
+                ),
+                messages: turns,
+              },
+              { signal: request.signal },
+            );
+
+            for await (const event of messageStream) {
+              if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+                answer += event.delta.text;
+                controller.enqueue(sse("delta", { text: event.delta.text }));
+                continue;
+              }
+
+              // 外部サービスを見に行った時点で画面へ知らせる（#46）。
+              // 何も出ないまま数秒黙るのを防ぐ。
+              if (event.type === "content_block_start" && event.content_block.type === "mcp_tool_use") {
+                const block = event.content_block;
+                controller.enqueue(
+                  sse("tool", {
+                    server: labelBySlug.get(block.server_name) ?? block.server_name,
+                    tool: block.name,
+                  }),
+                );
+                continue;
+              }
+
+              // トークン数は最初と最後のイベントに乗ってくる（#51）。
+              // `message_start` は入力ぶんが確定した時点、`message_delta` はそこまでの累計で、
+              // 生成が終わるまで何度か届く。後から来た値で上書きする。
+              //
+              // **`message_start` を受けた時点で `usages` へ載せる。** 途中で遮られると
+              // `message_delta` は届かないが、入力ぶんはその時点でもう使い終わっている。
+              if (event.type === "message_start") {
+                usage = {
+                  model: event.message.model,
+                  inputTokens: event.message.usage.input_tokens,
+                  outputTokens: event.message.usage.output_tokens,
+                  cacheWriteTokens: event.message.usage.cache_creation_input_tokens ?? 0,
+                  cacheReadTokens: event.message.usage.cache_read_input_tokens ?? 0,
+                };
+                usages.push(usage);
+                continue;
+              }
+
+              if (event.type === "message_delta" && usage) {
+                usage.inputTokens = event.usage.input_tokens ?? usage.inputTokens;
+                usage.outputTokens = event.usage.output_tokens;
+                usage.cacheWriteTokens =
+                  event.usage.cache_creation_input_tokens ?? usage.cacheWriteTokens;
+                usage.cacheReadTokens = event.usage.cache_read_input_tokens ?? usage.cacheReadTokens;
+              }
             }
 
-            // トークン数は最初と最後のイベントに乗ってくる（#51）。
-            // `message_start` は入力ぶんが確定した時点、`message_delta` はそこまでの累計で、
-            // 生成が終わるまで何度か届く。後から来た値で上書きする。
-            if (event.type === "message_start") {
-              usage = {
-                model: event.message.model,
-                inputTokens: event.message.usage.input_tokens,
-                outputTokens: event.message.usage.output_tokens,
-                cacheWriteTokens: event.message.usage.cache_creation_input_tokens ?? 0,
-                cacheReadTokens: event.message.usage.cache_read_input_tokens ?? 0,
-              };
-              continue;
-            }
+            const final = await messageStream.finalMessage();
+            if (final.stop_reason !== "pause_turn") break;
 
-            if (event.type === "message_delta" && usage) {
-              usage = {
-                model: usage.model,
-                inputTokens: event.usage.input_tokens ?? usage.inputTokens,
-                outputTokens: event.usage.output_tokens,
-                cacheWriteTokens: event.usage.cache_creation_input_tokens ?? usage.cacheWriteTokens,
-                cacheReadTokens: event.usage.cache_read_input_tokens ?? usage.cacheReadTokens,
-              };
-            }
+            turns.push({ role: "assistant", content: final.content });
           }
         } catch (error) {
           // 割り込まれた場合・「止める」を押された場合・タブを閉じられた場合はここに来る。
@@ -359,17 +422,20 @@ export async function POST(request: Request) {
         // 遮られて1文字も出なかった往復でも、入力ぶんはもう使い終わっている。
         // 途中で遮られると `message_delta` が届かず、出力ぶんは `message_start` 時点の値
         // （数トークン）のまま残る。埋め合わせの推定はせず、少なめの実測値をそのまま入れる。
-        if (usage) {
+        //
+        // `pause_turn` で続きを頼み直した往復（#46）はAPIを複数回叩いているので、行も
+        // その回数ぶんできる。1回ごとに数えるのが#51で決めた単位で、まとめない。
+        for (const entry of usages) {
           try {
             await db.apiUsage.create({
               data: {
                 userId: user.id,
                 conversationId: conversation.id,
-                model: usage.model,
-                inputTokens: usage.inputTokens,
-                outputTokens: usage.outputTokens,
-                cacheWriteTokens: usage.cacheWriteTokens,
-                cacheReadTokens: usage.cacheReadTokens,
+                model: entry.model,
+                inputTokens: entry.inputTokens,
+                outputTokens: entry.outputTokens,
+                cacheWriteTokens: entry.cacheWriteTokens,
+                cacheReadTokens: entry.cacheReadTokens,
               },
             });
           } catch (error) {

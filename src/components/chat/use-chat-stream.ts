@@ -24,6 +24,8 @@ export type SendOptions = {
   mode?: "voice";
   /** 返答が届くたび。届いた差分だけを渡す。 */
   onDelta: (text: string) => void;
+  /** 繋いだ外部サービスの道具を使い始めたとき（#46）。返答が始まるまでの間を埋めるために使う。 */
+  onTool?: (activity: { server: string; tool: string }) => void;
   /** 利用者へ出す文言。中断のときは呼ばれない。 */
   onError: (message: string) => void;
 };
@@ -109,6 +111,11 @@ export function useChatStream(conversationId: string | null) {
               const delta = readString(event.data, "text") ?? "";
               answer += delta;
               options.onDelta(delta);
+            } else if (event.name === "tool") {
+              options.onTool?.({
+                server: readString(event.data, "server") ?? "外部サービス",
+                tool: readString(event.data, "tool") ?? "",
+              });
             } else if (event.name === "error") {
               failed = true;
               options.onError(readString(event.data, "message") ?? "返答の生成に失敗しました。");

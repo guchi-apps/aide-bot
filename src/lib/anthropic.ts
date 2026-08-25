@@ -49,6 +49,23 @@ export const MAX_OUTPUT_TOKENS = 16000;
  */
 export const VOICE_MAX_OUTPUT_TOKENS = 1200;
 
+/**
+ * リモートMCPサーバーへ繋ぐためのベータ指定（#46）。
+ *
+ * この機能はまだベータで、指定しないと `mcp_servers` ごと弾かれる。
+ * 前の版（`mcp-client-2025-04-04`）は非推奨で、ツールの絞り込みの書き方が違う。
+ */
+export const MCP_BETA = "mcp-client-2025-11-20";
+
+/**
+ * 外部サービスへ繋いでいるときに、上限トークンへ上乗せするぶん（#46）。
+ *
+ * `max_tokens` は本文だけでなくツール呼び出しのぶんも含む。特に音声モードの1200は
+ * 「聞くだけの返答を短く保つ」ための値で、ツールを2回呼んだだけで本文へ回るぶんが
+ * 尽きる。体裁の指示は据え置いたまま、呼び出しに使う余地だけをここで足す。
+ */
+export const MCP_TOKEN_ALLOWANCE = 4000;
+
 /** 返答をどう受け取るか。体裁の指示と上限トークンがこれで変わる（#27）。 */
 export type ReplyStyle = "text" | "voice";
 
@@ -94,17 +111,35 @@ const VOICE_FORMAT_RULES = [
   "話し言葉で書く。ただし結論は最初に言う",
 ];
 
-export function secretarySystemPrompt(style: ReplyStyle): string {
+/**
+ * 繋いでいる外部サービスについての指示（#46）。
+ *
+ * ツールの説明文だけでも呼び分けはできるが、**音声モードでは「短く答える」指示と
+ * ぶつかって呼ばずに済ませてしまう**。手元に無い事実は調べてから答える、と明示する。
+ */
+function connectedServiceRules(labels: string[]): string[] {
+  if (labels.length === 0) return [];
+
+  return [
+    `${labels.join("・")}に繋がっていて、その中のデータを取ってくる道具が使えます`,
+    "残高・予定・部屋の状態・記録の中身など、手元に無い事実を尋ねられたら、推測せず道具で調べてから答える",
+    "道具で取れなかったときは、取れなかったことをそのまま言う。それらしい数字で埋めない",
+  ];
+}
+
+export function secretarySystemPrompt(style: ReplyStyle, connectedLabels: string[] = []): string {
   const rules = [
     ...COMMON_RULES,
+    ...connectedServiceRules(connectedLabels),
     ...(style === "voice" ? VOICE_FORMAT_RULES : TEXT_FORMAT_RULES),
   ];
 
   return `${SECRETARY_INTRO}\n\n${rules.map((rule) => `- ${rule}`).join("\n")}`;
 }
 
-export function maxOutputTokens(style: ReplyStyle): number {
-  return style === "voice" ? VOICE_MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS;
+export function maxOutputTokens(style: ReplyStyle, hasTools = false): number {
+  const base = style === "voice" ? VOICE_MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS;
+  return hasTools ? base + MCP_TOKEN_ALLOWANCE : base;
 }
 
 let client: Anthropic | undefined;

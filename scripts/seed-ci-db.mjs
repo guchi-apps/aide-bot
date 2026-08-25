@@ -99,6 +99,29 @@ const CONVERSATION_SEEDS = [
   },
 ];
 
+// ダミーの接続（#46）。空のままだと接続画面の「繋いでいるもの」側を確かめられない。
+//
+// **どちらも相談には渡らない状態にしてある。** 使えるトークンを持った接続を入れると、
+// 開発環境で相談を送るたびに実在しない資格情報で外部サービスへ繋ぎに行き、返答の生成
+// そのものが失敗する。休止中（enabled=false）と未接続（accessToken=null）の2つを置いて、
+// 状態の出し分けだけを確かめられるようにしている。
+const CONNECTION_SEEDS = [
+  {
+    label: "AIDE",
+    slug: "aide",
+    url: "https://aide.gucchii.com/mcp",
+    enabled: false,
+    accessToken: "dev-dummy-access-token",
+  },
+  {
+    label: "Notion",
+    slug: "notion",
+    url: "https://mcp.notion.com/mcp",
+    enabled: true,
+    accessToken: null,
+  },
+];
+
 async function main() {
   const user = await db.user.upsert({
     where: { supabaseUserId: CI_BYPASS_SUPABASE_USER_ID },
@@ -214,6 +237,18 @@ async function main() {
 
   const conversationCount = await db.conversation.count({ where: { userId: user.id } });
   console.log(`[aide-bot] 相談スレッドを投入しました: ${conversationCount}件`);
+
+  // 外部サービスとの接続（#46）。slugは利用者の中で一意なのでupsertできる。
+  for (const seed of CONNECTION_SEEDS) {
+    await db.mcpConnection.upsert({
+      where: { userId_slug: { userId: user.id, slug: seed.slug } },
+      update: {},
+      create: { ...seed, userId: user.id },
+    });
+  }
+
+  const connectionCount = await db.mcpConnection.count({ where: { userId: user.id } });
+  console.log(`[aide-bot] 外部サービスとの接続を投入しました: ${connectionCount}件`);
 }
 
 main()

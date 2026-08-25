@@ -78,6 +78,8 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
   // 失敗ではないが伝えておきたいこと（VOICEVOXが使えず端末の声で読んだ、など）。
   const [notice, setNotice] = useState<string | null>(null);
   const [reacting, setReacting] = useState(false);
+  // 外部サービスを見に行っている間の表示（#46）。声だけだと無言の数秒が長く感じる。
+  const [activity, setActivity] = useState<{ server: string; tool: string } | null>(null);
 
   const settings = useVoiceSettings();
   const supported = useRecognitionSupported();
@@ -145,6 +147,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
       setNotice(null);
       setLastUser(text);
       setReply("");
+      setActivity(null);
       setStatus("thinking");
       setMessages((previous) => [
         ...previous,
@@ -181,8 +184,10 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
         onDelta: (delta) => {
           answer += delta;
           setReply(answer);
+          setActivity(null);
           reader?.push(delta);
         },
+        onTool: setActivity,
         onError: setError,
       });
 
@@ -541,7 +546,14 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
 
           <p className="inline-flex items-center gap-2 rounded-full bg-accent-surface px-3.5 py-1 text-xs font-bold text-accent">
             <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
-            <span aria-live="polite">{STATUS_LABEL[status]}</span>
+            {/* 外部サービスを見に行っている間は、待たせている理由を出す（#46）。
+                「考えています」のままだと、#52で潰した「返事が来ていないように見える」が
+                そのぶんだけ戻ってしまう。ロボットの動きは考えているときのまま。 */}
+            <span aria-live="polite">
+              {status === "thinking" && activity
+                ? `${activity.server}を調べています`
+                : STATUS_LABEL[status]}
+            </span>
           </p>
 
           <div className="flex w-full max-w-[36rem] flex-col gap-3">
@@ -564,7 +576,9 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
                   {reply !== "" ? (
                     reply
                   ) : status === "thinking" ? (
-                    <span className="text-muted">返事を考えています…</span>
+                    <span className="text-muted">
+                      {activity ? `${activity.server}を調べています…` : "返事を考えています…"}
+                    </span>
                   ) : messages.length === 0 ? (
                     <span className="text-muted">
                       下のマイクを押して、そのまま話しかけてください。

@@ -18,7 +18,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0f766e",
+  themeColor: "#c8503c",
   // ホーム画面から起動したときに、ノッチ側までレイアウトを広げる。
   viewportFit: "cover",
 };

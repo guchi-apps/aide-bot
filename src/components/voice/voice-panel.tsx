@@ -30,7 +30,7 @@ import {
 } from "@/lib/speech/voicevox";
 import { cn } from "@/lib/utils";
 
-import { Orb, type OrbState } from "./orb";
+import { Robot, type RobotState } from "./robot";
 
 type Props = {
   /** 既存スレッドならそのID。新しい相談ならnull。 */
@@ -38,7 +38,7 @@ type Props = {
   initialMessages: ChatMessage[];
 };
 
-const STATUS_LABEL: Record<OrbState, string> = {
+const STATUS_LABEL: Record<RobotState, string> = {
   idle: "待っています",
   listening: "聞いています",
   thinking: "考えています",
@@ -61,7 +61,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
   const { send: sendMessage, abort } = useChatStream(conversationId);
 
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
-  const [status, setStatus] = useState<OrbState>("idle");
+  const [status, setStatus] = useState<RobotState>("idle");
   const [heard, setHeard] = useState("");
   const [lastUser, setLastUser] = useState<string | null>(null);
   const [reply, setReply] = useState("");
@@ -409,7 +409,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
         )}
 
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 px-6 py-6 text-center">
-          <Orb
+          <Robot
             state={status}
             reacting={reacting}
             className="size-[168px] md:size-[184px] lg:size-[200px]"

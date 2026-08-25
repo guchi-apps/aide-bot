@@ -147,6 +147,11 @@ pnpm build:ci    # prisma generate && next build
 CI（`.github/workflows/ci.yml`）はこの3つを実行する。ビルドは外部サービスへ接続しないため、
 `DATABASE_URL` と `NEXT_PUBLIC_SUPABASE_*` はCI専用のプレースホルダーでよい。
 
+**検証用に一時的なページを足して消したら、`rm -rf .next` してから型チェックする。**
+`next dev` が生成する `.next/dev/types/validator.ts` は消したルートを参照したまま残り、
+`pnpm typecheck` と `pnpm build:ci` が `TS2307: Cannot find module '../../../src/app/<消した名前>/page.js'`
+で落ちる。ソースにはもうそのファイルが無いので、原因がコードの側に見えない。
+
 ## ローカル開発
 
 ```bash

@@ -3,7 +3,6 @@ import { APIUserAbortError } from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 
 import {
-  CHAT_MODEL,
   INTERRUPTED_NOTE,
   MCP_BETA,
   getAnthropicClient,
@@ -13,6 +12,7 @@ import {
   type ReplyStyle,
 } from "@/lib/anthropic";
 import { getCurrentUser } from "@/lib/auth-user";
+import { selectedChatModels } from "@/lib/chat-model-server";
 import { MAX_MESSAGE_LENGTH, buildConversationTitle } from "@/lib/conversation";
 import { db } from "@/lib/db";
 import {
@@ -260,6 +260,12 @@ export async function POST(request: Request) {
   // 同じスレッドを「話す」と「書く」で行き来しても、履歴はそのまま繋がる。
   const style: ReplyStyle = body.mode === "voice" ? "voice" : "text";
 
+  // 返答に使うモデルは、この端末が設定の画面で選んだもの（#71）。話すときと書くときで
+  // 別々に持てる。**リクエストの本文ではなくCookieから読む**——利用者が書き換えられる
+  // 値であることは変わらないが、`normalizeChatModel()` が知らない値を既定へ落とすため、
+  // 存在しないモデル名がそのままAPIへ渡ることはない。
+  const model = (await selectedChatModels())[style];
+
   // 繋いでいる外部サービス（#46）。読み出しに失敗しても相談そのものは通す。
   // 繋がっていないぶんは答えられないだけで、送信ごと弾くより実害が小さい。
   let servers: ConnectedServer[] = [];
@@ -317,7 +323,7 @@ export async function POST(request: Request) {
                 ...(mcpServers.length > 0
                   ? { betas: [MCP_BETA], mcp_servers: mcpServers, tools }
                   : {}),
-                model: CHAT_MODEL,
+                model,
                 max_tokens: maxOutputTokens(style, mcpServers.length > 0),
                 // システムプロンプトにはブレークポイントを置かない（#56）。単体では
                 // キャッシュできる最小の長さに届かず、置いても黙って無視されるだけ。履歴側の

@@ -1,38 +1,16 @@
-import { CHAT_MODEL } from "@/lib/anthropic";
+import { DEFAULT_CHAT_MODEL, MODEL_PRICING, type ModelPricing } from "@/lib/chat-model";
 import { db } from "@/lib/db";
 
 /**
- * APIの消費量（#51）。単価・集計・表示の整形をここへ閉じる。
+ * APIの消費量（#51）。集計と表示の整形をここへ閉じる。
  *
- * **このモジュールはサーバー専用。** `@/lib/anthropic` 経由でAnthropic SDKを、`@/lib/db` 経由で
- * Prismaを引き込むため、クライアントコンポーネントからimportしないこと（`src/lib/app-version.ts`
- * と同じ理由で、バンドルへ丸ごと入る）。使用量の画面はサーバーコンポーネントで組み立てている。
+ * **単価表（`MODEL_PRICING`）は `@/lib/chat-model` へ移した**（#71）。モデルを選ぶ画面が
+ * クライアントコンポーネントで、単価をバッジに出すため。
+ *
+ * **このモジュールはサーバー専用。** `@/lib/db` 経由でPrismaを引き込むため、クライアント
+ * コンポーネントからimportしないこと（`src/lib/app-version.ts` と同じ理由で、バンドルへ
+ * 丸ごと入る）。使用量の画面はサーバーコンポーネントで組み立てている。
  */
-
-/** 100万トークンあたりの単価（USD）。 */
-export type ModelPricing = {
-  input: number;
-  output: number;
-  /** プロンプトキャッシュへの書き込み（TTL 5分）。 */
-  cacheWrite: number;
-  /** プロンプトキャッシュからの読み出し。 */
-  cacheRead: number;
-};
-
-/**
- * モデルごとの単価。
- *
- * **Anthropicが単価を変えたらここを直す。** 画面に出るのはこの表からの概算で、
- * 実際の請求額ではない。過去のぶんも呼び出した時点のモデル名で引き直すため、
- * 使うのをやめたモデルの行も消さずに残す。
- *
- * 出典: https://claude.com/pricing#api（2026-08-25 時点）
- */
-export const MODEL_PRICING: Record<string, ModelPricing> = {
-  "claude-opus-5": { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
-  "claude-sonnet-5": { input: 2, output: 10, cacheWrite: 2.5, cacheRead: 0.2 },
-  "claude-haiku-4-5": { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 },
-};
 
 /**
  * 円で見るための換算レート。
@@ -88,12 +66,14 @@ export function promptTokens(row: UsageSummary): number {
 }
 
 /**
- * 単価を引く。表に無いモデルは、いま使っているモデルの単価で概算する。
+ * 単価を引く。表に無いモデルは、既定のモデルの単価で概算する。
  *
  * 0円として捨てると「使っていない」と読めてしまうため、近い値を出して概算だと断る方を採る。
  */
 function pricingFor(model: string | null): ModelPricing {
-  return MODEL_PRICING[model ?? ""] ?? MODEL_PRICING[CHAT_MODEL] ?? MODEL_PRICING["claude-opus-5"];
+  return (
+    MODEL_PRICING[model ?? ""] ?? MODEL_PRICING[DEFAULT_CHAT_MODEL] ?? MODEL_PRICING["claude-opus-5"]
+  );
 }
 
 /** 1件ぶんの概算費用（USD）。 */

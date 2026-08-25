@@ -24,9 +24,13 @@ import {
 } from "@/lib/speech/voice-settings";
 import {
   VOICEVOX_SPEAKERS,
+  type EngineCheck,
+  checkVoicevoxEngine,
+  normalizeEngineUrl,
   parseVoicevoxSpeaker,
   primeVoicevoxAudio,
   voicevoxVoiceURI,
+  warmVoicevoxSource,
 } from "@/lib/speech/voicevox";
 import { cn } from "@/lib/utils";
 
@@ -81,6 +85,9 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   // 試し聞きの合成待ち。VOICEVOXは数秒かかるので、押しても無反応に見えないようにする（#52）。
   const [samplePreparing, setSamplePreparing] = useState(false);
+  // 自前のVOICEVOX ENGINEへの疎通確認（#57）。
+  const [engineCheck, setEngineCheck] = useState<EngineCheck | null>(null);
+  const [engineChecking, setEngineChecking] = useState(false);
 
   const recognitionRef = useRef<RecognitionHandle | null>(null);
   const readerRef = useRef<Reader | null>(null);
@@ -151,6 +158,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
           ? createReader({
               voiceURI: settingsRef.current.voiceURI,
               rate: settingsRef.current.rate,
+              engineUrl: settingsRef.current.engineUrl,
               // VOICEVOXは合成に数秒かかる。「考えています」のままだと返事が来ていないように
               // 見え、マイクを押して割り込まれてしまう（#52）。
               onPreparing: () =>
@@ -273,6 +281,10 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
 
   /** iOSは「画面を触った流れ」で一度鳴らしておかないと、以降が無音になる。 */
   function prime() {
+    // ENGINEが届くかは先に調べておく。返答が届いてから調べると、届かない端末では
+    // 最初のひと声がそのぶん遅れる（#57）。
+    warmVoicevoxSource(settingsRef.current.engineUrl);
+
     if (primedRef.current) return;
     primeSpeechSynthesis();
     primeVoicevoxAudio();
@@ -286,10 +298,18 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
     sampleRef.current?.cancel();
     setSamplePreparing(false);
     sampleRef.current = speakSample(settings.voiceURI, settings.rate, {
+      engineUrl: settings.engineUrl,
       onPreparing: () => setSamplePreparing(true),
       onDone: () => setSamplePreparing(false),
       onNotice: setNotice,
     });
+  }
+
+  /** 入力したENGINEのURLへ実際に届くかを確かめる。 */
+  async function onCheckEngine() {
+    setEngineChecking(true);
+    setEngineCheck(await checkVoicevoxEngine(settings.engineUrl));
+    setEngineChecking(false);
   }
 
   /** 返答も読み上げも畳んで待機へ戻す。もう聞かなくてよくなったとき。 */
@@ -347,6 +367,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
     status === "listening" ? "話し終わった" : answering ? "割り込んで話す" : "話しかける";
   const speakable = canSpeakWith(settings.voiceURI);
   const voicevoxSpeaker = parseVoicevoxSpeaker(settings.voiceURI);
+  const engineConfigured = normalizeEngineUrl(settings.engineUrl) !== null;
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -439,13 +460,52 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
             </button>
 
             {voicevoxSpeaker && (
-              <p className="mt-2 text-xs leading-relaxed text-muted">
-                {voicevoxSpeaker.credit}
-                <br />
-                返事の文面は、音声にするためVOICEVOXのWEB版API（api.tts.quest）へ送られます。
-                合成に数秒かかるため、返事が出てから声が始まるまで少し間があきます。
-                混み合っているときや通信できないときは、この端末の声で読み上げます。
-              </p>
+              <>
+                <p className="mt-2 text-xs leading-relaxed text-muted">
+                  {voicevoxSpeaker.credit}
+                  <br />
+                  {engineConfigured
+                    ? "下のVOICEVOX ENGINEで合成します。届かないときだけ、返事の文面がWEB版API（api.tts.quest）へ送られ、それも駄目ならこの端末の声で読み上げます。"
+                    : "返事の文面は、音声にするためVOICEVOXのWEB版API（api.tts.quest）へ送られます。合成に数秒かかるため、返事が出てから声が始まるまで少し間があきます。混み合っているときや通信できないときは、この端末の声で読み上げます。"}
+                </p>
+
+                <label className="flex flex-col gap-1.5 py-2 text-sm">
+                  VOICEVOX ENGINE のURL
+                  <input
+                    type="url"
+                    inputMode="url"
+                    autoComplete="off"
+                    placeholder="https://<ホスト名>:50021"
+                    value={settings.engineUrl}
+                    onChange={(event) => {
+                      setEngineCheck(null);
+                      updateVoiceSettings({ engineUrl: event.target.value });
+                    }}
+                    className="rounded-lg border border-border bg-background px-2.5 py-2 text-sm outline-none focus:border-accent"
+                  />
+                  <span className="text-xs leading-relaxed text-muted">
+                    自分で動かしているENGINEがあれば入れてください。合成が速くなり、返事の文面が
+                    外へ出なくなります。この端末にだけ保存されます。
+                  </span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => void onCheckEngine()}
+                  disabled={!engineConfigured || engineChecking}
+                  className="w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm transition-colors hover:bg-rail-active disabled:opacity-40"
+                >
+                  {engineChecking ? "確かめています…" : "接続を確かめる"}
+                </button>
+
+                {engineCheck && (
+                  <p className="mt-2 text-xs leading-relaxed text-muted">
+                    {engineCheck.ok
+                      ? `つながりました（ENGINE ${engineCheck.version}）。`
+                      : engineCheck.message}
+                  </p>
+                )}
+              </>
             )}
 
             <label className="flex flex-col gap-1.5 py-2 text-sm">

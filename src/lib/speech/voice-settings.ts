@@ -22,6 +22,13 @@ export type VoiceSettings = {
    */
   voiceURI: string | null;
   rate: number;
+  /**
+   * 自前のVOICEVOX ENGINEのURL（#57）。空ならWEB版API（`api.tts.quest`）を使う。
+   *
+   * **環境変数では配らない。** tailnetのホスト名であり、このリポジトリも本番サイトも公開
+   * されているため、`NEXT_PUBLIC_*` に置くとJSバンドル越しに誰でも読める。端末ごとに入れる。
+   */
+  engineUrl: string;
 };
 
 export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
@@ -29,6 +36,7 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   speak: true,
   voiceURI: null,
   rate: RATE_DEFAULT,
+  engineUrl: "",
 };
 
 /**
@@ -57,6 +65,8 @@ function read(): VoiceSettings {
         typeof parsed.rate === "number" && parsed.rate >= RATE_MIN && parsed.rate <= RATE_MAX
           ? parsed.rate
           : DEFAULT_VOICE_SETTINGS.rate,
+      engineUrl:
+        typeof parsed.engineUrl === "string" ? parsed.engineUrl : DEFAULT_VOICE_SETTINGS.engineUrl,
     };
   } catch {
     // 壊れた値が残っていても画面は開けるようにする。

@@ -5,16 +5,20 @@
  * 少しずつ届くため、届いた端から文の切れ目で切り出して読み上げる。全部揃うまで待つと、
  * 画面には字幕が出ているのに声が始まらない時間ができる。
  *
- * もう1つはVOICEVOXの声（`./voicevox`）で、こちらは外で合成するぶんレート制限があるため、
+ * もう1つはVOICEVOXの声（`./voicevox`）。宛先が2つあり、自前のVOICEVOX ENGINEが届く端末では
+ * 内蔵の声と同じように文の切れ目で刻み、届かない端末ではWEB版API（レート制限あり）へ
  * 1往復あたり最大2回にまとめて依頼する。どちらを使うかは `voiceURI` だけで決まるので、
  * 呼ぶ側は `createReader()` を使う。
  */
 
 import {
+  forgetVoicevoxEngine,
   getVoicevoxAudio,
   isVoicevoxPlaybackSupported,
   parseVoicevoxSpeaker,
-  requestVoicevoxAudioUrl,
+  resolveVoicevoxSource,
+  type VoicevoxAudio,
+  type VoicevoxSource,
   type VoicevoxSpeaker,
 } from "./voicevox";
 
@@ -111,6 +115,13 @@ export function stripForSpeech(text: string): string {
 type ReaderOptions = {
   voiceURI: string | null;
   rate: number;
+  /**
+   * 自前のVOICEVOX ENGINEのURL（#57）。届けばこちらで合成する。
+   *
+   * tailnetのホスト名なのでリポジトリにもバンドルにも置かず、端末ごとの設定から渡ってくる。
+   * 未設定・届かない端末では従来どおりWEB版API（`api.tts.quest`）を使う。
+   */
+  engineUrl?: string | null;
   /**
    * 声の用意を始めたとき（VOICEVOXのみ・#52）。
    *
@@ -260,19 +271,28 @@ export class SpeechReader {
   }
 }
 
+/** 合成へ回すひと固まり。 */
+type VoicevoxChunk = {
+  text: string;
+  /** 合成の依頼。まだ出していなければ `null`。 */
+  audio: Promise<VoicevoxAudio> | null;
+};
+
 /**
  * VOICEVOXで読み上げる。
  *
- * キー無しの利用は5秒に1リクエストまでなので、内蔵の声のように文ごとへは刻めない。
- * ただし**依頼から最初の音まで6〜8秒かかる**ため、返答が出そろってから1回だけ出すと、
- * 字幕が出た後に7秒以上の無音ができる（#52。「ずんだもんだと音が出ない」の正体）。
+ * 刻み方は宛先で変わる（`./voicevox` の `resolveVoicevoxSource()` が端末ごとに決める）。
  *
- * そこで**最大2回に分ける**。1文目が揃った時点で1回目を依頼し、返答の生成中に合成を
- * 進めておく。残りは1回目が鳴り始めてから依頼する——そこまでで7秒前後は経っているので、
- * 5秒の制限に触れず、待ちも1回目の再生に隠れる。
+ * - **自前のENGINE**（#57）: レート制限が無いので、内蔵の声と同じく文の切れ目で刻む。
+ *   ENGINEは合成し終えてからWAVを返す（途中から流す仕組みが無い）ため、まとめて投げると
+ *   長い返答ほど鳴り始めが遅くなる。刻んでおけば、次のぶんの合成が前のぶんの再生に隠れる
+ * - **WEB版API**: キー無しは5秒に1リクエストなので文ごとへは刻めない。かつ**依頼から
+ *   最初の音まで6〜8秒かかる**ため、返答が出そろってから1回だけ出すと字幕の後に7秒以上の
+ *   無音ができる（#52。「ずんだもんだと音が出ない」の正体）。そこで**最大2回に分ける**。
+ *   1文目が揃った時点で1回目を依頼し、残りは1回目が鳴り始めてから依頼する
  *
- * 合成にも再生にも失敗したときは、黙り込ませずに内蔵の声へ落とす。ここで止めると、
- * 外部サービスが混んでいるだけで秘書が何も答えなくなってしまう。
+ * どちらでも、依頼を出した順にそのまま鳴らす。合成にも再生にも失敗したときは、黙り込ませずに
+ * 内蔵の声へ落とす。ここで止めると、外部サービスが混んでいるだけで秘書が何も答えなくなる。
  */
 class VoicevoxReader implements Reader {
   private buffer = "";
@@ -282,57 +302,49 @@ class VoicevoxReader implements Reader {
   private readonly controller = new AbortController();
   private fallback: SpeechReader | null = null;
   private detach: (() => void) | null = null;
-  /** 先に合成へ出した1文目。まだ出していなければ `null`。 */
-  private lead: { text: string; url: Promise<string> } | null = null;
+  /** 依頼した順のひと固まり。この順にそのまま鳴らす。 */
+  private readonly chunks: VoicevoxChunk[] = [];
+  /** 決まった宛先。疎通を調べている間は `null`。 */
+  private source: VoicevoxSource | null = null;
+  private readonly sourceReady: Promise<VoicevoxSource>;
 
   constructor(
     private readonly speaker: VoicevoxSpeaker,
     private readonly options: ReaderOptions,
-  ) {}
+  ) {
+    this.sourceReady = resolveVoicevoxSource(options.engineUrl ?? null);
+
+    void this.sourceReady.then((source) => {
+      this.source = source;
+      // `finish()` 済みなら `run()` が引き取る。ここで刻むと二重に切り出してしまう。
+      if (this.cancelled || this.ended) return;
+      this.pump(source);
+    });
+  }
 
   push(text: string): void {
     if (this.cancelled || this.ended) return;
 
     this.buffer += text;
-    if (this.lead) return;
-
-    const chunk = this.takeLeadChunk();
-    if (chunk === null) return;
-
-    this.options.onPreparing?.();
-    this.lead = {
-      text: chunk,
-      url: requestVoicevoxAudioUrl(chunk, this.speaker.id, this.controller.signal),
-    };
-    // 依頼を出しておくだけ。失敗の後始末は finish() の側でまとめて行う。
-    void this.lead.url.catch(() => {});
+    if (this.source) this.pump(this.source);
   }
 
   finish(): void {
     if (this.cancelled || this.ended) return;
     this.ended = true;
-
-    const rest = stripForSpeech(this.buffer).trim();
-    this.buffer = "";
-
-    if (!this.lead && rest === "") {
-      this.options.onDrain();
-      return;
-    }
-
-    if (!this.lead) this.options.onPreparing?.();
-    void this.run(rest);
+    void this.run();
   }
 
   cancel(): void {
     if (this.cancelled) return;
     this.cancelled = true;
     this.buffer = "";
-    this.lead = null;
 
     this.detach?.();
     this.detach = null;
     this.controller.abort();
+    this.releaseFrom(0);
+    this.chunks.length = 0;
 
     this.fallback?.cancel();
     this.fallback = null;
@@ -346,13 +358,82 @@ class VoicevoxReader implements Reader {
   }
 
   /**
-   * 返答の頭を切り出す。まだ先出しできる形になっていなければ `null`。
+   * 届いているぶんから、宛先に合った刻み方でひと固まりずつ切り出して依頼する。
    *
-   * `SpeechReader.takeChunk()` と同じ考え方だが、短すぎる1文は先出ししない。
+   * WEB版はレート制限があるので、生成中に先出しできるのは1文目だけ。残りは `run()` が
+   * 1文目の再生を待ってから依頼する。
+   */
+  private pump(source: VoicevoxSource): void {
+    if (this.cancelled) return;
+
+    if (source.rateLimited) {
+      if (this.chunks.length > 0) return;
+
+      const lead = this.takeLeadChunk();
+      if (lead === null) return;
+
+      this.enqueue(lead, source);
+      return;
+    }
+
+    for (;;) {
+      const chunk = this.takeChunk();
+      if (chunk === null) break;
+      if (chunk !== "") this.enqueue(chunk, source);
+    }
+  }
+
+  private enqueue(text: string, source: VoicevoxSource): void {
+    const chunk: VoicevoxChunk = { text, audio: null };
+    this.chunks.push(chunk);
+    this.request(chunk, source);
+  }
+
+  /** まだ出していなければ合成を依頼する。すでに出していれば同じ約束を返す。 */
+  private request(chunk: VoicevoxChunk, source: VoicevoxSource): Promise<VoicevoxAudio> {
+    if (!chunk.audio) {
+      // 鳴り始める前は「声を用意しています」を出す。何も出さずに待たせると、返事が
+      // 来ていないように見えてマイクで割り込まれる（#52）。
+      if (!this.started) this.options.onPreparing?.();
+
+      chunk.audio = source.synthesize(chunk.text, this.speaker.id, this.controller.signal);
+      // 先に依頼だけ出しておくぶんの後始末。失敗は `run()` の側でまとめて拾う。
+      void chunk.audio.catch(() => {});
+    }
+
+    return chunk.audio;
+  }
+
+  /**
+   * 文の切れ目でひと固まり切り出す。まだ切れ目が無ければ `null`、読むものが無ければ空文字。
+   *
+   * `SpeechReader.takeChunk()` と同じ切り方。ENGINE向け。
+   */
+  private takeChunk(): string | null {
+    const boundary = this.buffer.search(/[。．！？!?\n]/);
+    let cut: number;
+
+    if (boundary !== -1) {
+      cut = boundary + 1;
+    } else if (this.buffer.length >= FORCED_BREAK_LENGTH) {
+      const comma = this.buffer.lastIndexOf("、", FORCED_BREAK_LENGTH);
+      cut = comma > 0 ? comma + 1 : FORCED_BREAK_LENGTH;
+    } else {
+      return null;
+    }
+
+    const chunk = this.buffer.slice(0, cut);
+    this.buffer = this.buffer.slice(cut);
+    return trimmedForSpeech(chunk) ?? "";
+  }
+
+  /**
+   * 返答の頭を切り出す。まだ先出しできる形になっていなければ `null`。WEB版向け。
+   *
+   * 最初の切れ目ではなく、`LEAD_MIN_LENGTH` を越えた先の切れ目で切る。「はい。」のような
+   * 短い1文で切ると、鳴っている時間より合成の待ちの方が長くなる。
    */
   private takeLeadChunk(): string | null {
-    // 最初の切れ目ではなく、`LEAD_MIN_LENGTH` を越えた先の切れ目で切る。「はい。」のような
-    // 短い1文で切ると、鳴っている時間より合成の待ちの方が長くなる。
     const from = LEAD_MIN_LENGTH - 1;
     const boundary = this.buffer.slice(from).search(/[。．！？!?\n]/);
 
@@ -373,69 +454,91 @@ class VoicevoxReader implements Reader {
   }
 
   /**
-   * 合成して鳴らす。最大2回に分ける（#52）。
+   * 依頼した順に鳴らす。
    *
-   * 1回目は `push()` の途中で依頼済みのぶん、2回目が残り。2回目の依頼は1回目が鳴り始めて
-   * から出す——合成に7秒前後かかるので、そこまで待てばキー無しの「5秒に1回」に自然と
-   * 収まり、待ちも1回目の再生に隠れる。
+   * 次のぶんの依頼は、いまのぶんが鳴り始めた時点で出す。ENGINEでは合成が再生に隠れ、
+   * WEB版では「5秒に1回」の間隔がそこまで待つだけで自然に空く。
    */
-  private async run(rest: string): Promise<void> {
+  private async run(): Promise<void> {
     const audio = getVoicevoxAudio();
-    const leadText = this.lead?.text ?? "";
-    const whole = leadText === "" ? rest : `${leadText}\n${rest}`.trim();
+    const source = this.source ?? (await this.sourceReady.catch(() => null));
+    if (this.cancelled || !source) return;
+    this.source = source;
+
+    // 宛先が決まる前に届いていたぶんも含めて、残りを全部切り出す。WEB版では刻まない——
+    // ここまで来ると生成は終わっており、分けても合成の待ちが2回ぶんになるだけになる。
+    if (!source.rateLimited) this.pump(source);
+    const rest = trimmedForSpeech(this.buffer);
+    this.buffer = "";
+    if (rest !== null) this.chunks.push({ text: rest, audio: null });
+
+    if (this.chunks.length === 0) {
+      this.options.onDrain();
+      return;
+    }
 
     if (!audio) {
-      this.fallbackTo(whole, null);
+      this.fallbackTo(this.remainingText(0), null);
       return;
     }
 
-    const hasSecond = this.lead !== null && rest !== "";
-    let second: Promise<string> | null = null;
-    const requestSecond = () => {
-      if (!hasSecond || second || this.cancelled) return;
-      second = requestVoicevoxAudioUrl(rest, this.speaker.id, this.controller.signal);
-      void second.catch(() => {});
-    };
+    for (let index = 0; index < this.chunks.length; index += 1) {
+      const chunk = this.chunks[index];
+      let playing = false;
 
-    try {
-      const first = this.lead
-        ? await this.lead.url
-        : await requestVoicevoxAudioUrl(rest, this.speaker.id, this.controller.signal);
-      if (this.cancelled) return;
+      try {
+        const ready = await this.request(chunk, source);
+        if (this.cancelled) return;
 
-      await this.playUrl(audio, first, requestSecond);
-      if (this.cancelled) return;
-    } catch {
-      if (this.cancelled) return;
+        await this.playUrl(audio, ready.url, () => {
+          playing = true;
+          const next = this.chunks[index + 1];
+          if (next) this.request(next, source);
+        });
+        ready.release();
+        if (this.cancelled) return;
+      } catch {
+        if (this.cancelled) return;
 
-      // 鳴り始めた後で切れたぶんは読み直さない。同じ話を頭から繰り返すほうが分かりにくい。
-      if (this.started) {
-        this.options.onDrain();
+        // ENGINEが落ちていた場合は判定を捨てて、次の往復からWEB版へ回れるようにする。
+        if (source.kind === "engine") forgetVoicevoxEngine();
+
+        // 鳴り始めたぶんは読み直さない。同じ話を頭から繰り返すほうが分かりにくい。
+        const from = playing ? index + 1 : index;
+        this.releaseFrom(from);
+
+        const remaining = this.remainingText(from);
+        if (remaining === "") {
+          this.options.onDrain();
+          return;
+        }
+
+        this.fallbackTo(
+          remaining,
+          this.started
+            ? `${this.speaker.label}の声が混み合っているので、残りは端末の声で読み上げます。`
+            : `${this.speaker.label}の声が使えなかったので、端末の声で読み上げます。`,
+        );
         return;
       }
-
-      this.fallbackTo(whole, `${this.speaker.label}の声が使えなかったので、端末の声で読み上げます。`);
-      return;
     }
 
-    if (!hasSecond) {
-      this.options.onDrain();
-      return;
-    }
+    this.options.onDrain();
+  }
 
-    try {
-      const url = await (second ??
-        requestVoicevoxAudioUrl(rest, this.speaker.id, this.controller.signal));
-      if (this.cancelled) return;
+  /** まだ鳴らしていないぶんの本文。内蔵の声へ引き継ぐときに使う。 */
+  private remainingText(from: number): string {
+    return this.chunks
+      .slice(from)
+      .map((chunk) => chunk.text)
+      .join("\n")
+      .trim();
+  }
 
-      await this.playUrl(audio, url, null);
-      if (this.cancelled) return;
-      this.options.onDrain();
-    } catch {
-      if (this.cancelled) return;
-
-      // 1文目は鳴っている。残りだけ内蔵の声へ回す（黙って終わらせない）。
-      this.fallbackTo(rest, `${this.speaker.label}の声が混み合っているので、残りは端末の声で読み上げます。`);
+  /** 合成し終えた音声を手放す。ENGINEのObjectURLを溜め込まないため。 */
+  private releaseFrom(from: number): void {
+    for (const chunk of this.chunks.slice(from)) {
+      void chunk.audio?.then((ready) => ready.release()).catch(() => {});
     }
   }
 
@@ -446,11 +549,14 @@ class VoicevoxReader implements Reader {
     onPlaying: (() => void) | null,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
+      // 「鳴り始めた」を先に伝えてから次のぶんを頼む。逆にすると、すでに鳴っているのに
+      // 「声を用意しています」が1度きり挟まる。
       const handlePlaying = () => {
+        if (!this.started && !this.cancelled) {
+          this.started = true;
+          this.options.onStart();
+        }
         onPlaying?.();
-        if (this.started || this.cancelled) return;
-        this.started = true;
-        this.options.onStart();
       };
 
       // 中断されたときも必ず畳む。放っておくと run() が待ったまま戻らない。
@@ -520,11 +626,14 @@ function trimmedForSpeech(text: string): string | null {
 export function speakSample(
   voiceURI: string | null,
   rate: number,
-  handlers: Pick<ReaderOptions, "onPreparing" | "onNotice"> & { onDone?: () => void } = {},
+  handlers: Pick<ReaderOptions, "onPreparing" | "onNotice" | "engineUrl"> & {
+    onDone?: () => void;
+  } = {},
 ): Reader {
   const reader = createReader({
     voiceURI,
     rate,
+    engineUrl: handlers.engineUrl,
     onPreparing: handlers.onPreparing,
     onStart: () => handlers.onDone?.(),
     onDrain: () => handlers.onDone?.(),

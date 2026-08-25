@@ -89,6 +89,21 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 - 入力欄のEnter送信は `event.nativeEvent.isComposing` で必ず弾く。日本語入力の変換確定の
   Enterがそのまま送信になる
 
+## アイコン
+
+- **アイコンの正は `public/icon.svg` の1枚だけ。** `public/icon-192.png`・`public/icon-512.png`・
+  `public/apple-icon.png`・`src/app/favicon.ico` はすべてそこからの書き出し物で、
+  `scripts/build-icons.sh`（`rsvg-convert` と ImageMagick を使う）で作り直す。
+  PNGを直接編集しても、次にスクリプトを流した時点で戻る
+- **`public/icon.svg` の絵は `<g transform="translate(38.4 18.4) scale(0.85)">` の中に置く。**
+  `manifest.ts` は512pxを `purpose: "maskable"` としても宣言しており、Androidのアダプティブ
+  アイコンは中心から半径204.8pxの円の外を切り落とす。素の512px座標のままだと、下端の
+  リボンタイが欠ける
+- 画面の中で使うアイコンは `src/components/app-icon.tsx`（インラインSVG）。26px前後で置く
+  場所が多いため、ファイルを `<img>` で読ませない。**絵を変えるときはSVGファイルと
+  このコンポーネントの両方を揃えて直す**（グラデーションとmaskableの余白は、この大きさでは
+  効かないのでコンポーネント側には持たせていない）
+
 ## 検証コマンド
 
 ```bash

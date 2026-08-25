@@ -14,6 +14,9 @@ import { parseStreamEvent, readString } from "@/lib/sse";
  * コールバックで呼ぶ側へ渡す。
  *
  * 片側だけ直して取り残されるのを防ぐため、送信の経路はこの1か所に置く（#27）。
+ *
+ * 返答の途中で次を送る「割り込み」（#48）は呼ぶ側が組み立てる。順序（そこまでの返答を
+ * 残してから次の発言を並べる）が画面ごとに違うため、ここでは `abort()` を提供するに留める。
  */
 
 export type SendOptions = {
@@ -38,6 +41,15 @@ export function useChatStream(conversationId: string | null) {
   const router = useRouter();
   const abortRef = useRef<AbortController | null>(null);
 
+  // 新しい相談で最初の返答を割り込むと、`router.replace()` が効く前に2通目が飛ぶ。
+  // propsの `conversationId` はまだnullなので、そのまま送るとスレッドがもう1本作られる。
+  // 一度受け取ったIDを覚えておき、propsが追いつくまではこちらを使う（#48）。
+  const startedIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    startedIdRef.current = null;
+  }, [conversationId]);
+
   useEffect(() => {
     return () => abortRef.current?.abort();
   }, []);
@@ -52,6 +64,8 @@ export function useChatStream(conversationId: string | null) {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      const targetId = conversationId ?? startedIdRef.current;
+
       let answer = "";
       let createdConversationId: string | null = null;
       let failed = false;
@@ -60,7 +74,7 @@ export function useChatStream(conversationId: string | null) {
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ conversationId, message, mode: options.mode }),
+          body: JSON.stringify({ conversationId: targetId, message, mode: options.mode }),
           signal: controller.signal,
         });
 
@@ -90,6 +104,7 @@ export function useChatStream(conversationId: string | null) {
 
             if (event.name === "meta") {
               createdConversationId = readString(event.data, "conversationId");
+              startedIdRef.current = createdConversationId;
             } else if (event.name === "delta") {
               const delta = readString(event.data, "text") ?? "";
               answer += delta;

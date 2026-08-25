@@ -57,6 +57,18 @@ const CONVERSATION_SEEDS = [
     ],
   },
   {
+    // 割り込み（#48）が画面でどう見えるかを確かめるための1本。文字列の代わりに
+    // オブジェクトを渡した発言は、途中で遮られた返答として投入する。
+    title: "週末の予定を詰める",
+    startedAt: daysAgo(1),
+    messages: [
+      "土曜の午前が空いてる。歯医者の予約を入れたいんだけど、他に何かあったっけ。",
+      { content: "土曜の午前でしたら、先に押さえておきたいのは", interrupted: true },
+      "ごめん、日曜の話だった。日曜の午前で。",
+      "日曜の午前は何も入っていません。歯医者は前日までの予約が要るところが多いので、今日中に電話しておくと確実です。",
+    ],
+  },
+  {
     title: "自転車の買い替え候補",
     startedAt: daysAgo(30),
     messages: [
@@ -106,7 +118,8 @@ async function main() {
             role: index % 2 === 0 ? "USER" : "ASSISTANT",
             // createdAtが同一だと並び順が不定になるため、1分ずつずらす。
             createdAt: new Date(seed.startedAt.getTime() + index * 60_000),
-            content: message,
+            content: typeof message === "string" ? message : message.content,
+            interrupted: typeof message === "string" ? false : message.interrupted === true,
           })),
         },
       },

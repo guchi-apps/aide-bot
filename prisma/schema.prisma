@@ -63,6 +63,10 @@ model Message {
   role MessageRole
   // 返答はMarkdownで数千字になりうるため、VARCHARではなくTEXTにする。
   content String @db.Text
+  // 利用者に割り込まれて途中で終わった返答（#48）。次の往復でモデルへ「言い切っていない」
+  // ことを伝えるために持つ。本文へ注記を混ぜないのは、保存した文面をそのまま画面へ出すため。
+  // USERの発言では常にfalse。
+  interrupted Boolean @default(false)
 
   createdAt DateTime @default(now())
 

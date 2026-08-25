@@ -19,7 +19,7 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
       id: true,
       messages: {
         orderBy: { createdAt: "asc" },
-        select: { id: true, role: true, content: true },
+        select: { id: true, role: true, content: true, interrupted: true },
       },
     },
   });

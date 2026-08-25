@@ -278,20 +278,28 @@ body {
   animation-duration: 1s;
 }
 
-.bot-thinking .bot-body {
+/*
+ * 考え中と、VOICEVOXの声の用意待ち（#52）は同じ動きにする。返答はもう出ているが、まだ
+ * 鳴らない——「待てば来る」ことだけ伝われば足りるので、絵は分けずに文言だけを分ける。
+ */
+.bot-thinking .bot-body,
+.bot-preparing .bot-body {
   animation: bot-tilt 3.4s ease-in-out infinite;
 }
 
 /* 目を細める。考えている間はまばたきさせない。 */
-.bot-thinking .bot-eye {
+.bot-thinking .bot-eye,
+.bot-preparing .bot-eye {
   transform: scaleY(0.55);
 }
 
-.bot-thinking .bot-think {
+.bot-thinking .bot-think,
+.bot-preparing .bot-think {
   opacity: 1;
 }
 
-.bot-thinking .bot-dot {
+.bot-thinking .bot-dot,
+.bot-preparing .bot-dot {
   animation: bot-hop 1.25s ease-in-out infinite;
 }
 

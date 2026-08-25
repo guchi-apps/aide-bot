@@ -42,6 +42,7 @@ const STATUS_LABEL: Record<RobotState, string> = {
   idle: "待っています",
   listening: "聞いています",
   thinking: "考えています",
+  preparing: "声を用意しています",
   speaking: "話しています",
 };
 
@@ -52,9 +53,9 @@ const STATUS_LABEL: Record<RobotState, string> = {
  * `POST /api/chat` を使う。声で話した内容も同じ相談スレッドへ残るため、「書く」に
  * 切り替えれば文字で読み返せる。
  *
- * ひと往復は idle → listening → thinking → speaking → idle と進む。「続けて話す」が入なら
- * 最後の idle を挟まずに listening へ戻る。読み上げ中にマイクを開かないのは、自分の声を
- * 聞き返して延々と往復し続けるのを防ぐため。
+ * ひと往復は idle → listening → thinking →（VOICEVOXの声なら preparing →）speaking → idle と
+ * 進む。「続けて話す」が入なら最後の idle を挟まずに listening へ戻る。読み上げ中に
+ * マイクを開かないのは、自分の声を聞き返して延々と往復し続けるのを防ぐため。
  *
  * 考えている・話している最中でも、マイクを押せばその場で割り込める（#48）。押した時点で
  * 読み上げを止めて生成を打ち切り、thinking / speaking → listening へ飛ぶ。マイクを開くのは
@@ -78,6 +79,8 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
   const supported = useRecognitionSupported();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  // 試し聞きの合成待ち。VOICEVOXは数秒かかるので、押しても無反応に見えないようにする（#52）。
+  const [samplePreparing, setSamplePreparing] = useState(false);
 
   const recognitionRef = useRef<RecognitionHandle | null>(null);
   const readerRef = useRef<Reader | null>(null);
@@ -118,6 +121,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
     readerRef.current = null;
     sampleRef.current?.cancel();
     sampleRef.current = null;
+    setSamplePreparing(false);
     abort();
   }, [abort]);
 
@@ -147,6 +151,10 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
           ? createReader({
               voiceURI: settingsRef.current.voiceURI,
               rate: settingsRef.current.rate,
+              // VOICEVOXは合成に数秒かかる。「考えています」のままだと返事が来ていないように
+              // 見え、マイクを押して割り込まれてしまう（#52）。
+              onPreparing: () =>
+                setStatus((current) => (current === "speaking" ? current : "preparing")),
               onStart: () => setStatus("speaking"),
               onDrain: () => {
                 readerRef.current = null;
@@ -276,7 +284,12 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
     prime();
     setNotice(null);
     sampleRef.current?.cancel();
-    sampleRef.current = speakSample(settings.voiceURI, settings.rate, setNotice);
+    setSamplePreparing(false);
+    sampleRef.current = speakSample(settings.voiceURI, settings.rate, {
+      onPreparing: () => setSamplePreparing(true),
+      onDone: () => setSamplePreparing(false),
+      onNotice: setNotice,
+    });
   }
 
   /** 返答も読み上げも畳んで待機へ戻す。もう聞かなくてよくなったとき。 */
@@ -313,6 +326,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
     prime();
     sampleRef.current?.cancel();
     sampleRef.current = null;
+    setSamplePreparing(false);
 
     if (status === "listening") {
       // 聞き取り中は「話し終わった」の合図。確定して送信へ進む。
@@ -320,7 +334,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
       return;
     }
 
-    if (status === "thinking" || status === "speaking") {
+    if (status === "thinking" || status === "preparing" || status === "speaking") {
       interruptAndListen();
       return;
     }
@@ -328,7 +342,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
     beginListening();
   }
 
-  const answering = status === "thinking" || status === "speaking";
+  const answering = status === "thinking" || status === "preparing" || status === "speaking";
   const primaryLabel =
     status === "listening" ? "話し終わった" : answering ? "割り込んで話す" : "話しかける";
   const speakable = canSpeakWith(settings.voiceURI);
@@ -388,6 +402,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
                 onChange={(event) => {
                   sampleRef.current?.cancel();
                   sampleRef.current = null;
+                  setSamplePreparing(false);
                   setNotice(null);
                   updateVoiceSettings({ voiceURI: event.target.value || null });
                 }}
@@ -416,11 +431,11 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
             <button
               type="button"
               onClick={onSample}
-              disabled={!speakable}
+              disabled={!speakable || samplePreparing}
               className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-2 text-sm transition-colors hover:bg-rail-active disabled:opacity-40"
             >
               <Play className="size-3.5" aria-hidden="true" />
-              試し聞き
+              {samplePreparing ? "声を用意しています…" : "試し聞き"}
             </button>
 
             {voicevoxSpeaker && (
@@ -428,6 +443,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
                 {voicevoxSpeaker.credit}
                 <br />
                 返事の文面は、音声にするためVOICEVOXのWEB版API（api.tts.quest）へ送られます。
+                合成に数秒かかるため、返事が出てから声が始まるまで少し間があきます。
                 混み合っているときや通信できないときは、この端末の声で読み上げます。
               </p>
             )}
@@ -508,7 +524,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
                   className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted transition-colors hover:bg-rail-active"
                 >
                   <Square className="size-2.5 fill-current" aria-hidden="true" />
-                  {status === "speaking" ? "読み上げを止める" : "生成を止める"}
+                  {status === "thinking" ? "生成を止める" : "読み上げを止める"}
                 </button>
                 <p className="text-[0.6875rem] text-muted">
                   下のマイクを押すと、途中で割り込んで話しかけられます。

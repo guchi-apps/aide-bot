@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, Plus } from "lucide-react";
+import { BarChart3, Plug, Plus } from "lucide-react";
 import Link from "next/link";
 
 import { AppIcon } from "@/components/brand/app-icon";
@@ -13,6 +13,8 @@ type Props = {
   activeId: string | null;
   /** 使用量の画面を開いているか。相談は選ばれていない状態になる。 */
   isUsageActive: boolean;
+  /** 接続の画面を開いているか。使用量と同じく、相談は選ばれていない状態になる（#46）。 */
+  isSettingsActive: boolean;
   /** 今月の概算費用（`$1.23` の形）。集計はサーバー側で済ませて文字列で受け取る。 */
   monthlyCostLabel: string;
   userLabel: string;
@@ -28,6 +30,7 @@ export function ConversationRail({
   conversations,
   activeId,
   isUsageActive,
+  isSettingsActive,
   monthlyCostLabel,
   userLabel,
   userEmail,
@@ -91,6 +94,20 @@ export function ConversationRail({
       </nav>
 
       <div className="border-t border-border">
+        {/* 外部サービスとの接続（#46）。相談ではないので、一覧ではなく下部に置く。 */}
+        <Link
+          href="/settings"
+          onClick={onNavigate}
+          aria-current={isSettingsActive ? "page" : undefined}
+          className={cn(
+            "mx-2.5 mt-2 flex items-center gap-1.5 rounded-[9px] px-2.5 py-2 text-[0.8125rem] transition-colors hover:bg-rail-active focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            isSettingsActive && "bg-rail-active shadow-[inset_2px_0_0_var(--accent)]",
+          )}
+        >
+          <Plug className="size-3.5 text-muted" aria-hidden="true" />
+          接続
+        </Link>
+
         {/* APIの消費量（#51）。金額だけを一覧に出し、内訳は専用の画面で見る。 */}
         <Link
           href="/usage"

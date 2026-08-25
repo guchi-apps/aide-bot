@@ -27,6 +27,8 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
   const [answer, setAnswer] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
+  // 外部サービスを見に行っている間の表示（#46）。返答が流れ始めるまでの数秒を埋める。
+  const [activity, setActivity] = useState<{ server: string; tool: string } | null>(null);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -88,14 +90,17 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
     ]);
     answerBufferRef.current = "";
     setAnswer("");
+    setActivity(null);
     setStatus("thinking");
 
     const result = await sendMessage(text, {
       onDelta: (delta) => {
         answerBufferRef.current += delta;
+        setActivity(null);
         setStatus("streaming");
         scheduleFlush();
       },
+      onTool: setActivity,
       onError: setError,
     });
 
@@ -116,6 +121,7 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
 
     answerBufferRef.current = "";
     setAnswer("");
+    setActivity(null);
     setStatus("idle");
   }
 
@@ -201,7 +207,18 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
               <div className="min-w-0 flex-1">
                 <SecretaryLabel />
                 {status === "thinking" ? (
-                  <p className="text-sm text-muted">考えています…</p>
+                  <p className="text-sm text-muted">
+                    {activity ? (
+                      <>
+                        {activity.server}を調べています…
+                        {activity.tool !== "" && (
+                          <span className="ml-1.5 text-[0.6875rem]">（{activity.tool}）</span>
+                        )}
+                      </>
+                    ) : (
+                      "考えています…"
+                    )}
+                  </p>
                 ) : (
                   <>
                     <Markdown>{answer}</Markdown>

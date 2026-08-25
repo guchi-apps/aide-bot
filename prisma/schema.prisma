@@ -23,6 +23,7 @@ model User {
   updatedAt DateTime @updatedAt
 
   conversations Conversation[]
+  apiUsages     ApiUsage[]
 }
 
 // --- チャット ---
@@ -44,7 +45,8 @@ model Conversation {
   // 一覧の並び順がここだけを見ているため、動かないと新しい相談が下に沈む。
   updatedAt DateTime @updatedAt
 
-  messages Message[]
+  messages  Message[]
+  apiUsages ApiUsage[]
 
   // 一覧は「自分のもの・更新が新しい順」でしか引かない。
   @@index([userId, updatedAt])
@@ -63,8 +65,46 @@ model Message {
   role MessageRole
   // 返答はMarkdownで数千字になりうるため、VARCHARではなくTEXTにする。
   content String @db.Text
+  // 利用者に割り込まれて途中で終わった返答（#48）。次の往復でモデルへ「言い切っていない」
+  // ことを伝えるために持つ。本文へ注記を混ぜないのは、保存した文面をそのまま画面へ出すため。
+  // USERの発言では常にfalse。
+  interrupted Boolean @default(false)
 
   createdAt DateTime @default(now())
 
   @@index([conversationId, createdAt])
+}
+
+// --- APIの消費量（#51） ---
+// 数える単位は「Messages APIの呼び出し1回」で、秘書の返答（Message）とは別の行に持つ。
+//
+// **返答の行に持たせると、行が作られない往復のぶんが丸ごと落ちる。** 1文字も出ないうちに
+// 割り込まれた往復・生成に失敗した往復では返答を保存しない（route.tsの `answer.trim() !== ""`）が、
+// 履歴を毎回まるごと送り直す設計上、入力ぶんはその時点で使い終わっている。
+// 1発言に対してAPIを複数回叩く形（ツール利用など）になっても、この単位なら数え方が変わらない。
+
+model ApiUsage {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // どの相談で使ったか。スレッドを消しても使った事実は残したいので、Cascadeではなく
+  // SetNullにする（消えるのは紐付けだけ）。
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  // 単価はモデルごとに違う。呼び出したときのモデルが分からないと、CHAT_MODELを変えた時点で
+  // 過去ぶんの概算費用まで新しい単価で計算し直されてしまう。
+  model String @db.VarChar(64)
+
+  inputTokens  Int
+  outputTokens Int
+  // プロンプトキャッシュ（いまは使っていないため常に0。単価が入力と違うので別に持つ）。
+  cacheWriteTokens Int @default(0)
+  cacheReadTokens  Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  // 画面は「自分のぶんを期間で切る」形でしか引かない。
+  @@index([userId, createdAt])
 }

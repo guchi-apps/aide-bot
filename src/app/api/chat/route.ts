@@ -4,8 +4,9 @@ import { NextResponse } from "next/server";
 
 import {
   CHAT_MODEL,
-  HISTORY_LIMIT,
+  INTERRUPTED_NOTE,
   getAnthropicClient,
+  historyWindowSkip,
   maxOutputTokens,
   secretarySystemPrompt,
   type ReplyStyle,
@@ -35,6 +36,61 @@ function fail(message: string, status: number) {
 }
 
 /**
+ * 1回の生成で使ったトークン数（#51）。`ApiUsage` の1行として残し、使用量の画面が足し上げる。
+ *
+ * 返答（`Message`）とは別の行にするのは、**返答が保存されない往復があるため**。1文字も出ない
+ * うちに割り込まれた場合も生成に失敗した場合も、入力ぶんはその時点で使い終わっている。
+ */
+type GenerationUsage = {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheWriteTokens: number;
+  cacheReadTokens: number;
+};
+
+/**
+ * 生成中のスレッドと、その後片付けが終わるまでのプロミス（#48）。
+ *
+ * 利用者は返答の途中でも次の発言を送れる。そのとき走っている生成は打ち切られ、そこまでの
+ * 返答が保存されるが、**保存されるのは打ち切られた側のリクエストの中**なので、割り込んだ
+ * リクエストが先に発言を保存すると、遮られた返答の方が後ろの時刻で入る。一覧は
+ * `createdAt` 順に並べるため、再読み込みしたときに秘書の返答が自分の次の発言より下へ回る。
+ *
+ * 同じスレッドの生成が畳まれるまで、次のリクエストをここで待たせて順序を保つ。
+ * プロセス内のMapで足りるのは、PM2で1プロセスしか動かさないため（`deploy/ecosystem.config.js`）。
+ * 前提が変わって複数プロセスになっても、順序が保証されなくなるだけで壊れはしない。
+ */
+const pendingGenerations = new Map<string, Promise<void>>();
+
+/** 待つ上限。生成側が畳み損ねても、次の発言をここで止め続けない。 */
+const PENDING_WAIT_MS = 5000;
+
+async function waitForPendingGeneration(conversationId: string): Promise<void> {
+  const pending = pendingGenerations.get(conversationId);
+  if (!pending) return;
+
+  await Promise.race([
+    pending,
+    new Promise<void>((resolve) => setTimeout(resolve, PENDING_WAIT_MS)),
+  ]);
+}
+
+/**
+ * プロンプトキャッシュのブレークポイントを何個置くか（#56）。
+ *
+ * 1つは**今回書き込む位置**、もう1つは**前回書き込んだ位置**に置く。前者だけだと、書いた
+ * キャッシュを次の往復が読む前に、その往復がさらに先の位置へ書き直すことになり、読み出しは
+ * 常に1往復ぶん手前で止まる。2つ置くと、前回ぶんを読みながら今回ぶんを書ける。
+ *
+ * APIが受け付けるのは1リクエストにつき4つまで。
+ */
+const CACHE_BREAKPOINTS = 2;
+
+/** キャッシュの保持時間は既定（5分）のまま。相談の往復はそれより短い間隔で続く。 */
+const CACHE_CONTROL = { type: "ephemeral" } as const;
+
+/**
  * 保存してある発言を、Messages APIへ渡せる形に均す。
  *
  * 保存された並びは、そのままでは2つの理由でAPIの前提を外れる。
@@ -43,27 +99,73 @@ function fail(message: string, status: number) {
  * - 返答の生成に失敗した往復では返答が保存されないため、userの発言が2つ続くことがある
  *
  * どちらもリクエスト全体が400で弾かれる。ここで先頭を落とし、続いた同じ役割はまとめる。
+ *
+ * あわせて、割り込まれた返答には注記を添える（#48）。DBの本文はそのまま画面へ出すため
+ * 汚さず、モデルへ渡すときにだけ「ここで遮られた」と分かる形にする。
+ *
+ * **本文は常に `[{ type: "text" }]` の配列で渡す**（#56）。キャッシュのブレークポイントは
+ * 内容ブロックにしか置けず、文字列とブロック配列を往復ごとに使い分けると、同じ発言なのに
+ * 送っている形だけが変わる。前方一致が崩れる余地を残さないよう、印の有無によらず形を揃える。
  */
 function toPromptMessages(
-  entries: { role: "USER" | "ASSISTANT"; content: string }[],
+  entries: { role: "USER" | "ASSISTANT"; content: string; interrupted: boolean }[],
 ): Anthropic.MessageParam[] {
-  const result: { role: "user" | "assistant"; content: string }[] = [];
+  const merged: { role: "user" | "assistant"; content: string }[] = [];
 
   for (const entry of entries) {
     const role = entry.role === "USER" ? ("user" as const) : ("assistant" as const);
 
-    if (result.length === 0 && role !== "user") continue;
+    if (merged.length === 0 && role !== "user") continue;
 
-    const last = result[result.length - 1];
+    const content =
+      role === "assistant" && entry.interrupted
+        ? `${entry.content}\n\n${INTERRUPTED_NOTE}`
+        : entry.content;
+
+    const last = merged[merged.length - 1];
     if (last && last.role === role) {
-      last.content = `${last.content}\n\n${entry.content}`;
+      last.content = `${last.content}\n\n${content}`;
       continue;
     }
 
-    result.push({ role, content: entry.content });
+    merged.push({ role, content });
   }
 
-  return result;
+  const breakpoints = cacheBreakpointIndexes(merged);
+
+  return merged.map((message, index) => ({
+    role: message.role,
+    content: [
+      {
+        type: "text" as const,
+        text: message.content,
+        ...(breakpoints.has(index) ? { cache_control: CACHE_CONTROL } : {}),
+      },
+    ],
+  }));
+}
+
+/**
+ * キャッシュのブレークポイントを置く位置を決める（#56）。
+ *
+ * **今回の発言を除いた、新しい方から `CACHE_BREAKPOINTS` 個のassistantの返答**に置く。
+ * 秘書の返答は往復の区切りなので、次の往復でも同じ返答が同じ位置に現れる——つまり
+ * 「今回ここへ書いたキャッシュ」を「次回はここから読む」形になり、往復のたびに読み位置が
+ * 1つずつ後ろへ進む。
+ *
+ * 今回の発言（末尾）には置かない。毎回変わるため、書いても二度と読まれない。
+ */
+function cacheBreakpointIndexes(messages: { role: "user" | "assistant" }[]): Set<number> {
+  const indexes = new Set<number>();
+
+  for (let index = messages.length - 2; index >= 0; index -= 1) {
+    if (messages[index].role !== "assistant") continue;
+
+    indexes.add(index);
+    if (indexes.size >= CACHE_BREAKPOINTS) break;
+  }
+
+  return indexes;
 }
 
 /**
@@ -92,6 +194,12 @@ export async function POST(request: Request) {
     return fail(`一度に送れるのは${MAX_MESSAGE_LENGTH.toLocaleString()}文字までです。`, 400);
   }
 
+  // 割り込みで打ち切られた生成が、そこまでの返答を保存し終えるのを待つ（#48）。
+  // 待たずに進めると、遮られた返答が今回の発言より後ろの時刻で入り、並びが入れ替わる。
+  if (body.conversationId) {
+    await waitForPendingGeneration(body.conversationId);
+  }
+
   // 他人のスレッドへ書き込めないよう、必ずuserIdとの組で引く。
   const conversation = body.conversationId
     ? await db.conversation.findFirst({
@@ -118,14 +226,20 @@ export async function POST(request: Request) {
     }),
   ]);
 
+  // 窓の先頭は `HISTORY_WINDOW_STEP` の刻みでしか動かさない（#56）。1発言ずつ滑らせると
+  // 往復のたびにプレフィックスの先頭が変わり、プロンプトキャッシュが一度も効かなくなる。
+  const messageCount = await db.message.count({ where: { conversationId: conversation.id } });
+
   const history = await db.message.findMany({
     where: { conversationId: conversation.id },
-    orderBy: { createdAt: "desc" },
-    take: HISTORY_LIMIT,
-    select: { role: true, content: true },
+    // 並びが揺れればプレフィックスも揺れる。`createdAt` が同じ発言があっても毎回同じ順で
+    // 並ぶよう、第2のキーにidを置く。
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    skip: historyWindowSkip(messageCount),
+    select: { role: true, content: true, interrupted: true },
   });
 
-  const promptMessages = toPromptMessages(history.reverse());
+  const promptMessages = toPromptMessages(history);
 
   // 音声で聞くかどうかはこの1往復ぶんの都合なので、スレッドには持たせず毎回受け取る。
   // 同じスレッドを「話す」と「書く」で行き来しても、履歴はそのまま繋がる。
@@ -140,64 +254,144 @@ export async function POST(request: Request) {
     return fail("返答の生成に必要な設定がサーバー側にありません。管理者に連絡してください。", 503);
   }
 
+  // 次に割り込んでくるリクエストへ「この生成の後片付けが終わった」と伝えるための錠（#48）。
+  // ストリームの外で作るのは、`start` が動くより先にMapへ載せておく必要があるため。
+  let releasePending = () => {};
+  const pending = new Promise<void>((resolve) => {
+    releasePending = resolve;
+  });
+  pendingGenerations.set(conversation.id, pending);
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      // 新規スレッドのIDは、これを受け取るまでクライアント側が知らない。最初に流す。
-      controller.enqueue(sse("meta", { conversationId: conversation.id, title: conversation.title }));
-
-      let answer = "";
-      let errorMessage: string | null = null;
-
       try {
-        const messageStream = client.messages.stream(
-          {
-            model: CHAT_MODEL,
-            max_tokens: maxOutputTokens(style),
-            system: secretarySystemPrompt(style),
-            messages: promptMessages,
-          },
-          { signal: request.signal },
-        );
+        // 新規スレッドのIDは、これを受け取るまでクライアント側が知らない。最初に流す。
+        controller.enqueue(sse("meta", { conversationId: conversation.id, title: conversation.title }));
 
-        for await (const event of messageStream) {
-          if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-            answer += event.delta.text;
-            controller.enqueue(sse("delta", { text: event.delta.text }));
+        let answer = "";
+        let errorMessage: string | null = null;
+        // 利用者に遮られたか。割り込んだ側の発言に答えられるよう、保存時に印を付ける（#48）。
+        let interrupted = false;
+        // このリクエストで使ったトークン数（#51）。
+        let usage: GenerationUsage | null = null;
+
+        try {
+          const messageStream = client.messages.stream(
+            {
+              model: CHAT_MODEL,
+              max_tokens: maxOutputTokens(style),
+              // システムプロンプトにはブレークポイントを置かない（#56）。単体では
+              // キャッシュできる最小の長さに届かず、置いても黙って無視されるだけ。履歴側の
+              // ブレークポイントがここを含む前半まとめてをキャッシュするので、往復が続けば
+              // システムプロンプトも一緒に乗る。
+              system: secretarySystemPrompt(style),
+              messages: promptMessages,
+            },
+            { signal: request.signal },
+          );
+
+          for await (const event of messageStream) {
+            if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+              answer += event.delta.text;
+              controller.enqueue(sse("delta", { text: event.delta.text }));
+              continue;
+            }
+
+            // トークン数は最初と最後のイベントに乗ってくる（#51）。
+            // `message_start` は入力ぶんが確定した時点、`message_delta` はそこまでの累計で、
+            // 生成が終わるまで何度か届く。後から来た値で上書きする。
+            if (event.type === "message_start") {
+              usage = {
+                model: event.message.model,
+                inputTokens: event.message.usage.input_tokens,
+                outputTokens: event.message.usage.output_tokens,
+                cacheWriteTokens: event.message.usage.cache_creation_input_tokens ?? 0,
+                cacheReadTokens: event.message.usage.cache_read_input_tokens ?? 0,
+              };
+              continue;
+            }
+
+            if (event.type === "message_delta" && usage) {
+              usage = {
+                model: usage.model,
+                inputTokens: event.usage.input_tokens ?? usage.inputTokens,
+                outputTokens: event.usage.output_tokens,
+                cacheWriteTokens: event.usage.cache_creation_input_tokens ?? usage.cacheWriteTokens,
+                cacheReadTokens: event.usage.cache_read_input_tokens ?? usage.cacheReadTokens,
+              };
+            }
+          }
+        } catch (error) {
+          // 割り込まれた場合・「止める」を押された場合・タブを閉じられた場合はここに来る。
+          // 異常ではないので、そこまでの返答を保存して静かに終える。
+          if (error instanceof APIUserAbortError || request.signal.aborted) {
+            interrupted = true;
+          } else {
+            console.error("[aide-bot] 返答の生成に失敗した", error);
+            errorMessage = "返答の生成に失敗しました。少し待ってからもう一度お試しください。";
           }
         }
-      } catch (error) {
-        // 「止める」を押された場合とタブを閉じられた場合はここに来る。異常ではないので、
-        // そこまでの返答を保存して静かに終える。
-        if (!(error instanceof APIUserAbortError) && !request.signal.aborted) {
-          console.error("[aide-bot] 返答の生成に失敗した", error);
-          errorMessage = "返答の生成に失敗しました。少し待ってからもう一度お試しください。";
-        }
-      }
 
-      // 途中で切れていても、そこまでの返答は残す。消えると何を聞いたかだけが残る。
-      if (answer.trim() !== "") {
+        // 途中で切れていても、そこまでの返答は残す。消えると何を聞いたかだけが残る。
+        if (answer.trim() !== "") {
+          try {
+            await db.$transaction([
+              db.message.create({
+                data: {
+                  conversationId: conversation.id,
+                  role: "ASSISTANT",
+                  content: answer,
+                  interrupted,
+                },
+              }),
+              db.conversation.update({
+                where: { id: conversation.id },
+                data: { updatedAt: new Date() },
+              }),
+            ]);
+          } catch (error) {
+            console.error("[aide-bot] 返答の保存に失敗した", error);
+            errorMessage ??= "返答を保存できませんでした。この内容は再読み込みで消えます。";
+          }
+        }
+
+        // 使ったぶんは、返答が残ったかどうかによらず記録する（#51）。
+        // 遮られて1文字も出なかった往復でも、入力ぶんはもう使い終わっている。
+        // 途中で遮られると `message_delta` が届かず、出力ぶんは `message_start` 時点の値
+        // （数トークン）のまま残る。埋め合わせの推定はせず、少なめの実測値をそのまま入れる。
+        if (usage) {
+          try {
+            await db.apiUsage.create({
+              data: {
+                userId: user.id,
+                conversationId: conversation.id,
+                model: usage.model,
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                cacheWriteTokens: usage.cacheWriteTokens,
+                cacheReadTokens: usage.cacheReadTokens,
+              },
+            });
+          } catch (error) {
+            // 記録できなくても相談は続けられる。画面へは出さず、ログにだけ残す。
+            console.error("[aide-bot] 使用量の記録に失敗した", error);
+          }
+        }
+
+        // 相手が既にいない場合、enqueue/closeは例外になる。伝える相手がいないだけなので黙って畳む。
         try {
-          await db.$transaction([
-            db.message.create({
-              data: { conversationId: conversation.id, role: "ASSISTANT", content: answer },
-            }),
-            db.conversation.update({
-              where: { id: conversation.id },
-              data: { updatedAt: new Date() },
-            }),
-          ]);
-        } catch (error) {
-          console.error("[aide-bot] 返答の保存に失敗した", error);
-          errorMessage ??= "返答を保存できませんでした。この内容は再読み込みで消えます。";
+          controller.enqueue(errorMessage ? sse("error", { message: errorMessage }) : sse("done", {}));
+          controller.close();
+        } catch {
+          // 何もしない
         }
-      }
-
-      // 相手が既にいない場合、enqueue/closeは例外になる。伝える相手がいないだけなので黙って畳む。
-      try {
-        controller.enqueue(errorMessage ? sse("error", { message: errorMessage }) : sse("done", {}));
-        controller.close();
-      } catch {
-        // 何もしない
+      } finally {
+        // 待たせている割り込みを通す。返答の保存が済んだこの時点で外すこと（#48）。
+        // 途中で投げても必ず外れるよう、finallyから呼ぶ。
+        if (pendingGenerations.get(conversation.id) === pending) {
+          pendingGenerations.delete(conversation.id);
+        }
+        releasePending();
       }
     },
   });

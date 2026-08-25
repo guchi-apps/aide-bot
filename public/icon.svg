@@ -1,35 +1,89 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="秘書アプリ">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3ddbc6"/>
-      <stop offset="1" stop-color="#0d9488"/>
+      <stop offset="0" stop-color="#f4816f"/>
+      <stop offset="1" stop-color="#cf4a3c"/>
     </linearGradient>
+    <radialGradient id="body" cx="36%" cy="26%" r="82%">
+      <stop offset="0" stop-color="#f8e0be"/>
+      <stop offset="0.52" stop-color="#e6bd90"/>
+      <stop offset="1" stop-color="#c1925f"/>
+    </radialGradient>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3e2f26"/>
+      <stop offset="1" stop-color="#211812"/>
+    </linearGradient>
+    <linearGradient id="shell" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7c5540"/>
+      <stop offset="1" stop-color="#4f3226"/>
+    </linearGradient>
+    <linearGradient id="eye" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8fdcff"/>
+      <stop offset="1" stop-color="#2b8ff5"/>
+    </linearGradient>
+    <radialGradient id="lamp" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.45" stop-color="#9fe2ff"/>
+      <stop offset="1" stop-color="#2b8ff5"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#7fd0ff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#7fd0ff" stop-opacity="0"/>
+    </radialGradient>
+    <!-- ニットの編み目。192px以上でだけ見える程度の濃さにしてある。 -->
+    <pattern id="knit" width="20" height="16" patternUnits="userSpaceOnUse">
+      <path d="M0 13 L5 3 L10 13 M10 13 L15 3 L20 13" fill="none" stroke="#8d5f36" stroke-opacity="0.22" stroke-width="2" stroke-linecap="round"/>
+    </pattern>
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
   <!--
     絵の本体は maskable（Androidのアダプティブアイコン）の安全領域に収める。
-    中心から半径204.8pxの円の外は切り落とされうるため、0.85倍して20px上へ寄せてある。
+    中心から半径204.8pxの円の外は切り落とされうるため、0.85倍して24px下へ寄せてある。
     座標を直接いじらず、この1つのtransformで寄せているので、絵を描き直すときは
     512x512の素の座標で描いてからここへ入れ直せばよい。
   -->
-  <g transform="translate(38.4 18.4) scale(0.85)">
+  <g transform="translate(38.4 24) scale(0.85)">
+    <!-- 影 -->
+    <ellipse cx="256" cy="452" rx="118" ry="15" fill="#000000" opacity="0.16"/>
+    <!-- 足（体の後ろ側） -->
+    <ellipse cx="148" cy="410" rx="30" ry="24" fill="url(#shell)"/>
+    <ellipse cx="364" cy="410" rx="30" ry="24" fill="url(#shell)"/>
     <!-- 耳 -->
-    <path d="M152 222 L167 104 L253 175 Z" fill="#fff6ea"/>
-    <path d="M360 222 L345 104 L259 175 Z" fill="#fff6ea"/>
-    <path d="M180 197 L188 143 L227 180 Z" fill="#f6a09a"/>
-    <path d="M332 197 L324 143 L285 180 Z" fill="#f6a09a"/>
-    <!-- 顔 -->
-    <circle cx="256" cy="284" r="132" fill="#fff6ea"/>
-    <circle cx="163" cy="322" r="21" fill="#f6a09a"/>
-    <circle cx="349" cy="322" r="21" fill="#f6a09a"/>
-    <ellipse cx="205" cy="272" rx="16" ry="20" fill="#12403c"/>
-    <ellipse cx="307" cy="272" rx="16" ry="20" fill="#12403c"/>
-    <circle cx="211" cy="265" r="5" fill="#fff6ea"/>
-    <circle cx="313" cy="265" r="5" fill="#fff6ea"/>
-    <path d="M232 320 q12 19 24 0 q12 19 24 0" fill="none" stroke="#12403c" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
-    <!-- リボンタイ -->
-    <path d="M196 410 L247 444 L196 478 Z" fill="#e8695c"/>
-    <path d="M316 410 L265 444 L316 478 Z" fill="#e8695c"/>
-    <circle cx="256" cy="444" r="18" fill="#cf5346"/>
+    <ellipse cx="110" cy="296" rx="25" ry="39" fill="url(#shell)"/>
+    <ellipse cx="402" cy="296" rx="25" ry="39" fill="url(#shell)"/>
+    <!-- アンテナ -->
+    <circle cx="256" cy="130" r="30" fill="url(#glow)"/>
+    <circle cx="256" cy="130" r="11" fill="url(#lamp)"/>
+    <rect x="252" y="132" width="8" height="42" rx="4" fill="#3a291f"/>
+    <ellipse cx="256" cy="176" rx="47" ry="13" fill="url(#shell)"/>
+    <!-- 体 -->
+    <ellipse cx="256" cy="300" rx="152" ry="143" fill="url(#body)"/>
+    <ellipse cx="256" cy="300" rx="152" ry="143" fill="url(#knit)"/>
+    <path d="M132 258 Q256 208 380 258" fill="none" stroke="#ffffff" stroke-opacity="0.3" stroke-width="4" stroke-linecap="round"/>
+    <ellipse cx="256" cy="300" rx="152" ry="143" fill="none" stroke="#a97c4d" stroke-opacity="0.35" stroke-width="3"/>
+    <!-- 前の足 -->
+    <ellipse cx="206" cy="432" rx="31" ry="22" fill="url(#shell)"/>
+    <ellipse cx="306" cy="432" rx="31" ry="22" fill="url(#shell)"/>
+    <!-- 顔のパネル -->
+    <rect x="148" y="230" width="216" height="152" rx="72" fill="url(#face)"/>
+    <rect x="158" y="240" width="196" height="60" rx="30" fill="#ffffff" opacity="0.05"/>
+    <!-- 目 -->
+    <circle cx="206" cy="302" r="31" fill="none" stroke="#7fd0ff" stroke-opacity="0.35" stroke-width="3"/>
+    <circle cx="206" cy="302" r="22" fill="none" stroke="url(#eye)" stroke-width="9"/>
+    <circle cx="206" cy="302" r="14" fill="#101d29"/>
+    <circle cx="198" cy="293" r="5.5" fill="#eaf7ff"/>
+    <circle cx="306" cy="302" r="31" fill="none" stroke="#7fd0ff" stroke-opacity="0.35" stroke-width="3"/>
+    <circle cx="306" cy="302" r="22" fill="none" stroke="url(#eye)" stroke-width="9"/>
+    <circle cx="306" cy="302" r="14" fill="#101d29"/>
+    <circle cx="298" cy="293" r="5.5" fill="#eaf7ff"/>
+    <!-- 口 -->
+    <ellipse cx="256" cy="354" rx="14" ry="10" fill="#140e0a"/>
+    <!-- アンテナから広がる波 -->
+    <g fill="none" stroke="#5cc0ff" stroke-linecap="round">
+      <path d="M224.1 141.6 A 34 34 0 0 1 244.4 98.1" stroke-width="6"/>
+      <path d="M287.9 141.6 A 34 34 0 0 0 267.6 98.1" stroke-width="6"/>
+      <path d="M207.1 147.8 A 52 52 0 0 1 238.2 81.1" stroke-width="5" stroke-opacity="0.65"/>
+      <path d="M304.9 147.8 A 52 52 0 0 0 273.8 81.1" stroke-width="5" stroke-opacity="0.65"/>
+    </g>
   </g>
 </svg>

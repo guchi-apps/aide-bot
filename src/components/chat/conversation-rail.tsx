@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus } from "lucide-react";
+import { BarChart3, Plus } from "lucide-react";
 import Link from "next/link";
 
 import { AppIcon } from "@/components/brand/app-icon";
@@ -11,8 +11,13 @@ import type { ConversationSummary } from "./types";
 type Props = {
   conversations: ConversationSummary[];
   activeId: string | null;
+  /** 使用量の画面を開いているか。相談は選ばれていない状態になる。 */
+  isUsageActive: boolean;
+  /** 今月の概算費用（`$1.23` の形）。集計はサーバー側で済ませて文字列で受け取る。 */
+  monthlyCostLabel: string;
   userLabel: string;
   userEmail: string | null;
+  appVersion: string;
   onNavigate?: () => void;
 };
 
@@ -22,8 +27,11 @@ type Props = {
 export function ConversationRail({
   conversations,
   activeId,
+  isUsageActive,
+  monthlyCostLabel,
   userLabel,
   userEmail,
+  appVersion,
   onNavigate,
 }: Props) {
   let lastGroup: string | null = null;
@@ -82,20 +90,42 @@ export function ConversationRail({
         )}
       </nav>
 
-      <div className="flex items-center justify-between gap-2.5 border-t border-border px-4 py-3">
-        <div className="min-w-0">
-          <b className="block text-[0.8125rem] font-medium">{userLabel}</b>
-          {userEmail && <span className="block truncate text-[0.6875rem] text-muted">{userEmail}</span>}
+      <div className="border-t border-border">
+        {/* APIの消費量（#51）。金額だけを一覧に出し、内訳は専用の画面で見る。 */}
+        <Link
+          href="/usage"
+          onClick={onNavigate}
+          aria-current={isUsageActive ? "page" : undefined}
+          className={cn(
+            "mx-2.5 mt-2 flex items-center justify-between gap-2 rounded-[9px] px-2.5 py-2 text-[0.8125rem] transition-colors hover:bg-rail-active focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            isUsageActive && "bg-rail-active shadow-[inset_2px_0_0_var(--accent)]",
+          )}
+        >
+          <span className="flex items-center gap-1.5">
+            <BarChart3 className="size-3.5 text-muted" aria-hidden="true" />
+            使用量
+          </span>
+          <span className="tabular-nums font-bold text-accent">今月 {monthlyCostLabel}</span>
+        </Link>
+
+        <div className="flex items-center justify-between gap-2.5 px-4 pb-2 pt-3">
+          <div className="min-w-0">
+            <b className="block text-[0.8125rem] font-medium">{userLabel}</b>
+            {userEmail && <span className="block truncate text-[0.6875rem] text-muted">{userEmail}</span>}
+          </div>
+
+          <form action="/auth/signout" method="post">
+            <button
+              type="submit"
+              className="whitespace-nowrap rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-rail-active"
+            >
+              ログアウト
+            </button>
+          </form>
         </div>
 
-        <form action="/auth/signout" method="post">
-          <button
-            type="submit"
-            className="whitespace-nowrap rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-rail-active"
-          >
-            ログアウト
-          </button>
-        </form>
+        {/* どの版を見ているかが画面だけで分かるようにする。値は package.json の version。 */}
+        <p className="px-4 pb-3 text-[0.6875rem] text-muted">v{appVersion}</p>
       </div>
     </div>
   );

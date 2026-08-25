@@ -83,11 +83,95 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   （CIもActions上のビルドも持たない）、importの時点で投げると `next build` が落ちる。
   `getAnthropicClient()` の中で見る
 - 履歴は毎回まるごと送り直すため、`HISTORY_LIMIT`（直近30発言）で頭を切る。上限を外すと
-  長いスレッドほど1往復の入力トークンが際限なく伸びる
+  長いスレッドほど1往復の入力トークンが際限なく伸びる。**ちょうど30発言で切るわけではない**
+  （#56。理由は「プロンプトキャッシュ」を参照）
 - **`Conversation.updatedAt` は発言を足しても動かない。** 一覧の並び順はこの列だけを見ている
   ので、発言を保存するときは同じトランザクションで `conversation.update` も呼ぶ
 - 入力欄のEnter送信は `event.nativeEvent.isComposing` で必ず弾く。日本語入力の変換確定の
   Enterがそのまま送信になる
+
+### 返答への割り込み（#48）
+
+**返答の途中でも次の発言を送れる。** 「書く」は入力欄からの送信、「話す」はマイクを押した時点で、
+走っている生成を打ち切ってそのまま次の往復へ入る。
+
+- **打ち切られた返答を保存するのは、打ち切られた側のリクエスト**（`request.signal` が落ちて
+  ストリームのループを抜けた後）。割り込んだリクエストが先に発言を保存すると、遮られた返答の方が
+  後ろの `createdAt` で入り、**再読み込みしたときだけ秘書の返答が自分の次の発言より下へ回る。**
+  `src/app/api/chat/route.ts` の `pendingGenerations`（プロセス内のMap）で、同じスレッドの生成が
+  畳まれるまで次のリクエストを待たせている。PM2で1プロセスしか動かさないことが前提
+- **画面側も同じ順序を守る。** 打ち切られた往復が「そこまでの返答」を並べ終えるのを待ってから
+  次の発言を足す（`ChatPanel` の `turnRef` / `VoicePanel` の `turnRef`）。待たずに足すと、
+  DBの並びは正しいのに画面上だけ順序が入れ替わる
+- **途中で切れた返答は `Message.interrupted` で区別する。** 本文へ注記を混ぜず、モデルへ渡す
+  ときだけ `INTERRUPTED_NOTE`（`src/lib/anthropic.ts`）を添える。印が無いと、モデルからは
+  「短く言い切った返答」と見分けが付かず、続きを最初から言い直す
+- **新しい相談の1通目を割り込むと、`router.replace()` が効く前に2通目が飛ぶ。**
+  propsの `conversationId` はまだ `null` なので、そのまま送るとスレッドがもう1本作られる。
+  `useChatStream` が `meta` で受け取ったIDを覚えて使う
+- **「話す」では読み上げ中にマイクを開かない方針を変えていない。** 割り込みは「押した瞬間に
+  黙ってから聞き取りを開く」形で、読み上げ中もマイクを開きっぱなしにする常時バージインは
+  採っていない（自分の声を拾って往復が止まらなくなるため）
+
+### プロンプトキャッシュ（#56）
+
+履歴を毎回まるごと送り直す設計のまま、その前半をキャッシュから読ませる。入力ぶんの単価が
+約1/10になり、最初の一言が出るまでの待ちも縮む。
+
+- **キャッシュは前方一致。プレフィックスが1バイトでも変われば以降が全部無効になる。**
+  したがって**履歴の窓を1発言ずつ滑らせてはいけない**。`HISTORY_LIMIT` を超えたスレッドで
+  窓を毎回1つずらすと、往復のたびに先頭の発言が変わり、**キャッシュが一度も効かない。**
+  窓の先頭は `HISTORY_WINDOW_STEP`（10発言）の刻みでしか動かさない（`historyWindowSkip()`）。
+  代わりに送る発言は最大39件まで伸びるが、伸びたぶんはキャッシュ読みで乗るので毎回
+  読み直させるより安い
+- **並び順を決定的にする。** `createdAt` だけで並べると同時刻の発言で順序が揺れ、そこから
+  後ろが丸ごとキャッシュミスになる。第2のキーに `id` を置く
+- **ブレークポイントは2つ置く**（`src/app/api/chat/route.ts` の `cacheBreakpointIndexes()`）。
+  今回の発言を除いた、新しい方から2つの**秘書の返答**に置く。1つは今回書き込む位置、もう1つは
+  前回書き込んだ位置。1つだけだと、書いたキャッシュを次の往復が読む前にさらに先へ書き直す
+  ことになり、読み出しが常に1往復ぶん手前で止まる。APIが受け付けるのは1リクエストにつき4つまで
+- **発言の本文は常に `[{ type: "text" }]` の配列で渡す。** 印を付ける発言だけブロック配列に
+  すると、同じ発言なのに往復ごとに送る形が変わる。前方一致が崩れる余地を残さない
+- **システムプロンプトにはブレークポイントを置いていない。** 単体ではキャッシュできる最小の
+  長さに届かず、置いても黙って無視される。履歴側のブレークポイントが前半まとめてを
+  キャッシュするので、往復が続けばシステムプロンプトも一緒に乗る
+- **キャッシュできる最小の長さはモデルごとに違い、世代順に単調ではない。** `claude-opus-5` は
+  512トークン（Opus 4.8とSonnet 5は1,024、Opus 4.6とHaiku 4.5は4,096）。モデルを変えるときは
+  この値も見る。下回るスレッド——始めたばかりの相談——では効かない
+- **「話す」と「書く」を行き来した往復ではキャッシュが切れる。** 体裁の指示がシステムプロンプトに
+  入っており、モードが変わるとプレフィックスの先頭から変わるため。切り替えは頻繁ではないので
+  そのまま受け入れている
+- **効いたかどうかは `usage.cache_read_input_tokens` でしか分からない。** 何度呼んでも0のままなら
+  前半に毎回変わる値が混じっている。**手元にAPIキーが無い環境では確かめられない**ので、
+  スタブ（`ANTHROPIC_BASE_URL`）で確かめられるのは「送っているリクエストの形」までと割り切る
+
+## APIの消費量（#51）
+
+Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として残し、`/usage` の画面で
+日・月・累計に足し上げて出す。左メニューの下部に今月の概算費用も出る。
+
+- **数える単位は「API呼び出し1回」で、秘書の返答（`Message`）には持たせない。** 返答は
+  `answer.trim() !== ""` のときしか保存されず、1文字も出ないうちに割り込まれた往復・生成に
+  失敗した往復では行そのものが作られない。履歴を毎回まるごと送り直す設計上、**入力ぶんは
+  その時点で使い終わっている**ので、返答の行に相乗りさせるとそこが丸ごと落ちる（#51の計画レビュー）。
+  1発言に対してAPIを複数回叩く形になっても、この単位なら数え方が変わらない
+- **トークン数は `message_start` と `message_delta` の両方から拾う。** 入力ぶんは `message_start`、
+  出力ぶんは `message_delta`（累計値。生成中に何度か届く）に乗る。`content_block_delta` しか
+  見ていないと1つも取れない
+- **途中で遮られた往復（#48）では `message_delta` が届かず、出力ぶんが実際より少なく残る。**
+  `message_start` 時点の値（数トークン）のままになる。埋め合わせの推定はせず、画面の注記で断っている
+- **使用量の記録に失敗しても相談は止めない。** `ApiUsage` の書き込みは独立したtry/catchに置き、
+  失敗はログにだけ残す（記録できないことより、返答が返らないことの方が重い）
+- **単価表は `src/lib/usage.ts` の `MODEL_PRICING`。** Anthropicが単価を変えたらここを直す。
+  呼び出した時点のモデル名で引き直すため、使うのをやめたモデルの行も消さない。画面に出るのは
+  概算で、実際の請求額ではない（円は `USD_JPY_RATE` の固定レートでの参考値）
+- **`inputTokens` はキャッシュに載らなかった残りだけを指す**（#56）。入力ぶんの合計は
+  `inputTokens + cacheReadTokens + cacheWriteTokens`。この列だけを「入力」として画面に出すと、
+  同じだけ送っているのに使用量が激減したように見える。画面へ出すときは `promptTokens()`
+  （`src/lib/usage.ts`）で合計を作り、うちキャッシュから読んだぶんを内訳として添える
+- **`src/lib/usage.ts` はサーバー専用。** Prismaと（`@/lib/anthropic` 経由で）Anthropic SDKを
+  引き込むため、クライアントコンポーネントからimportしない。`/usage` の画面
+  （`src/components/chat/usage-view.tsx`）は数字を見るだけなのでサーバーコンポーネントのまま置いている
 
 ## 音声対話（話す / 書く）
 
@@ -99,9 +183,10 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   音声を外部へ送らないので追加のAPIキーも実費も無い。対応はChrome / Edge / Safariに限られ、
   **Firefoxは聞き取りに非対応**。使えない端末には案内を出して「書く」へ寄せる。
   外部STTへ寄せる判断をするときは、依存とキーと実費が増えることをIssueで先に確認する
-- **読み上げだけは外へ出る経路がある。** 声にVOICEVOXの話者（ずんだもん等）を選んだときに限り、
-  返答の文面がWEB版VOICEVOX API（`api.tts.quest`。VOICEVOX公式ではない第三者のサービス）へ
-  送られる（#41、`src/lib/speech/voicevox.ts`）。**既定は端末内蔵の声のまま**にしてあり、
+- **読み上げだけは外へ出る経路がある。** 声にVOICEVOXの話者（ずんだもん等）を選び、かつ
+  **自前のVOICEVOX ENGINEが設定されていない（または届かない）ときに限り**、返答の文面が
+  WEB版VOICEVOX API（`api.tts.quest`。VOICEVOX公式ではない第三者のサービス）へ
+  送られる（#41・#57、`src/lib/speech/voicevox.ts`）。**既定は端末内蔵の声のまま**にしてあり、
   APIキー・依存パッケージ・サーバー側のルートはいずれも増やしていない（CORSが開いているので
   ブラウザから直接呼ぶ）。話者を増減させるときは `VOICEVOX_SPEAKERS` を直す。
   一覧を返すエンドポイントは公開されていないため、IDと名前は合成の応答（`speakerName`）で確かめる
@@ -110,12 +195,41 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   公表されていない。**列挙はできない（存在しないハッシュは404）が、文面を知っていれば誰でも
   取得できる**ので、公開範囲を絞ったアプリで使う前提を変えるときはこの性質から見直す（#41）
 - **VOICEVOXはキー無しだと5秒に1リクエスト。** 超えると `retryAfter` 付きで断られるため、
-  内蔵の声のように文ごとへ刻めない。返答が出そろってから1回だけ合成へ出し、
-  合成しながら流れてくる `mp3StreamingUrl` を `<audio>` で鳴らす。
+  内蔵の声のように文ごとへ刻めない。合成しながら流れてくる `mp3StreamingUrl` を `<audio>` で鳴らす。
   **断られたことは HTTP 429 で返るが、待つ秒数は本文にしか入っていない。**
-  ステータスだけで例外にすると、待てば通る場合まで失敗になる
+  ステータスだけで例外にすると、待てば通る場合まで失敗になる。
+  **`retryAfter` は通常5秒前後だが、短い間隔で何度も投げた後は61秒が返る**（#52で実測）。
+  待てる上限（`MAX_RETRY_WAIT_MS`）は前者を拾い後者を落とせる値にする
+- **キー無しの合成は、依頼から最初の音まで6〜8秒かかる**（#52で実測。文の長さではほとんど
+  変わらない——合成しながら流すため）。**返答が出そろってから1回だけ出すと、字幕が出た後に
+  7秒以上の無音ができ、「ずんだもんだと音が聞こえない」に見える。** そこで `VoicevoxReader` は
+  **最大2回に分ける**——1文目が揃った時点で1回目を依頼して返答の生成中に合成を進め、残りは
+  1回目が鳴り始めてから依頼する（そこまでで7秒前後経つので5秒の制限に触れない）。
+  実測で「返答が出てから声が始まるまで」が約7秒→約0.5秒になった
+- **合成の宛先は2つある**（#57、`resolveVoicevoxSource()`）。自前のVOICEVOX ENGINEのURLが
+  設定されていて `GET /version` が届けばそちら、駄目ならWEB版API。**判定は端末ごと・
+  一定時間だけキャッシュ**する（tailnet内のsubpcで動かす想定で、tailnet外の端末からは届かない）。
+  届かない端末では調べる時間ぶん最初のひと声が遅れるので、マイクを押した時点で
+  `warmVoicevoxSource()` を呼んで先に済ませておく
+- **ENGINEのURLは環境変数で配らない。端末ごとの設定（localStorage）に持つ**（#57）。
+  tailnetのホスト名であり、**このリポジトリも本番サイトも公開されている**ため、
+  `NEXT_PUBLIC_*` に置くとJSバンドル越しに誰でも読める（ログイン前のページでも配信される）。
+  `PORT` のような「設定値だから平文でよい」とは別の判断になる
+- **ENGINEはWEB版とAPIの形が違う。** `POST /audio_query?text=&speaker=`（本文なし）でJSONを
+  受け取り、それをそのまま `POST /synthesis?speaker=` の本文へ渡すとWAVが返る。
+  **`mp3StreamingUrl` のような「合成しながら流す」仕組みは無く、合成し終えてから返る**ので、
+  まとめて投げると長い返答ほど鳴り始めが遅くなる。そこで**ENGINEのときだけ文の切れ目で刻む**
+  （レート制限が無いので刻める）。次のぶんの合成が前のぶんの再生に隠れる。
+  ブラウザから直接叩くため、ENGINE側でCORSを開ける必要がある（`--cors_policy_mode all`）。
+  返ってくるのはBlobなので、鳴らし終えたら `URL.revokeObjectURL()` で手放す
+- **待っていることを必ず画面へ出す**（`onPreparing` → `RobotState` の `preparing`）。
+  「考えています」のままにすると返事が来ていないように見え、利用者がマイクを押して
+  割り込む——割り込みは読み上げを取り消すので、**一度も鳴らないまま終わる**
 - **合成や再生に失敗したら端末内蔵の声へ落とす**（`VoicevoxReader`）。外部サービスが混んでいる
-  だけで秘書が黙り込むのを防ぐため。鳴り始めた後で切れたぶんは読み直さない
+  だけで秘書が黙り込むのを防ぐため。鳴り始めた後で切れたぶんは読み直さない。
+  **ただし `speechSynthesis` があることと鳴らせる声があることは別。** 声が0件の端末
+  （speech-dispatcherの無いLinuxのChromeなど）では落とした先でも無音のまま `onend` だけが
+  返るので、`getVoices().length` を見て、その場合は案内を出す
 - **`<audio>` は1つを使い回す。** iOSは「画面を触った流れ」で一度 `play()` を通した要素しか
   後から鳴らせない。マイクを押した時点で `primeVoicevoxAudio()` を呼び、その要素の `src` を
   差し替えて使う（内蔵の声の `primeSpeechSynthesis()` と同じ考え方）
@@ -124,10 +238,15 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 - **iOSは「画面を触った流れ」で一度 `speak()` を通さないと、以降の読み上げが無音になる。**
   マイクを押した時点で `primeSpeechSynthesis()` を呼び、その操作を許可として使っている
 - **読み上げ中にマイクを開かない。** 自分の声を聞き返して往復が止まらなくなる。
-  ひと往復は idle → listening → thinking → speaking → idle で、次の状態を決めるのは
-  読み上げの完了（`SpeechReader` の `onDrain`）
+  ひと往復は idle → listening → thinking →（VOICEVOXなら preparing →）speaking → idle で、
+  次の状態を決めるのは読み上げの完了（`SpeechReader` の `onDrain`）
 - **返答は届いた端から文の切れ目で読み上げる。** 全部揃うまで待つと、字幕は出ているのに
   声が始まらない時間ができる。1回の `speak()` を長くしすぎない（Chromeが途中で打ち切る）
+- **画面の中央にいるロボットは `src/components/voice/robot.tsx`、動きは `globals.css` の `.bot` 系**
+  （#49）。待つ・聞く・考える・話すの4状態を1つの値から出し分ける。**部品を動かすときは
+  `transform-box: view-box` を付けてから `transform-origin` をviewBoxの座標で書く。**
+  既定（`fill-box`）だと基準が部品ごとの外接矩形になり、目や口が自分の中心ではないところを
+  軸に動く（`librsvg` はこの指定を解釈しないので、見た目の確認はブラウザで行う）
 - 音声モードは `mode: "voice"` を送り、`VOICE_STYLE_INSTRUCTION` と `VOICE_MAX_OUTPUT_TOKENS`
   （1200）が効く。**聞くだけの返答は戻って読み直せない**ため、文字のときと同じ上限にしない
 - **localStorageの値をuseStateの初期値やuseEffectで入れない。** ESLintの
@@ -138,8 +257,10 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   マイクが起動しない（`scripts/dev.sh` は `next dev` を素で起動しTLSを張らない）。
   実機で音声を確かめるときは `tailscale serve --bg --https=443 <ポート>` でHTTPSを付け、
   `https://subpc.<tailnet>.ts.net/` を開く。`allowedDevOrigins` には `**.ts.net` が入っている。
-  **サブPCのTailnetはHTTPS証明書が未有効**（`tailscale status --json` の `CertDomains` が
-  `null`）なので、初回は管理画面での有効化が要る（#32）
+  **サブPCのTailnet HTTPS証明書は有効済み**（#32で管理画面から有効化した。`tailscale status --json`
+  の `CertDomains` に `subpc.<tailnet>.ts.net` が入っている）。以前ここには「未有効」と書いてあり、
+  #57 で実際に確かめて訂正した。**判断の前に `tailscale status --json | jq .CertDomains` を見ること**
+  （`null` なら未有効で、管理画面での有効化が要る）
 
 ## アイコン
 
@@ -147,14 +268,27 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   `public/apple-icon.png`・`src/app/favicon.ico` はすべてそこからの書き出し物で、
   `scripts/build-icons.sh`（`rsvg-convert` と ImageMagick を使う）で作り直す。
   PNGを直接編集しても、次にスクリプトを流した時点で戻る
-- **`public/icon.svg` の絵は `<g transform="translate(38.4 18.4) scale(0.85)">` の中に置く。**
+- **`public/icon.svg` の絵は `<g transform="translate(38.4 24) scale(0.85)">` の中に置く。**
   `manifest.ts` は512pxを `purpose: "maskable"` としても宣言しており、Androidのアダプティブ
-  アイコンは中心から半径204.8pxの円の外を切り落とす。素の512px座標のままだと、下端の
-  リボンタイが欠ける
+  アイコンは中心から半径204.8pxの円の外を切り落とす。素の512px座標のままだと、頭の
+  アンテナと下端の足が欠ける
 - 画面の中で使うアイコンは `src/components/brand/app-icon.tsx`（インラインSVG）。26px前後で置く
   場所が多いため、ファイルを `<img>` で読ませない。**絵を変えるときはSVGファイルと
-  このコンポーネントの両方を揃えて直す**（グラデーションとmaskableの余白は、この大きさでは
-  効かないのでコンポーネント側には持たせていない）
+  このコンポーネントの両方を揃えて直す**（グラデーション・編み目の模様・maskableの余白は、
+  この大きさでは効かないのでコンポーネント側には持たせていない）
+- **`app-icon.tsx` では `id` を使わない**（#49）。「書く」画面は返答1件ごとにこのアイコンを
+  描くため、グラデーションを `url(#…)` で参照する書き方にすると、同じidが1ページに何個も出る。
+  ベタ塗りで足りる大きさなので、グラデーションはSVGファイル側にだけ持たせている
+
+## バージョン表示
+
+- **画面に出るバージョンの正は `package.json` の `version`。** 左メニュー（`ConversationRail`）の
+  最下部に `v0.3.0` の形で出る。リリース時のbumpを忘れると、本番の画面に古い版が出続ける
+- **`src/lib/app-version.ts` はサーバーコンポーネント専用。クライアントコンポーネントから
+  importしないこと。** JSONのimportはプロパティ単位では削られず、`package.json` が丸ごと
+  クライアントバンドルへ入る（実際に依存パッケージ名と `packageManager` のハッシュが
+  `.next/static/chunks` に出た）。値は `src/app/(chat)/layout.tsx` で読み、
+  `ChatShell` → `ConversationRail` へpropsで渡している
 
 ## 検証コマンド
 
@@ -166,6 +300,31 @@ pnpm build:ci    # prisma generate && next build
 
 CI（`.github/workflows/ci.yml`）はこの3つを実行する。ビルドは外部サービスへ接続しないため、
 `DATABASE_URL` と `NEXT_PUBLIC_SUPABASE_*` はCI専用のプレースホルダーでよい。
+
+### 返答の生成をキー無しで確かめる
+
+`ANTHROPIC_API_KEY` が手元に無くても、**`ANTHROPIC_BASE_URL` をローカルのスタブへ向ければ
+`/api/chat` を丸ごと動かせる。** SDKは `${ANTHROPIC_BASE_URL}/v1/messages` を叩くだけなので、
+Messages APIのSSE（`message_start` → `content_block_delta`×n → `message_stop`）を1秒あたり数個の
+ペースで返すHTTPサーバーを立てれば、ストリーミング・中断・保存・履歴の組み立てまで実キーも
+実費もなしに確かめられる。受け取った `messages` をファイルへ書き出しておくと、モデルへ実際に
+渡している履歴（割り込みの注記など）もそのまま読める。
+
+`curl -sN` を `timeout` で切れば「利用者が途中で止めた」経路をそのまま再現できる。
+
+**画面の動き（CSSアニメーション）を確かめるときは、`rsvg-convert` の書き出しを根拠にしない**（#49）。
+librsvgは `transform-box` を解釈しないため、ブラウザでは正しい位置で動く部品が、書き出したPNGでは
+まったく別の場所へ飛ぶ。ヘッドレスChromeは `~/.cache/ms-playwright/chromium_headless_shell-*/` に
+入っており、Playwrightを使わなくても1枚だけなら撮れる。
+
+```bash
+chrome-headless-shell --headless --disable-gpu --no-sandbox --window-size=1060,300 \
+  --screenshot=out.png "file:///<確認用のHTML>"
+```
+
+**撮った瞬間はアニメーションの0秒地点なので、途中の姿は写らない。** `--virtual-time-budget` を
+足してもCSSアニメーションは進まない。見たい時点があるなら、確認用のHTML側で
+`animation-delay: -0.5s` のように負の値を当てて、その姿で止めてから撮る。
 
 **検証用に一時的なページを足して消したら、`rm -rf .next` してから型チェックする。**
 `next dev` が生成する `.next/dev/types/validator.ts` は消したルートを参照したまま残り、

@@ -15,6 +15,27 @@ import { PrismaClient } from "@prisma/client";
 
 const CI_BYPASS_SUPABASE_USER_ID = "ci-screenshot-bot";
 
+// 使用量の画面（#51）で使うモデル名。単価表（src/lib/usage.ts）にある値にしておかないと、
+// 画面の概算費用が「表に無いモデル」の扱いになる。
+const USAGE_MODEL = "claude-opus-5";
+
+/**
+ * API呼び出し1回ぶんのダミーのトークン数（`ApiUsage` の1行）。
+ *
+ * 履歴は毎回まるごと送り直すため、同じスレッドでは往復を重ねるほど入力ぶんが増える。
+ * 画面で内訳を見たときに不自然にならないよう、その形に寄せてある。
+ */
+const dummyUsage = (turnIndex, createdAt, userId) => ({
+  // Conversation配下のネストで作るためconversationIdは省けるが、userIdは自分で繋ぐ必要がある。
+  user: { connect: { id: userId } },
+  model: USAGE_MODEL,
+  inputTokens: 3200 + turnIndex * 2600,
+  outputTokens: 540 + turnIndex * 160,
+  cacheWriteTokens: 0,
+  cacheReadTokens: 0,
+  createdAt,
+});
+
 const db = new PrismaClient();
 
 // ダミーの相談。一覧の見出し（今日 / 今週 / それ以前）が分かれて見えるよう、
@@ -54,6 +75,18 @@ const CONVERSATION_SEEDS = [
     messages: [
       "今月の食費が予算より1万円ほど多い。どこを見ればいい？",
       "内訳を「外食」「中食（惣菜・弁当）」「自炊の材料費」の3つに割ってみてください。どれが伸びたかで打ち手が変わります。まとめて減らそうとすると続きません。",
+    ],
+  },
+  {
+    // 割り込み（#48）が画面でどう見えるかを確かめるための1本。文字列の代わりに
+    // オブジェクトを渡した発言は、途中で遮られた返答として投入する。
+    title: "週末の予定を詰める",
+    startedAt: daysAgo(1),
+    messages: [
+      "土曜の午前が空いてる。歯医者の予約を入れたいんだけど、他に何かあったっけ。",
+      { content: "土曜の午前でしたら、先に押さえておきたいのは", interrupted: true },
+      "ごめん、日曜の話だった。日曜の午前で。",
+      "日曜の午前は何も入っていません。歯医者は前日までの予約が要るところが多いので、今日中に電話しておくと確実です。",
     ],
   },
   {
@@ -106,9 +139,75 @@ async function main() {
             role: index % 2 === 0 ? "USER" : "ASSISTANT",
             // createdAtが同一だと並び順が不定になるため、1分ずつずらす。
             createdAt: new Date(seed.startedAt.getTime() + index * 60_000),
-            content: message,
+            content: typeof message === "string" ? message : message.content,
+            interrupted: typeof message === "string" ? false : message.interrupted === true,
           })),
         },
+        // 消費量は返答とは別の行に持つ（#51）。返答1件につきAPIを1回呼んだ形にする。
+        apiUsages: {
+          create: seed.messages
+            .map((message, index) => ({ message, index }))
+            .filter(({ index }) => index % 2 === 1)
+            .map(({ index }) =>
+              dummyUsage(
+                (index - 1) / 2,
+                new Date(seed.startedAt.getTime() + index * 60_000),
+                user.id,
+              ),
+            ),
+        },
+      },
+    });
+  }
+
+  // 使用量の画面（#51）は日別のグラフを持つ。相談が数日ぶんしか無いとグラフがほぼ空になり、
+  // 「日ごとに並んで見えるか」を確かめられないため、直近14日ぶんの往復を1本のスレッドへ入れる。
+  const USAGE_HISTORY_TITLE = "毎日のこまごました相談";
+  // 日ごとの往復数（古い日→今日）。棒の高さが散るように、あえて凸凹させてある。
+  const USAGE_DAILY_TURNS = [1, 2, 3, 1, 4, 1, 2, 3, 1, 5, 1, 3, 2, 2];
+
+  const usageHistoryExists = await db.conversation.findFirst({
+    where: { userId: user.id, title: USAGE_HISTORY_TITLE },
+    select: { id: true },
+  });
+
+  if (!usageHistoryExists) {
+    const messages = [];
+    const usages = [];
+
+    USAGE_DAILY_TURNS.forEach((turns, dayIndex) => {
+      // 配列の先頭がいちばん古い日。最後の要素が今日。
+      const daysBefore = USAGE_DAILY_TURNS.length - 1 - dayIndex;
+
+      for (let turn = 0; turn < turns; turn += 1) {
+        // 同じ日の中でも時刻をずらす。9時台から1往復ごとに1時間ずつ後ろへ。
+        const askedAt = new Date(daysAgo(daysBefore).getTime());
+        askedAt.setHours(9 + turn, 0, 0, 0);
+
+        messages.push({
+          role: "USER",
+          createdAt: askedAt,
+          content: `${daysBefore}日前の${turn + 1}件目の相談です。`,
+          interrupted: false,
+        });
+        messages.push({
+          role: "ASSISTANT",
+          createdAt: new Date(askedAt.getTime() + 60_000),
+          content: "承知しました。要点だけお伝えします。",
+          interrupted: false,
+        });
+        usages.push(dummyUsage(turn, new Date(askedAt.getTime() + 60_000), user.id));
+      }
+    });
+
+    await db.conversation.create({
+      data: {
+        userId: user.id,
+        title: USAGE_HISTORY_TITLE,
+        createdAt: messages[0].createdAt,
+        updatedAt: messages[messages.length - 1].createdAt,
+        messages: { create: messages },
+        apiUsages: { create: usages },
       },
     });
   }

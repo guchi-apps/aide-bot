@@ -24,13 +24,17 @@ import {
 } from "@/lib/speech/voice-settings";
 import {
   VOICEVOX_SPEAKERS,
+  type EngineCheck,
+  checkVoicevoxEngine,
+  normalizeEngineUrl,
   parseVoicevoxSpeaker,
   primeVoicevoxAudio,
   voicevoxVoiceURI,
+  warmVoicevoxSource,
 } from "@/lib/speech/voicevox";
 import { cn } from "@/lib/utils";
 
-import { Orb, type OrbState } from "./orb";
+import { Robot, type RobotState } from "./robot";
 
 type Props = {
   /** 既存スレッドならそのID。新しい相談ならnull。 */
@@ -38,10 +42,11 @@ type Props = {
   initialMessages: ChatMessage[];
 };
 
-const STATUS_LABEL: Record<OrbState, string> = {
+const STATUS_LABEL: Record<RobotState, string> = {
   idle: "待っています",
   listening: "聞いています",
   thinking: "考えています",
+  preparing: "声を用意しています",
   speaking: "話しています",
 };
 
@@ -52,16 +57,20 @@ const STATUS_LABEL: Record<OrbState, string> = {
  * `POST /api/chat` を使う。声で話した内容も同じ相談スレッドへ残るため、「書く」に
  * 切り替えれば文字で読み返せる。
  *
- * ひと往復は idle → listening → thinking → speaking → idle と進む。「続けて話す」が入なら
- * 最後の idle を挟まずに listening へ戻る。読み上げ中にマイクを開かないのは、自分の声を
- * 聞き返して延々と往復し続けるのを防ぐため。
+ * ひと往復は idle → listening → thinking →（VOICEVOXの声なら preparing →）speaking → idle と
+ * 進む。「続けて話す」が入なら最後の idle を挟まずに listening へ戻る。読み上げ中に
+ * マイクを開かないのは、自分の声を聞き返して延々と往復し続けるのを防ぐため。
+ *
+ * 考えている・話している最中でも、マイクを押せばその場で割り込める（#48）。押した時点で
+ * 読み上げを止めて生成を打ち切り、thinking / speaking → listening へ飛ぶ。マイクを開くのは
+ * 黙らせた後なので、自分の声を拾わないという前提はそのまま保たれる。
  */
 export function VoicePanel({ conversationId, initialMessages }: Props) {
   const { setMode } = useTalkMode();
   const { send: sendMessage, abort } = useChatStream(conversationId);
 
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
-  const [status, setStatus] = useState<OrbState>("idle");
+  const [status, setStatus] = useState<RobotState>("idle");
   const [heard, setHeard] = useState("");
   const [lastUser, setLastUser] = useState<string | null>(null);
   const [reply, setReply] = useState("");
@@ -74,11 +83,18 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
   const supported = useRecognitionSupported();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  // 試し聞きの合成待ち。VOICEVOXは数秒かかるので、押しても無反応に見えないようにする（#52）。
+  const [samplePreparing, setSamplePreparing] = useState(false);
+  // 自前のVOICEVOX ENGINEへの疎通確認（#57）。
+  const [engineCheck, setEngineCheck] = useState<EngineCheck | null>(null);
+  const [engineChecking, setEngineChecking] = useState(false);
 
   const recognitionRef = useRef<RecognitionHandle | null>(null);
   const readerRef = useRef<Reader | null>(null);
   const sampleRef = useRef<Reader | null>(null);
   const finalRef = useRef("");
+  // 走っている往復。割り込むときに、そこまでの返答が記録へ並び終えるのを待つ（#48）。
+  const turnRef = useRef<Promise<void> | null>(null);
   const primedRef = useRef(false);
   const reactTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -112,6 +128,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
     readerRef.current = null;
     sampleRef.current?.cancel();
     sampleRef.current = null;
+    setSamplePreparing(false);
     abort();
   }, [abort]);
 
@@ -141,6 +158,11 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
           ? createReader({
               voiceURI: settingsRef.current.voiceURI,
               rate: settingsRef.current.rate,
+              engineUrl: settingsRef.current.engineUrl,
+              // VOICEVOXは合成に数秒かかる。「考えています」のままだと返事が来ていないように
+              // 見え、マイクを押して割り込まれてしまう（#52）。
+              onPreparing: () =>
+                setStatus((current) => (current === "speaking" ? current : "preparing")),
               onStart: () => setStatus("speaking"),
               onDrain: () => {
                 readerRef.current = null;
@@ -167,7 +189,12 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
       if (result.answer.trim() !== "") {
         setMessages((previous) => [
           ...previous,
-          { id: `local-assistant-${previous.length}`, role: "ASSISTANT", content: result.answer },
+          {
+            id: `local-assistant-${previous.length}`,
+            role: "ASSISTANT",
+            content: result.answer,
+            interrupted: result.aborted,
+          },
         ]);
       }
 
@@ -195,7 +222,13 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
   );
 
   useEffect(() => {
-    sendRef.current = (text: string) => void send(text);
+    sendRef.current = (text: string) => {
+      const turn = send(text);
+      turnRef.current = turn;
+      void turn.finally(() => {
+        if (turnRef.current === turn) turnRef.current = null;
+      });
+    };
   }, [send]);
 
   const beginListening = useCallback(() => {
@@ -248,6 +281,10 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
 
   /** iOSは「画面を触った流れ」で一度鳴らしておかないと、以降が無音になる。 */
   function prime() {
+    // ENGINEが届くかは先に調べておく。返答が届いてから調べると、届かない端末では
+    // 最初のひと声がそのぶん遅れる（#57）。
+    warmVoicevoxSource(settingsRef.current.engineUrl);
+
     if (primedRef.current) return;
     primeSpeechSynthesis();
     primeVoicevoxAudio();
@@ -259,32 +296,78 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
     prime();
     setNotice(null);
     sampleRef.current?.cancel();
-    sampleRef.current = speakSample(settings.voiceURI, settings.rate, setNotice);
+    setSamplePreparing(false);
+    sampleRef.current = speakSample(settings.voiceURI, settings.rate, {
+      engineUrl: settings.engineUrl,
+      onPreparing: () => setSamplePreparing(true),
+      onDone: () => setSamplePreparing(false),
+      onNotice: setNotice,
+    });
   }
 
-  /** 中央の大きなボタン。いまの状態によって「始める」と「止める」が入れ替わる。 */
+  /** 入力したENGINEのURLへ実際に届くかを確かめる。 */
+  async function onCheckEngine() {
+    setEngineChecking(true);
+    setEngineCheck(await checkVoicevoxEngine(settings.engineUrl));
+    setEngineChecking(false);
+  }
+
+  /** 返答も読み上げも畳んで待機へ戻す。もう聞かなくてよくなったとき。 */
+  function stopNow() {
+    stopEverything();
+    setStatus("idle");
+  }
+
+  /**
+   * 返答の途中で割り込んでそのまま話し始める（#48）。
+   *
+   * 読み上げを止めて生成を打ち切り、そこまでの返答が記録へ並ぶのを待ってから聞き取りへ入る。
+   * 待たずに開くと、打ち切られた往復の後片付けが `idle` を書き込み、開いたばかりの
+   * 「聞いています」を上書きしてしまう。
+   *
+   * 読み上げ中もマイクを開きっぱなしにする常時バージインは採らない。自分の声を聞き返して
+   * 往復が止まらなくなるため、割り込みは「押した瞬間に黙る」形にしている。
+   */
+  function interruptAndListen() {
+    const previousTurn = turnRef.current;
+
+    readerRef.current?.cancel();
+    readerRef.current = null;
+    abort();
+
+    void (async () => {
+      if (previousTurn) await previousTurn;
+      beginListening();
+    })();
+  }
+
+  /** 中央の大きなボタン。いまの状態によって役割が入れ替わる。 */
   function onPrimaryButton() {
     prime();
     sampleRef.current?.cancel();
     sampleRef.current = null;
+    setSamplePreparing(false);
 
     if (status === "listening") {
+      // 聞き取り中は「話し終わった」の合図。確定して送信へ進む。
       recognitionRef.current?.stop();
       return;
     }
 
-    if (status === "thinking" || status === "speaking") {
-      stopEverything();
-      setStatus("idle");
+    if (status === "thinking" || status === "preparing" || status === "speaking") {
+      interruptAndListen();
       return;
     }
 
     beginListening();
   }
 
-  const busy = status !== "idle";
+  const answering = status === "thinking" || status === "preparing" || status === "speaking";
+  const primaryLabel =
+    status === "listening" ? "話し終わった" : answering ? "割り込んで話す" : "話しかける";
   const speakable = canSpeakWith(settings.voiceURI);
   const voicevoxSpeaker = parseVoicevoxSpeaker(settings.voiceURI);
+  const engineConfigured = normalizeEngineUrl(settings.engineUrl) !== null;
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -340,6 +423,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
                 onChange={(event) => {
                   sampleRef.current?.cancel();
                   sampleRef.current = null;
+                  setSamplePreparing(false);
                   setNotice(null);
                   updateVoiceSettings({ voiceURI: event.target.value || null });
                 }}
@@ -368,20 +452,60 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
             <button
               type="button"
               onClick={onSample}
-              disabled={!speakable}
+              disabled={!speakable || samplePreparing}
               className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-2 text-sm transition-colors hover:bg-rail-active disabled:opacity-40"
             >
               <Play className="size-3.5" aria-hidden="true" />
-              試し聞き
+              {samplePreparing ? "声を用意しています…" : "試し聞き"}
             </button>
 
             {voicevoxSpeaker && (
-              <p className="mt-2 text-xs leading-relaxed text-muted">
-                {voicevoxSpeaker.credit}
-                <br />
-                返事の文面は、音声にするためVOICEVOXのWEB版API（api.tts.quest）へ送られます。
-                混み合っているときや通信できないときは、この端末の声で読み上げます。
-              </p>
+              <>
+                <p className="mt-2 text-xs leading-relaxed text-muted">
+                  {voicevoxSpeaker.credit}
+                  <br />
+                  {engineConfigured
+                    ? "下のVOICEVOX ENGINEで合成します。届かないときだけ、返事の文面がWEB版API（api.tts.quest）へ送られ、それも駄目ならこの端末の声で読み上げます。"
+                    : "返事の文面は、音声にするためVOICEVOXのWEB版API（api.tts.quest）へ送られます。合成に数秒かかるため、返事が出てから声が始まるまで少し間があきます。混み合っているときや通信できないときは、この端末の声で読み上げます。"}
+                </p>
+
+                <label className="flex flex-col gap-1.5 py-2 text-sm">
+                  VOICEVOX ENGINE のURL
+                  <input
+                    type="url"
+                    inputMode="url"
+                    autoComplete="off"
+                    placeholder="https://<ホスト名>:50021"
+                    value={settings.engineUrl}
+                    onChange={(event) => {
+                      setEngineCheck(null);
+                      updateVoiceSettings({ engineUrl: event.target.value });
+                    }}
+                    className="rounded-lg border border-border bg-background px-2.5 py-2 text-sm outline-none focus:border-accent"
+                  />
+                  <span className="text-xs leading-relaxed text-muted">
+                    自分で動かしているENGINEがあれば入れてください。合成が速くなり、返事の文面が
+                    外へ出なくなります。この端末にだけ保存されます。
+                  </span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => void onCheckEngine()}
+                  disabled={!engineConfigured || engineChecking}
+                  className="w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm transition-colors hover:bg-rail-active disabled:opacity-40"
+                >
+                  {engineChecking ? "確かめています…" : "接続を確かめる"}
+                </button>
+
+                {engineCheck && (
+                  <p className="mt-2 text-xs leading-relaxed text-muted">
+                    {engineCheck.ok
+                      ? `つながりました（ENGINE ${engineCheck.version}）。`
+                      : engineCheck.message}
+                  </p>
+                )}
+              </>
             )}
 
             <label className="flex flex-col gap-1.5 py-2 text-sm">
@@ -409,7 +533,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
         )}
 
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 px-6 py-6 text-center">
-          <Orb
+          <Robot
             state={status}
             reacting={reacting}
             className="size-[168px] md:size-[184px] lg:size-[200px]"
@@ -450,6 +574,22 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
                   )}
                 </p>
               </>
+            )}
+
+            {answering && (
+              <div className="flex flex-col items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={stopNow}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted transition-colors hover:bg-rail-active"
+                >
+                  <Square className="size-2.5 fill-current" aria-hidden="true" />
+                  {status === "thinking" ? "生成を止める" : "読み上げを止める"}
+                </button>
+                <p className="text-[0.6875rem] text-muted">
+                  下のマイクを押すと、途中で割り込んで話しかけられます。
+                </p>
+              </div>
             )}
 
             {!supported && (
@@ -506,25 +646,27 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
             続けて話す
           </button>
 
+          {/*
+            応答中もマイクのまま出す（#48）。押すと読み上げを止めて、そのまま聞き取りへ入る。
+            四角に変えるのは聞き取り中だけ——そこでの役割は「話し終わった」の合図のため。
+          */}
           <button
             type="button"
             onClick={onPrimaryButton}
-            disabled={!supported && !busy}
+            disabled={!supported && status !== "listening"}
             className={cn(
               "grid size-[76px] place-items-center rounded-full transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40",
-              busy
+              status === "listening"
                 ? "border border-border bg-surface text-foreground"
                 : "bg-accent text-accent-foreground shadow-[0_0_0_8px_color-mix(in_oklab,var(--accent)_16%,transparent)]",
             )}
           >
-            {busy ? (
+            {status === "listening" ? (
               <Square className="size-6 fill-current" aria-hidden="true" />
             ) : (
               <Mic className="size-7" aria-hidden="true" />
             )}
-            <span className="sr-only">
-              {busy ? "止める" : "話しかける"}
-            </span>
+            <span className="sr-only">{primaryLabel}</span>
           </button>
 
           <button
@@ -568,6 +710,9 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
                 >
                   {message.content}
                 </p>
+                {message.interrupted && (
+                  <p className="text-[0.625rem] text-muted">— ここで割り込みました</p>
+                )}
               </div>
             ))
           )}

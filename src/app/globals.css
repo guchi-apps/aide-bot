@@ -6,14 +6,16 @@
   --foreground: #0f172a;
   --muted: #64748b;
   --border: #e2e8f0;
-  --accent: #0f766e;
-  /* アクセントとは別系統の「うまくいかなかった」ことを示す色。 */
+  /* アイコンの地と同じ珊瑚色（#49）。白抜きの文字が読める明るさまで落としてある。 */
+  --accent: #c8503c;
+  /* アクセントとは別系統の「うまくいかなかった」ことを示す色。
+     差し色が赤系になったぶん、こちらはより暗い赤のままにして、枠付きの帯としてだけ出す。 */
   --danger: #b91c1c;
   --danger-surface: #fef2f2;
   /* 会話の一覧を置く帯。背景よりわずかに沈ませて、本文と地を分ける。 */
-  --rail: #eef1f6;
-  --rail-active: #e0e7ef;
-  --accent-surface: #dff0ed;
+  --rail: #f2f1f2;
+  --rail-active: #e7e2e1;
+  --accent-surface: #fbe7e2;
   --accent-foreground: #ffffff;
 }
 
@@ -24,13 +26,13 @@
     --foreground: #e2e8f0;
     --muted: #94a3b8;
     --border: #1e293b;
-    --accent: #2dd4bf;
+    --accent: #ff8262;
     --danger: #fca5a5;
     --danger-surface: #2a1416;
     --rail: #0d1424;
     --rail-active: #172136;
-    --accent-surface: #14403c;
-    --accent-foreground: #04211f;
+    --accent-surface: #3d1f18;
+    --accent-foreground: #3a120a;
   }
 }
 
@@ -194,189 +196,265 @@ body {
 }
 
 /*
- * 画面中央の「秘書」。状態ごとのキーフレームはTailwindのユーティリティでは書けないため、
- * .chat-md と同じくここへまとめて置く。大きさは呼ぶ側がwidth/heightで決め、中身は
- * すべて割合で追従させる（スマホでは大きく、PCではやや小さく置くため）。
+ * 画面中央の「秘書」のロボット（#49）。絵は `src/components/voice/robot.tsx` にあり、
+ * 状態ごとの動きだけをここに置く——キーフレームをTailwindのユーティリティでは書けないため。
+ * 大きさは呼ぶ側がwidth/heightで決める（スマホでは大きく、PCではやや小さく置くため）。
  */
-.orb {
-  position: relative;
-  display: grid;
-  place-items: center;
+.bot {
+  display: block;
   flex: none;
 }
 
-.orb-core {
-  position: relative;
-  z-index: 2;
-  width: 62%;
-  height: 62%;
-  border-radius: 50%;
-  background: radial-gradient(
-    circle at 32% 28%,
-    color-mix(in oklab, var(--accent) 35%, white) 0%,
-    var(--accent) 52%,
-    color-mix(in oklab, var(--accent) 72%, black) 100%
-  );
-  box-shadow: 0 0 26px -2px color-mix(in oklab, var(--accent) 55%, transparent);
-}
-
-.orb-halo {
-  position: absolute;
-  inset: 12%;
-  border-radius: 50%;
-  background: radial-gradient(
-    circle,
-    color-mix(in oklab, var(--accent) 26%, transparent) 0%,
-    transparent 68%
-  );
-}
-
-/* 聞き取り中に外へ広がる輪。3つを時間差で出して、途切れずに広がって見せる。 */
-.orb-ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 1.5px solid color-mix(in oklab, var(--accent) 55%, transparent);
+/* アンテナの波と「考え中」の点は、その状態のときだけ出す。 */
+.bot-wave,
+.bot-think {
   opacity: 0;
-  animation: orb-ripple 2.1s ease-out infinite;
 }
 
-.orb-ring:nth-of-type(2) {
-  animation-delay: 0.7s;
+/*
+ * 変形の基準はviewBoxの座標で直に指定する。既定の fill-box だと部品ごとの外接矩形が
+ * 基準になるため、目や口が自分の中心ではないところを軸に動く。
+ */
+.bot-body,
+.bot-eye,
+.bot-mouth,
+.bot-lamp,
+.bot-wave {
+  transform-box: view-box;
 }
 
-.orb-ring:nth-of-type(3) {
-  animation-delay: 1.4s;
+/* 足元を軸にすると、体が伸び縮みしても地面から浮かない。 */
+.bot-body {
+  transform-origin: 256px 440px;
 }
 
-/* 考え中に球の周りだけを回す帯。中心をmaskで抜いて輪にする。 */
-.orb-sweep {
-  position: absolute;
-  inset: 16%;
-  border-radius: 50%;
-  background: conic-gradient(
-    from 0deg,
-    transparent 0deg,
-    color-mix(in oklab, var(--accent) 62%, transparent) 70deg,
-    transparent 150deg
-  );
-  -webkit-mask: radial-gradient(circle, transparent 58%, black 60%);
-  mask: radial-gradient(circle, transparent 58%, black 60%);
-  animation: orb-spin 1.5s linear infinite;
+.bot-eye-l {
+  transform-origin: 206px 302px;
 }
 
-.orb-idle .orb-core {
-  animation: orb-breathe 4.6s ease-in-out infinite;
+.bot-eye-r {
+  transform-origin: 306px 302px;
 }
 
-.orb-idle .orb-halo {
-  opacity: 0.55;
+.bot-mouth {
+  transform-origin: 256px 354px;
 }
 
-.orb-listening .orb-core {
-  animation: orb-listen 1.15s ease-in-out infinite;
+.bot-lamp,
+.bot-wave {
+  transform-origin: 256px 130px;
 }
 
-/* 声が届いた直後だけ、ひと回り大きくして反応を返す。 */
-.orb-listening.orb-reacting .orb-core {
-  animation-duration: 0.7s;
-  transform: scale(1.12);
+.bot-idle .bot-body {
+  animation: bot-breathe 5s ease-in-out infinite;
 }
 
-.orb-thinking .orb-core {
-  animation: orb-shrink 1.9s ease-in-out infinite;
+.bot-idle .bot-eye {
+  animation: bot-blink 6.2s ease-in-out infinite;
 }
 
-.orb-speaking .orb-core {
-  animation: orb-pulse 0.62s ease-in-out infinite;
+.bot-idle .bot-lamp {
+  animation: bot-dim 5s ease-in-out infinite;
 }
 
-.orb-speaking .orb-halo {
-  animation: orb-pulse-halo 0.62s ease-in-out infinite;
+.bot-listening .bot-body {
+  animation: bot-lean 1.6s ease-in-out infinite;
 }
 
-@keyframes orb-breathe {
+.bot-listening .bot-eye {
+  animation: bot-wide 1.6s ease-in-out infinite;
+}
+
+.bot-listening .bot-wave {
+  animation: bot-wave 1.8s ease-out infinite;
+}
+
+/* 声が届いた直後だけ、前のめりと波を速くして反応を返す。 */
+.bot-listening.bot-reacting .bot-body {
+  animation-duration: 0.8s;
+}
+
+.bot-listening.bot-reacting .bot-wave {
+  animation-duration: 1s;
+}
+
+/*
+ * 考え中と、VOICEVOXの声の用意待ち（#52）は同じ動きにする。返答はもう出ているが、まだ
+ * 鳴らない——「待てば来る」ことだけ伝われば足りるので、絵は分けずに文言だけを分ける。
+ */
+.bot-thinking .bot-body,
+.bot-preparing .bot-body {
+  animation: bot-tilt 3.4s ease-in-out infinite;
+}
+
+/* 目を細める。考えている間はまばたきさせない。 */
+.bot-thinking .bot-eye,
+.bot-preparing .bot-eye {
+  transform: scaleY(0.55);
+}
+
+.bot-thinking .bot-think,
+.bot-preparing .bot-think {
+  opacity: 1;
+}
+
+.bot-thinking .bot-dot,
+.bot-preparing .bot-dot {
+  animation: bot-hop 1.25s ease-in-out infinite;
+}
+
+.bot-speaking .bot-body {
+  animation: bot-nod 1.05s ease-in-out infinite;
+}
+
+.bot-speaking .bot-mouth {
+  animation: bot-talk 0.42s ease-in-out infinite;
+}
+
+.bot-speaking .bot-wave {
+  animation: bot-wave 1.5s ease-out infinite;
+}
+
+/* 波と点は時間差で出して、途切れずに広がって見せる。 */
+.bot-wave-2 {
+  animation-delay: 0.4s;
+}
+
+.bot-wave-3 {
+  animation-delay: 0.8s;
+}
+
+.bot-wave-4 {
+  animation-delay: 1.2s;
+}
+
+.bot-dot-2 {
+  animation-delay: 0.16s;
+}
+
+.bot-dot-3 {
+  animation-delay: 0.32s;
+}
+
+@keyframes bot-breathe {
   0%,
   100% {
     transform: scale(1);
   }
   50% {
-    transform: scale(1.07);
+    transform: scale(1.025);
   }
 }
 
-@keyframes orb-listen {
+@keyframes bot-blink {
   0%,
+  92%,
   100% {
-    transform: scale(1.04);
+    transform: scaleY(1);
   }
-  40% {
-    transform: scale(1.16);
-  }
-  70% {
-    transform: scale(1.09);
+  95% {
+    transform: scaleY(0.08);
   }
 }
 
-@keyframes orb-shrink {
+@keyframes bot-dim {
   0%,
   100% {
-    transform: scale(0.8);
+    opacity: 0.55;
   }
   50% {
-    transform: scale(0.72);
+    opacity: 1;
   }
 }
 
-@keyframes orb-pulse {
+@keyframes bot-lean {
   0%,
   100% {
-    transform: scale(1.02);
+    transform: translateY(0) scale(1);
   }
   50% {
-    transform: scale(1.13);
+    transform: translateY(-10px) scale(1.03);
   }
 }
 
-@keyframes orb-pulse-halo {
+@keyframes bot-wide {
   0%,
   100% {
-    opacity: 0.4;
+    transform: scale(1);
   }
   50% {
-    opacity: 0.85;
+    transform: scale(1.1);
   }
 }
 
-@keyframes orb-ripple {
+@keyframes bot-tilt {
+  0%,
+  100% {
+    transform: rotate(-3deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
+}
+
+@keyframes bot-nod {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes bot-talk {
+  0%,
+  100% {
+    transform: scaleY(0.45);
+  }
+  50% {
+    transform: scaleY(1.35);
+  }
+}
+
+@keyframes bot-hop {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  50% {
+    transform: translateY(-7px);
+    opacity: 1;
+  }
+}
+
+@keyframes bot-wave {
   0% {
-    transform: scale(0.62);
-    opacity: 0.85;
+    transform: scale(0.55);
+    opacity: 0;
+  }
+  25% {
+    opacity: 0.9;
   }
   100% {
-    transform: scale(1.15);
+    transform: scale(1.3);
     opacity: 0;
   }
 }
 
-@keyframes orb-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /*
- * 動きを減らす設定の端末では、球を止める。状態は文言（「聞いています」等）でも
- * 出しているため、止めても何が起きているかは分かる。
+ * 動きを減らす設定の端末では、ロボットを止める。状態は文言（「聞いています」等）でも
+ * 出しているため、止めても何が起きているかは分かる。ただし波は動きが消えると出ないまま
+ * になるので、静止したまま出しておく。
  */
 @media (prefers-reduced-motion: reduce) {
-  .orb *,
-  .orb-ring,
-  .orb-sweep {
+  .bot * {
     animation: none !important;
   }
 
-  .orb-ring {
-    opacity: 0.35;
+  .bot-listening .bot-wave,
+  .bot-speaking .bot-wave {
+    opacity: 0.5;
   }
 }

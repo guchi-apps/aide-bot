@@ -32,6 +32,12 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const firstScrollRef = useRef(true);
 
+  // 走っている往復。返答の途中で送られたときに、そこまでの返答を並べ終えるのを待つ（#48）。
+  // 待たずに次の発言を足すと、遮られた返答が自分の次の発言より下に出る。
+  const turnRef = useRef<Promise<void> | null>(null);
+  // 何回目の送信か。待っているあいだにさらに割り込まれたかを見るために持つ。
+  const turnSeqRef = useRef(0);
+
   // 生成中の返答をdeltaごとに描画すると、そのたびにMarkdownを組み直すことになり、
   // 長い返答の後半で目に見えて詰まる。溜めてから間引いて反映する。
   const answerBufferRef = useRef("");
@@ -74,12 +80,8 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
     element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
   }, [input]);
 
-  async function send() {
-    const text = input.trim();
-    if (text === "" || status !== "idle") return;
-
+  async function runTurn(text: string) {
     setError(null);
-    setInput("");
     setMessages((previous) => [
       ...previous,
       { id: `local-user-${previous.length}`, role: "USER", content: text },
@@ -103,13 +105,52 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
     if (result.answer.trim() !== "") {
       setMessages((previous) => [
         ...previous,
-        { id: `local-assistant-${previous.length}`, role: "ASSISTANT", content: result.answer },
+        {
+          id: `local-assistant-${previous.length}`,
+          role: "ASSISTANT",
+          content: result.answer,
+          interrupted: result.aborted,
+        },
       ]);
     }
 
     answerBufferRef.current = "";
     setAnswer("");
     setStatus("idle");
+  }
+
+  /**
+   * 送信。返答の途中でも送れる（#48）。
+   *
+   * 応答中に送られたら、それは割り込み。走っている生成を止め、そこまでの返答が並び終えるのを
+   * 待ってから次の往復を始める。待たずに始めると、遮られた返答が自分の次の発言より下に出る。
+   */
+  function send() {
+    const text = input.trim();
+    if (text === "" || text.length > MAX_MESSAGE_LENGTH) return;
+
+    setInput("");
+
+    const seq = turnSeqRef.current + 1;
+    turnSeqRef.current = seq;
+
+    const previousTurn = turnRef.current;
+    abort();
+
+    const turn = (async () => {
+      if (previousTurn) await previousTurn;
+
+      const running = runTurn(text);
+      // 順番待ちのあいだにさらに割り込まれていたら、この往復も始めた直後に打ち切る。
+      // 見ている人はもう次の発言を送っており、この返答を待っていない。
+      if (turnSeqRef.current !== seq) abort();
+      await running;
+    })();
+
+    turnRef.current = turn;
+    void turn.finally(() => {
+      if (turnRef.current === turn) turnRef.current = null;
+    });
   }
 
   const isEmpty = messages.length === 0 && status === "idle";
@@ -148,6 +189,7 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
                 <div className="min-w-0 flex-1">
                   <SecretaryLabel />
                   <Markdown>{message.content}</Markdown>
+                  {message.interrupted && <InterruptedNote />}
                 </div>
               </div>
             ),
@@ -196,7 +238,7 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
           className="mx-auto w-full max-w-3xl"
           onSubmit={(event) => {
             event.preventDefault();
-            void send();
+            send();
           }}
         >
           <div className="flex items-end gap-2.5 rounded-[18px] border border-border bg-surface py-2.5 pl-4 pr-2.5 focus-within:border-accent">
@@ -208,15 +250,20 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
                 // 日本語入力の変換確定のEnterで送信しないよう、変換中は素通しする。
                 if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
                 event.preventDefault();
-                void send();
+                send();
               }}
               rows={1}
-              placeholder="相談したいことを入力"
+              placeholder={busy ? "割り込んで話しかける" : "相談したいことを入力"}
               aria-label="相談したいこと"
               className="max-h-[200px] flex-1 resize-none bg-transparent py-1 text-sm outline-none placeholder:text-muted"
             />
 
-            {busy ? (
+            {/*
+              応答中でも、書きかけがあるなら送信ボタンのまま出す（#48）。押すと生成を止めて
+              そのまま送る。空のときだけ「止める」に入れ替える——書きかけを消してから止める、
+              という順序を踏ませないため。
+            */}
+            {busy && input.trim() === "" ? (
               <button
                 type="button"
                 onClick={abort}
@@ -232,7 +279,7 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
                 className="grid size-9 shrink-0 place-items-center rounded-full bg-accent text-accent-foreground transition-opacity hover:opacity-90 disabled:bg-border disabled:text-muted"
               >
                 <ArrowUp className="size-4" aria-hidden="true" />
-                <span className="sr-only">送信</span>
+                <span className="sr-only">{busy ? "割り込んで送信" : "送信"}</span>
               </button>
             )}
           </div>
@@ -245,7 +292,9 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
           >
             {overLimit
               ? `一度に送れるのは${MAX_MESSAGE_LENGTH.toLocaleString()}文字までです（現在 ${input.length.toLocaleString()}文字）`
-              : "Enter で送信 / Shift + Enter で改行"}
+              : busy
+                ? "返答の途中でも送れます。送ると生成を止めて続きの相談に移ります"
+                : "Enter で送信 / Shift + Enter で改行"}
           </p>
         </form>
       </div>
@@ -260,5 +309,19 @@ function SecretaryAvatar() {
 function SecretaryLabel() {
   return (
     <div className="mb-1 text-[0.6875rem] font-bold tracking-[0.08em] text-muted">秘書</div>
+  );
+}
+
+/**
+ * 割り込まれた返答であることの印（#48）。
+ *
+ * 途中で切れた文はそれだけ見ると尻切れの返答に見え、あとから読み返したときに秘書が
+ * 言い損ねたのか自分が遮ったのかが分からない。
+ */
+function InterruptedNote() {
+  return (
+    <p className="mt-1.5 text-[0.6875rem] text-muted">
+      — ここで割り込んだため、返答は途中で止まっています
+    </p>
   );
 }

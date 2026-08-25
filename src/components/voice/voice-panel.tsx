@@ -55,6 +55,10 @@ const STATUS_LABEL: Record<RobotState, string> = {
  * ひと往復は idle → listening → thinking → speaking → idle と進む。「続けて話す」が入なら
  * 最後の idle を挟まずに listening へ戻る。読み上げ中にマイクを開かないのは、自分の声を
  * 聞き返して延々と往復し続けるのを防ぐため。
+ *
+ * 考えている・話している最中でも、マイクを押せばその場で割り込める（#48）。押した時点で
+ * 読み上げを止めて生成を打ち切り、thinking / speaking → listening へ飛ぶ。マイクを開くのは
+ * 黙らせた後なので、自分の声を拾わないという前提はそのまま保たれる。
  */
 export function VoicePanel({ conversationId, initialMessages }: Props) {
   const { setMode } = useTalkMode();
@@ -79,6 +83,8 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
   const readerRef = useRef<Reader | null>(null);
   const sampleRef = useRef<Reader | null>(null);
   const finalRef = useRef("");
+  // 走っている往復。割り込むときに、そこまでの返答が記録へ並び終えるのを待つ（#48）。
+  const turnRef = useRef<Promise<void> | null>(null);
   const primedRef = useRef(false);
   const reactTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -167,7 +173,12 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
       if (result.answer.trim() !== "") {
         setMessages((previous) => [
           ...previous,
-          { id: `local-assistant-${previous.length}`, role: "ASSISTANT", content: result.answer },
+          {
+            id: `local-assistant-${previous.length}`,
+            role: "ASSISTANT",
+            content: result.answer,
+            interrupted: result.aborted,
+          },
         ]);
       }
 
@@ -195,7 +206,13 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
   );
 
   useEffect(() => {
-    sendRef.current = (text: string) => void send(text);
+    sendRef.current = (text: string) => {
+      const turn = send(text);
+      turnRef.current = turn;
+      void turn.finally(() => {
+        if (turnRef.current === turn) turnRef.current = null;
+      });
+    };
   }, [send]);
 
   const beginListening = useCallback(() => {
@@ -262,27 +279,58 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
     sampleRef.current = speakSample(settings.voiceURI, settings.rate, setNotice);
   }
 
-  /** 中央の大きなボタン。いまの状態によって「始める」と「止める」が入れ替わる。 */
+  /** 返答も読み上げも畳んで待機へ戻す。もう聞かなくてよくなったとき。 */
+  function stopNow() {
+    stopEverything();
+    setStatus("idle");
+  }
+
+  /**
+   * 返答の途中で割り込んでそのまま話し始める（#48）。
+   *
+   * 読み上げを止めて生成を打ち切り、そこまでの返答が記録へ並ぶのを待ってから聞き取りへ入る。
+   * 待たずに開くと、打ち切られた往復の後片付けが `idle` を書き込み、開いたばかりの
+   * 「聞いています」を上書きしてしまう。
+   *
+   * 読み上げ中もマイクを開きっぱなしにする常時バージインは採らない。自分の声を聞き返して
+   * 往復が止まらなくなるため、割り込みは「押した瞬間に黙る」形にしている。
+   */
+  function interruptAndListen() {
+    const previousTurn = turnRef.current;
+
+    readerRef.current?.cancel();
+    readerRef.current = null;
+    abort();
+
+    void (async () => {
+      if (previousTurn) await previousTurn;
+      beginListening();
+    })();
+  }
+
+  /** 中央の大きなボタン。いまの状態によって役割が入れ替わる。 */
   function onPrimaryButton() {
     prime();
     sampleRef.current?.cancel();
     sampleRef.current = null;
 
     if (status === "listening") {
+      // 聞き取り中は「話し終わった」の合図。確定して送信へ進む。
       recognitionRef.current?.stop();
       return;
     }
 
     if (status === "thinking" || status === "speaking") {
-      stopEverything();
-      setStatus("idle");
+      interruptAndListen();
       return;
     }
 
     beginListening();
   }
 
-  const busy = status !== "idle";
+  const answering = status === "thinking" || status === "speaking";
+  const primaryLabel =
+    status === "listening" ? "話し終わった" : answering ? "割り込んで話す" : "話しかける";
   const speakable = canSpeakWith(settings.voiceURI);
   const voicevoxSpeaker = parseVoicevoxSpeaker(settings.voiceURI);
 
@@ -452,6 +500,22 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
               </>
             )}
 
+            {answering && (
+              <div className="flex flex-col items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={stopNow}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted transition-colors hover:bg-rail-active"
+                >
+                  <Square className="size-2.5 fill-current" aria-hidden="true" />
+                  {status === "speaking" ? "読み上げを止める" : "生成を止める"}
+                </button>
+                <p className="text-[0.6875rem] text-muted">
+                  下のマイクを押すと、途中で割り込んで話しかけられます。
+                </p>
+              </div>
+            )}
+
             {!supported && (
               <p
                 role="alert"
@@ -506,25 +570,27 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
             続けて話す
           </button>
 
+          {/*
+            応答中もマイクのまま出す（#48）。押すと読み上げを止めて、そのまま聞き取りへ入る。
+            四角に変えるのは聞き取り中だけ——そこでの役割は「話し終わった」の合図のため。
+          */}
           <button
             type="button"
             onClick={onPrimaryButton}
-            disabled={!supported && !busy}
+            disabled={!supported && status !== "listening"}
             className={cn(
               "grid size-[76px] place-items-center rounded-full transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40",
-              busy
+              status === "listening"
                 ? "border border-border bg-surface text-foreground"
                 : "bg-accent text-accent-foreground shadow-[0_0_0_8px_color-mix(in_oklab,var(--accent)_16%,transparent)]",
             )}
           >
-            {busy ? (
+            {status === "listening" ? (
               <Square className="size-6 fill-current" aria-hidden="true" />
             ) : (
               <Mic className="size-7" aria-hidden="true" />
             )}
-            <span className="sr-only">
-              {busy ? "止める" : "話しかける"}
-            </span>
+            <span className="sr-only">{primaryLabel}</span>
           </button>
 
           <button
@@ -568,6 +634,9 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
                 >
                   {message.content}
                 </p>
+                {message.interrupted && (
+                  <p className="text-[0.625rem] text-muted">— ここで割り込みました</p>
+                )}
               </div>
             ))
           )}

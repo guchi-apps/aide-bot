@@ -4,6 +4,7 @@ import {
   formatJpy,
   formatTokens,
   formatUsd,
+  promptTokens,
   type DailyUsage,
   type UsageSummary,
 } from "@/lib/usage";
@@ -76,6 +77,9 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
                   <th className="border-b border-border px-2.5 py-2 text-left">日付</th>
                   <th className="border-b border-border px-2.5 py-2 text-right">回数</th>
                   <th className="border-b border-border px-2.5 py-2 text-right">入力トークン</th>
+                  <th className="border-b border-border px-2.5 py-2 text-right">
+                    うちキャッシュ
+                  </th>
                   <th className="border-b border-border px-2.5 py-2 text-right">出力トークン</th>
                   <th className="border-b border-border px-2.5 py-2 text-right">概算費用</th>
                 </tr>
@@ -90,7 +94,10 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
                       {summary.calls}
                     </td>
                     <td className="border-b border-border px-2.5 py-2 text-right">
-                      {formatTokens(summary.inputTokens)}
+                      {formatTokens(promptTokens(summary))}
+                    </td>
+                    <td className="border-b border-border px-2.5 py-2 text-right text-muted">
+                      {formatTokens(summary.cacheReadTokens)}
                     </td>
                     <td className="border-b border-border px-2.5 py-2 text-right">
                       {formatTokens(summary.outputTokens)}
@@ -113,7 +120,7 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
                 <div className="min-w-0 text-[0.8125rem]">
                   {dayLabel(date, daily)}
                   <span className="block text-[0.6875rem] tabular-nums text-muted">
-                    {summary.calls}回 ／ 入力 {formatTokens(summary.inputTokens)} ・ 出力{" "}
+                    {summary.calls}回 ／ 入力 {formatTokens(promptTokens(summary))} ・ 出力{" "}
                     {formatTokens(summary.outputTokens)}
                   </span>
                 </div>
@@ -128,11 +135,12 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
               ありません。
             </b>
             {pricing
-              ? `単価は ${chatModel}（入力 $${pricing.input} / 出力 $${pricing.output} per 1M tokens）。`
+              ? `単価は ${chatModel}（入力 $${pricing.input} / 出力 $${pricing.output} / キャッシュ読み $${pricing.cacheRead} per 1M tokens）。`
               : `単価は ${chatModel} のもの。`}
             円は1ドル={USD_JPY_RATE}円で換算した参考値です。
-            この機能を入れる前の相談は記録が無いため入っていません。途中で遮った往復は、
-            出力ぶんが実際より少なく記録されます。
+            「入力トークン」には、同じ内容を送り直さずに済ませたキャッシュ読みのぶんも
+            含みます。 この機能を入れる前の相談は記録が無いため入っていません。途中で遮った
+            往復は、出力ぶんが実際より少なく記録されます。
           </p>
         </section>
       </div>
@@ -166,9 +174,16 @@ function SummaryCard({
         <span className="text-[0.8125rem] text-muted">{formatJpy(summary.costUsd)}</span>
       </div>
       <div className="text-xs tabular-nums text-muted">
-        {summary.calls}回 ／ 入力 {formatTokens(summary.inputTokens)} ・ 出力{" "}
+        {summary.calls}回 ／ 入力 {formatTokens(promptTokens(summary))} ・ 出力{" "}
         {formatTokens(summary.outputTokens)}
       </div>
+      {/* キャッシュ読みは入力の一部。効いていない期間に0を並べても読む理由が無いので、
+          実際に読めたときだけ出す（#56）。 */}
+      {summary.cacheReadTokens > 0 && (
+        <div className="text-[0.6875rem] tabular-nums text-muted">
+          入力のうち {formatTokens(summary.cacheReadTokens)} はキャッシュから
+        </div>
+      )}
       <div className="mt-1.5 flex h-1.5 overflow-hidden rounded-full bg-rail-active">
         <i className="block h-full bg-accent/40" style={{ width: `${inputShare}%` }} />
         <i className="block h-full bg-accent" style={{ width: `${100 - inputShare}%` }} />
@@ -222,11 +237,17 @@ function DailyChart({ daily }: { daily: DailyUsage[] }) {
   );
 }
 
-/** 入力トークンぶんの費用が全体に占める割合（%）。塗り分けにだけ使う。 */
+/**
+ * 入力ぶんのトークンが全体に占める割合（%）。塗り分けにだけ使う。
+ *
+ * キャッシュから読んだぶんも入力として数える（#56）。`inputTokens` はキャッシュに載らなかった
+ * 残りだけなので、これを外すと入力の棒が実態よりはるかに細くなる。
+ */
 function tokenShare(summary: UsageSummary): number {
-  const tokens = summary.inputTokens + summary.outputTokens;
+  const input = promptTokens(summary);
+  const tokens = input + summary.outputTokens;
   if (tokens === 0) return 100;
-  return Math.round((summary.inputTokens / tokens) * 100);
+  return Math.round((input / tokens) * 100);
 }
 
 function shortDayLabel(date: Date, withMonth: boolean): string {

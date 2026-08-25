@@ -4,9 +4,9 @@ import { NextResponse } from "next/server";
 
 import {
   CHAT_MODEL,
-  HISTORY_LIMIT,
   INTERRUPTED_NOTE,
   getAnthropicClient,
+  historyWindowSkip,
   maxOutputTokens,
   secretarySystemPrompt,
   type ReplyStyle,
@@ -77,6 +77,20 @@ async function waitForPendingGeneration(conversationId: string): Promise<void> {
 }
 
 /**
+ * プロンプトキャッシュのブレークポイントを何個置くか（#56）。
+ *
+ * 1つは**今回書き込む位置**、もう1つは**前回書き込んだ位置**に置く。前者だけだと、書いた
+ * キャッシュを次の往復が読む前に、その往復がさらに先の位置へ書き直すことになり、読み出しは
+ * 常に1往復ぶん手前で止まる。2つ置くと、前回ぶんを読みながら今回ぶんを書ける。
+ *
+ * APIが受け付けるのは1リクエストにつき4つまで。
+ */
+const CACHE_BREAKPOINTS = 2;
+
+/** キャッシュの保持時間は既定（5分）のまま。相談の往復はそれより短い間隔で続く。 */
+const CACHE_CONTROL = { type: "ephemeral" } as const;
+
+/**
  * 保存してある発言を、Messages APIへ渡せる形に均す。
  *
  * 保存された並びは、そのままでは2つの理由でAPIの前提を外れる。
@@ -88,32 +102,70 @@ async function waitForPendingGeneration(conversationId: string): Promise<void> {
  *
  * あわせて、割り込まれた返答には注記を添える（#48）。DBの本文はそのまま画面へ出すため
  * 汚さず、モデルへ渡すときにだけ「ここで遮られた」と分かる形にする。
+ *
+ * **本文は常に `[{ type: "text" }]` の配列で渡す**（#56）。キャッシュのブレークポイントは
+ * 内容ブロックにしか置けず、文字列とブロック配列を往復ごとに使い分けると、同じ発言なのに
+ * 送っている形だけが変わる。前方一致が崩れる余地を残さないよう、印の有無によらず形を揃える。
  */
 function toPromptMessages(
   entries: { role: "USER" | "ASSISTANT"; content: string; interrupted: boolean }[],
 ): Anthropic.MessageParam[] {
-  const result: { role: "user" | "assistant"; content: string }[] = [];
+  const merged: { role: "user" | "assistant"; content: string }[] = [];
 
   for (const entry of entries) {
     const role = entry.role === "USER" ? ("user" as const) : ("assistant" as const);
 
-    if (result.length === 0 && role !== "user") continue;
+    if (merged.length === 0 && role !== "user") continue;
 
     const content =
       role === "assistant" && entry.interrupted
         ? `${entry.content}\n\n${INTERRUPTED_NOTE}`
         : entry.content;
 
-    const last = result[result.length - 1];
+    const last = merged[merged.length - 1];
     if (last && last.role === role) {
       last.content = `${last.content}\n\n${content}`;
       continue;
     }
 
-    result.push({ role, content });
+    merged.push({ role, content });
   }
 
-  return result;
+  const breakpoints = cacheBreakpointIndexes(merged);
+
+  return merged.map((message, index) => ({
+    role: message.role,
+    content: [
+      {
+        type: "text" as const,
+        text: message.content,
+        ...(breakpoints.has(index) ? { cache_control: CACHE_CONTROL } : {}),
+      },
+    ],
+  }));
+}
+
+/**
+ * キャッシュのブレークポイントを置く位置を決める（#56）。
+ *
+ * **今回の発言を除いた、新しい方から `CACHE_BREAKPOINTS` 個のassistantの返答**に置く。
+ * 秘書の返答は往復の区切りなので、次の往復でも同じ返答が同じ位置に現れる——つまり
+ * 「今回ここへ書いたキャッシュ」を「次回はここから読む」形になり、往復のたびに読み位置が
+ * 1つずつ後ろへ進む。
+ *
+ * 今回の発言（末尾）には置かない。毎回変わるため、書いても二度と読まれない。
+ */
+function cacheBreakpointIndexes(messages: { role: "user" | "assistant" }[]): Set<number> {
+  const indexes = new Set<number>();
+
+  for (let index = messages.length - 2; index >= 0; index -= 1) {
+    if (messages[index].role !== "assistant") continue;
+
+    indexes.add(index);
+    if (indexes.size >= CACHE_BREAKPOINTS) break;
+  }
+
+  return indexes;
 }
 
 /**
@@ -174,14 +226,20 @@ export async function POST(request: Request) {
     }),
   ]);
 
+  // 窓の先頭は `HISTORY_WINDOW_STEP` の刻みでしか動かさない（#56）。1発言ずつ滑らせると
+  // 往復のたびにプレフィックスの先頭が変わり、プロンプトキャッシュが一度も効かなくなる。
+  const messageCount = await db.message.count({ where: { conversationId: conversation.id } });
+
   const history = await db.message.findMany({
     where: { conversationId: conversation.id },
-    orderBy: { createdAt: "desc" },
-    take: HISTORY_LIMIT,
+    // 並びが揺れればプレフィックスも揺れる。`createdAt` が同じ発言があっても毎回同じ順で
+    // 並ぶよう、第2のキーにidを置く。
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    skip: historyWindowSkip(messageCount),
     select: { role: true, content: true, interrupted: true },
   });
 
-  const promptMessages = toPromptMessages(history.reverse());
+  const promptMessages = toPromptMessages(history);
 
   // 音声で聞くかどうかはこの1往復ぶんの都合なので、スレッドには持たせず毎回受け取る。
   // 同じスレッドを「話す」と「書く」で行き来しても、履歴はそのまま繋がる。
@@ -222,6 +280,10 @@ export async function POST(request: Request) {
             {
               model: CHAT_MODEL,
               max_tokens: maxOutputTokens(style),
+              // システムプロンプトにはブレークポイントを置かない（#56）。単体では
+              // キャッシュできる最小の長さに届かず、置いても黙って無視されるだけ。履歴側の
+              // ブレークポイントがここを含む前半まとめてをキャッシュするので、往復が続けば
+              // システムプロンプトも一緒に乗る。
               system: secretarySystemPrompt(style),
               messages: promptMessages,
             },

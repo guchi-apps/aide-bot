@@ -3,7 +3,7 @@
 import { ArrowUp, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { AppIcon } from "@/components/app-icon";
+import { AppIcon } from "@/components/brand/app-icon";
 import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
 import { cn } from "@/lib/utils";
 

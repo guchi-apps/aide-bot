@@ -131,7 +131,7 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   `manifest.ts` は512pxを `purpose: "maskable"` としても宣言しており、Androidのアダプティブ
   アイコンは中心から半径204.8pxの円の外を切り落とす。素の512px座標のままだと、下端の
   リボンタイが欠ける
-- 画面の中で使うアイコンは `src/components/app-icon.tsx`（インラインSVG）。26px前後で置く
+- 画面の中で使うアイコンは `src/components/brand/app-icon.tsx`（インラインSVG）。26px前後で置く
   場所が多いため、ファイルを `<img>` で読ませない。**絵を変えるときはSVGファイルと
   このコンポーネントの両方を揃えて直す**（グラデーションとmaskableの余白は、この大きさでは
   効かないのでコンポーネント側には持たせていない）

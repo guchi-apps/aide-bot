@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { AppIcon } from "@/components/app-icon";
+import { AppIcon } from "@/components/brand/app-icon";
 import { isDevLoginEnabled } from "@/lib/ci-auth-bypass";
 import { safeInternalPath } from "@/lib/safe-path";
 

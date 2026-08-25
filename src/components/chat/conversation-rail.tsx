@@ -3,7 +3,7 @@
 import { Plus } from "lucide-react";
 import Link from "next/link";
 
-import { AppIcon } from "@/components/app-icon";
+import { AppIcon } from "@/components/brand/app-icon";
 import { cn } from "@/lib/utils";
 
 import type { ConversationSummary } from "./types";

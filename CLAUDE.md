@@ -219,6 +219,20 @@ Messages APIのSSE（`message_start` → `content_block_delta`×n → `message_s
 
 `curl -sN` を `timeout` で切れば「利用者が途中で止めた」経路をそのまま再現できる。
 
+**画面の動き（CSSアニメーション）を確かめるときは、`rsvg-convert` の書き出しを根拠にしない**（#49）。
+librsvgは `transform-box` を解釈しないため、ブラウザでは正しい位置で動く部品が、書き出したPNGでは
+まったく別の場所へ飛ぶ。ヘッドレスChromeは `~/.cache/ms-playwright/chromium_headless_shell-*/` に
+入っており、Playwrightを使わなくても1枚だけなら撮れる。
+
+```bash
+chrome-headless-shell --headless --disable-gpu --no-sandbox --window-size=1060,300 \
+  --screenshot=out.png "file:///<確認用のHTML>"
+```
+
+**撮った瞬間はアニメーションの0秒地点なので、途中の姿は写らない。** `--virtual-time-budget` を
+足してもCSSアニメーションは進まない。見たい時点があるなら、確認用のHTML側で
+`animation-delay: -0.5s` のように負の値を当てて、その姿で止めてから撮る。
+
 **検証用に一時的なページを足して消したら、`rm -rf .next` してから型チェックする。**
 `next dev` が生成する `.next/dev/types/validator.ts` は消したルートを参照したまま残り、
 `pnpm typecheck` と `pnpm build:ci` が `TS2307: Cannot find module '../../../src/app/<消した名前>/page.js'`

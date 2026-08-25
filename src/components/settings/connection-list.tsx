@@ -22,10 +22,11 @@ export function ConnectionList({ connections, error, connected }: Props) {
   const connectedUrls = new Set(connections.filter((c) => c.connected).map((c) => c.url));
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-7 px-4 py-6 md:px-7">
+    // 見出しは`h3`から始める。設定の画面（#71）では「返答のモデル」と並ぶ節の1つになった。
+    <section className="flex flex-col gap-5">
       <header>
-        <h2 className="text-lg font-medium">接続</h2>
-        <p className="mt-2 text-sm leading-relaxed text-muted">
+        <h3 className="text-sm font-medium">接続</h3>
+        <p className="mt-1.5 text-[0.8125rem] leading-relaxed text-muted">
           外部サービスのMCPサーバーへ繋ぐと、秘書が相談の中でそのデータを見に行けるようになります。
           繋いだ内容は相談のたびに参照され、必要だと判断したときだけ呼び出されます。
         </p>
@@ -51,8 +52,8 @@ export function ConnectionList({ connections, error, connected }: Props) {
         </p>
       )}
 
-      <section className="flex flex-col gap-2.5">
-        <h3 className="text-[0.6875rem] font-bold tracking-[0.1em] text-muted">繋いでいるもの</h3>
+      <div className="flex flex-col gap-2.5">
+        <h4 className="text-[0.6875rem] font-bold tracking-[0.1em] text-muted">繋いでいるもの</h4>
 
         {connections.length === 0 ? (
           <p className="rounded-xl border border-dashed border-border px-4 py-5 text-sm text-muted">
@@ -85,10 +86,10 @@ export function ConnectionList({ connections, error, connected }: Props) {
             </div>
           ))
         )}
-      </section>
+      </div>
 
-      <section className="flex flex-col gap-2.5">
-        <h3 className="text-[0.6875rem] font-bold tracking-[0.1em] text-muted">新しく繋ぐ</h3>
+      <div className="flex flex-col gap-2.5">
+        <h4 className="text-[0.6875rem] font-bold tracking-[0.1em] text-muted">新しく繋ぐ</h4>
 
         {MCP_PRESETS.map((preset) => (
           <form
@@ -157,8 +158,8 @@ export function ConnectionList({ connections, error, connected }: Props) {
             </button>
           </div>
         </form>
-      </section>
-    </div>
+      </div>
+    </section>
   );
 }
 

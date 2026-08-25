@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, Plug, Plus } from "lucide-react";
+import { BarChart3, Plus, Settings } from "lucide-react";
 import Link from "next/link";
 
 import { AppIcon } from "@/components/brand/app-icon";
@@ -13,7 +13,7 @@ type Props = {
   activeId: string | null;
   /** 使用量の画面を開いているか。相談は選ばれていない状態になる。 */
   isUsageActive: boolean;
-  /** 接続の画面を開いているか。使用量と同じく、相談は選ばれていない状態になる（#46）。 */
+  /** 設定の画面を開いているか。使用量と同じく、相談は選ばれていない状態になる（#46）。 */
   isSettingsActive: boolean;
   /** 今月の概算費用（`$1.23` の形）。集計はサーバー側で済ませて文字列で受け取る。 */
   monthlyCostLabel: string;
@@ -94,7 +94,7 @@ export function ConversationRail({
       </nav>
 
       <div className="border-t border-border">
-        {/* 外部サービスとの接続（#46）。相談ではないので、一覧ではなく下部に置く。 */}
+        {/* 返答のモデル（#71）と外部サービスとの接続（#46）。相談ではないので、一覧ではなく下部に置く。 */}
         <Link
           href="/settings"
           onClick={onNavigate}
@@ -104,8 +104,8 @@ export function ConversationRail({
             isSettingsActive && "bg-rail-active shadow-[inset_2px_0_0_var(--accent)]",
           )}
         >
-          <Plug className="size-3.5 text-muted" aria-hidden="true" />
-          接続
+          <Settings className="size-3.5 text-muted" aria-hidden="true" />
+          設定
         </Link>
 
         {/* APIの消費量（#51）。金額だけを一覧に出し、内訳は専用の画面で見る。 */}

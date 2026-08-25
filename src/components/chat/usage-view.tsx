@@ -1,5 +1,5 @@
+import { MODEL_PRICING } from "@/lib/chat-model";
 import {
-  MODEL_PRICING,
   USD_JPY_RATE,
   formatJpy,
   formatTokens,
@@ -20,8 +20,13 @@ type Props = {
   tableDays: number;
   /** 「8月」のような、今月を指す文言。サーバー側で作って渡す。 */
   monthLabel: string;
-  /** いま返答の生成に使っているモデル。単価の注記に出す。 */
-  chatModel: string;
+  /**
+   * いま選んでいるモデル（#71）。単価の注記に出す。
+   *
+   * 「話す」と「書く」で別々に選べるため複数入る。ここに出るのは**これから使う**モデルで、
+   * 上の集計はどれも呼び出した時点のモデルの単価で足し上げてある。
+   */
+  chatModels: { label: string; model: string }[];
 };
 
 /**
@@ -30,9 +35,8 @@ type Props = {
  * サーバーコンポーネントのまま置いている。数字を見るだけで操作が無く、クライアントにすると
  * `@/lib/usage`（PrismaとAnthropic SDKを引き込む）がバンドルへ入るため。
  */
-export function UsageView({ today, month, total, daily, tableDays, monthLabel, chatModel }: Props) {
+export function UsageView({ today, month, total, daily, tableDays, monthLabel, chatModels }: Props) {
   const rows = daily.slice(-tableDays).reverse();
-  const pricing = MODEL_PRICING[chatModel];
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
@@ -134,9 +138,7 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
               費用はこのアプリが数えたトークン数からの概算で、Anthropicの請求額そのものでは
               ありません。
             </b>
-            {pricing
-              ? `単価は ${chatModel}（入力 $${pricing.input} / 出力 $${pricing.output} / キャッシュ読み $${pricing.cacheRead} per 1M tokens）。`
-              : `単価は ${chatModel} のもの。`}
+            {pricingNote(chatModels)}
             円は1ドル={USD_JPY_RATE}円で換算した参考値です。
             「入力トークン」には、同じ内容を送り直さずに済ませたキャッシュ読みのぶんも
             含みます。 この機能を入れる前の相談は記録が無いため入っていません。途中で遮った
@@ -146,6 +148,28 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
       </div>
     </div>
   );
+}
+
+/**
+ * 単価の注記（#71）。
+ *
+ * 「話す」と「書く」で同じモデルを選んでいるときは、モードの名前を出さず1つにまとめる。
+ * 既定のまま使っている人にとって、分かれている事実はここでは要らない情報になる。
+ */
+function pricingNote(chatModels: { label: string; model: string }[]): string {
+  const unique = Array.from(new Set(chatModels.map((entry) => entry.model)));
+
+  const describe = (model: string) => {
+    const pricing = MODEL_PRICING[model];
+    if (!pricing) return model;
+    return `${model}（入力 $${pricing.input} / 出力 $${pricing.output} / キャッシュ読み $${pricing.cacheRead} per 1M tokens）`;
+  };
+
+  if (unique.length <= 1) {
+    return unique.length === 0 ? "" : `単価は ${describe(unique[0])}。`;
+  }
+
+  return `単価は${chatModels.map((entry) => `${entry.label}が ${describe(entry.model)}`).join("、")}。`;
 }
 
 function SummaryCard({

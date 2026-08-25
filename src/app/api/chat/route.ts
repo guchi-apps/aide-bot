@@ -36,10 +36,10 @@ function fail(message: string, status: number) {
 }
 
 /**
- * 1回の生成で使ったトークン数（#51）。返答と同じ行へ保存し、使用量の画面が足し上げる。
+ * 1回の生成で使ったトークン数（#51）。`ApiUsage` の1行として残し、使用量の画面が足し上げる。
  *
- * `null` は「数えていない」を意味する。イベントを1つも受け取れずに終わった場合はnullのまま
- * 保存し、0として合計に混ぜない。
+ * 返答（`Message`）とは別の行にするのは、**返答が保存されない往復があるため**。1文字も出ない
+ * うちに割り込まれた場合も生成に失敗した場合も、入力ぶんはその時点で使い終わっている。
  */
 type GenerationUsage = {
   model: string;
@@ -280,13 +280,6 @@ export async function POST(request: Request) {
                   role: "ASSISTANT",
                   content: answer,
                   interrupted,
-                  // 途中で遮られた往復では `message_delta` が届かないことがあり、出力ぶんが
-                  // 実際より少なく残る。合計を過大に見せないため、そのまま入れる（#51）。
-                  model: usage?.model ?? null,
-                  inputTokens: usage?.inputTokens ?? null,
-                  outputTokens: usage?.outputTokens ?? null,
-                  cacheWriteTokens: usage?.cacheWriteTokens ?? null,
-                  cacheReadTokens: usage?.cacheReadTokens ?? null,
                 },
               }),
               db.conversation.update({
@@ -297,6 +290,29 @@ export async function POST(request: Request) {
           } catch (error) {
             console.error("[aide-bot] 返答の保存に失敗した", error);
             errorMessage ??= "返答を保存できませんでした。この内容は再読み込みで消えます。";
+          }
+        }
+
+        // 使ったぶんは、返答が残ったかどうかによらず記録する（#51）。
+        // 遮られて1文字も出なかった往復でも、入力ぶんはもう使い終わっている。
+        // 途中で遮られると `message_delta` が届かず、出力ぶんは `message_start` 時点の値
+        // （数トークン）のまま残る。埋め合わせの推定はせず、少なめの実測値をそのまま入れる。
+        if (usage) {
+          try {
+            await db.apiUsage.create({
+              data: {
+                userId: user.id,
+                conversationId: conversation.id,
+                model: usage.model,
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                cacheWriteTokens: usage.cacheWriteTokens,
+                cacheReadTokens: usage.cacheReadTokens,
+              },
+            });
+          } catch (error) {
+            // 記録できなくても相談は続けられる。画面へは出さず、ログにだけ残す。
+            console.error("[aide-bot] 使用量の記録に失敗した", error);
           }
         }
 

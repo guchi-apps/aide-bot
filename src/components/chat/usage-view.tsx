@@ -42,7 +42,7 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
           <SummaryCard label="累計" summary={total} />
         </div>
 
-        {total.replies === 0 && (
+        {total.calls === 0 && (
           <p className="rounded-xl border border-border bg-surface px-4 py-3 text-xs leading-relaxed text-muted">
             まだ記録がありません。相談を送ると、その往復で使ったぶんがここに出ます。
           </p>
@@ -74,7 +74,7 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
               <thead>
                 <tr className="text-[0.6875rem] font-bold tracking-[0.06em] text-muted">
                   <th className="border-b border-border px-2.5 py-2 text-left">日付</th>
-                  <th className="border-b border-border px-2.5 py-2 text-right">往復</th>
+                  <th className="border-b border-border px-2.5 py-2 text-right">回数</th>
                   <th className="border-b border-border px-2.5 py-2 text-right">入力トークン</th>
                   <th className="border-b border-border px-2.5 py-2 text-right">出力トークン</th>
                   <th className="border-b border-border px-2.5 py-2 text-right">概算費用</th>
@@ -87,7 +87,7 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
                       {dayLabel(date, daily)}
                     </td>
                     <td className="border-b border-border px-2.5 py-2 text-right">
-                      {summary.replies}
+                      {summary.calls}
                     </td>
                     <td className="border-b border-border px-2.5 py-2 text-right">
                       {formatTokens(summary.inputTokens)}
@@ -113,7 +113,7 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
                 <div className="min-w-0 text-[0.8125rem]">
                   {dayLabel(date, daily)}
                   <span className="block text-[0.6875rem] tabular-nums text-muted">
-                    {summary.replies}往復 ／ 入力 {formatTokens(summary.inputTokens)} ・ 出力{" "}
+                    {summary.calls}回 ／ 入力 {formatTokens(summary.inputTokens)} ・ 出力{" "}
                     {formatTokens(summary.outputTokens)}
                   </span>
                 </div>
@@ -131,8 +131,8 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
               ? `単価は ${chatModel}（入力 $${pricing.input} / 出力 $${pricing.output} per 1M tokens）。`
               : `単価は ${chatModel} のもの。`}
             円は1ドル={USD_JPY_RATE}円で換算した参考値です。
-            この機能より前の相談と、途中で遮って打ち切った返答の一部はトークン数が残っていないため、
-            合計に入りません。
+            この機能を入れる前の相談は記録が無いため入っていません。途中で遮った往復は、
+            出力ぶんが実際より少なく記録されます。
           </p>
         </section>
       </div>
@@ -166,7 +166,7 @@ function SummaryCard({
         <span className="text-[0.8125rem] text-muted">{formatJpy(summary.costUsd)}</span>
       </div>
       <div className="text-xs tabular-nums text-muted">
-        {summary.replies}往復 ／ 入力 {formatTokens(summary.inputTokens)} ・ 出力{" "}
+        {summary.calls}回 ／ 入力 {formatTokens(summary.inputTokens)} ・ 出力{" "}
         {formatTokens(summary.outputTokens)}
       </div>
       <div className="mt-1.5 flex h-1.5 overflow-hidden rounded-full bg-rail-active">

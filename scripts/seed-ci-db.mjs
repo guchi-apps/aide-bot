@@ -20,17 +20,20 @@ const CI_BYPASS_SUPABASE_USER_ID = "ci-screenshot-bot";
 const USAGE_MODEL = "claude-opus-5";
 
 /**
- * 秘書の返答1件ぶんのダミーのトークン数。
+ * API呼び出し1回ぶんのダミーのトークン数（`ApiUsage` の1行）。
  *
  * 履歴は毎回まるごと送り直すため、同じスレッドでは往復を重ねるほど入力ぶんが増える。
  * 画面で内訳を見たときに不自然にならないよう、その形に寄せてある。
  */
-const dummyUsage = (turnIndex) => ({
+const dummyUsage = (turnIndex, createdAt, userId) => ({
+  // Conversation配下のネストで作るためconversationIdは省けるが、userIdは自分で繋ぐ必要がある。
+  user: { connect: { id: userId } },
   model: USAGE_MODEL,
   inputTokens: 3200 + turnIndex * 2600,
   outputTokens: 540 + turnIndex * 160,
   cacheWriteTokens: 0,
   cacheReadTokens: 0,
+  createdAt,
 });
 
 const db = new PrismaClient();
@@ -132,19 +135,26 @@ async function main() {
         createdAt: seed.startedAt,
         updatedAt: lastMessageAt,
         messages: {
-          create: seed.messages.map((message, index) => {
-            const isAssistant = index % 2 === 1;
-
-            return {
-              role: isAssistant ? "ASSISTANT" : "USER",
-              // createdAtが同一だと並び順が不定になるため、1分ずつずらす。
-              createdAt: new Date(seed.startedAt.getTime() + index * 60_000),
-              content: typeof message === "string" ? message : message.content,
-              interrupted: typeof message === "string" ? false : message.interrupted === true,
-              // トークン数は秘書の返答にだけ入る（#51）。利用者の発言はnullのまま。
-              ...(isAssistant ? dummyUsage((index - 1) / 2) : {}),
-            };
-          }),
+          create: seed.messages.map((message, index) => ({
+            role: index % 2 === 0 ? "USER" : "ASSISTANT",
+            // createdAtが同一だと並び順が不定になるため、1分ずつずらす。
+            createdAt: new Date(seed.startedAt.getTime() + index * 60_000),
+            content: typeof message === "string" ? message : message.content,
+            interrupted: typeof message === "string" ? false : message.interrupted === true,
+          })),
+        },
+        // 消費量は返答とは別の行に持つ（#51）。返答1件につきAPIを1回呼んだ形にする。
+        apiUsages: {
+          create: seed.messages
+            .map((message, index) => ({ message, index }))
+            .filter(({ index }) => index % 2 === 1)
+            .map(({ index }) =>
+              dummyUsage(
+                (index - 1) / 2,
+                new Date(seed.startedAt.getTime() + index * 60_000),
+                user.id,
+              ),
+            ),
         },
       },
     });
@@ -163,6 +173,7 @@ async function main() {
 
   if (!usageHistoryExists) {
     const messages = [];
+    const usages = [];
 
     USAGE_DAILY_TURNS.forEach((turns, dayIndex) => {
       // 配列の先頭がいちばん古い日。最後の要素が今日。
@@ -184,8 +195,8 @@ async function main() {
           createdAt: new Date(askedAt.getTime() + 60_000),
           content: "承知しました。要点だけお伝えします。",
           interrupted: false,
-          ...dummyUsage(turn),
         });
+        usages.push(dummyUsage(turn, new Date(askedAt.getTime() + 60_000), user.id));
       }
     });
 
@@ -196,6 +207,7 @@ async function main() {
         createdAt: messages[0].createdAt,
         updatedAt: messages[messages.length - 1].createdAt,
         messages: { create: messages },
+        apiUsages: { create: usages },
       },
     });
   }

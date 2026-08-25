@@ -23,7 +23,7 @@ export type ModelPricing = {
  * モデルごとの単価。
  *
  * **Anthropicが単価を変えたらここを直す。** 画面に出るのはこの表からの概算で、
- * 実際の請求額ではない。過去に保存した返答も保存時のモデル名で引き直すため、
+ * 実際の請求額ではない。過去のぶんも呼び出した時点のモデル名で引き直すため、
  * 使うのをやめたモデルの行も消さずに残す。
  *
  * 出典: https://claude.com/pricing#api（2026-08-25 時点）
@@ -42,7 +42,11 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
  */
 export const USD_JPY_RATE = 155;
 
-/** 保存された1件ぶんのトークン数。数えていない発言はnullで入っている。 */
+/**
+ * API呼び出し1回ぶんのトークン数。
+ *
+ * `ApiUsage` の行から作るほか、DB側で合計した結果（Prismaの `_sum` はnull許容）も同じ形で扱う。
+ */
 export type UsageRow = {
   model: string | null;
   inputTokens: number | null;
@@ -53,8 +57,8 @@ export type UsageRow = {
 
 /** 足し上げた結果。`costUsd` はこのアプリが数えたトークン数からの概算。 */
 export type UsageSummary = {
-  /** トークン数が残っている返答の件数（=秘書との往復数）。 */
-  replies: number;
+  /** Messages APIを呼んだ回数。いまは1往復＝1回。 */
+  calls: number;
   inputTokens: number;
   outputTokens: number;
   cacheWriteTokens: number;
@@ -63,7 +67,7 @@ export type UsageSummary = {
 };
 
 export const EMPTY_SUMMARY: UsageSummary = {
-  replies: 0,
+  calls: 0,
   inputTokens: 0,
   outputTokens: 0,
   cacheWriteTokens: 0,
@@ -93,19 +97,11 @@ export function estimateCostUsd(row: UsageRow): number {
   );
 }
 
-/** 複数件を足し上げる。トークン数がまったく残っていない行は件数にも入れない。 */
+/** 複数件を足し上げる。 */
 export function summarize(rows: UsageRow[]): UsageSummary {
   return rows.reduce<UsageSummary>((total, row) => {
-    const counted =
-      row.inputTokens !== null ||
-      row.outputTokens !== null ||
-      row.cacheWriteTokens !== null ||
-      row.cacheReadTokens !== null;
-
-    if (!counted) return total;
-
     return {
-      replies: total.replies + 1,
+      calls: total.calls + 1,
       inputTokens: total.inputTokens + (row.inputTokens ?? 0),
       outputTokens: total.outputTokens + (row.outputTokens ?? 0),
       cacheWriteTokens: total.cacheWriteTokens + (row.cacheWriteTokens ?? 0),
@@ -164,11 +160,8 @@ type UsageWhere = { userId: string; since?: Date };
 
 function whereClause({ userId, since }: UsageWhere) {
   return {
-    role: "ASSISTANT" as const,
-    conversation: { userId },
+    userId,
     ...(since ? { createdAt: { gte: since } } : {}),
-    // トークン数を数えていない返答（この機能より前のもの）は最初から除く。
-    NOT: { inputTokens: null, outputTokens: null },
   };
 }
 
@@ -179,7 +172,7 @@ function whereClause({ userId, since }: UsageWhere) {
  * 済むので、相談が増えても読み出す量が増えない。
  */
 export async function usageSummary(params: UsageWhere): Promise<UsageSummary> {
-  const groups = await db.message.groupBy({
+  const groups = await db.apiUsage.groupBy({
     by: ["model"],
     where: whereClause(params),
     _count: { _all: true },
@@ -193,7 +186,7 @@ export async function usageSummary(params: UsageWhere): Promise<UsageSummary> {
 
   return groups.reduce<UsageSummary>(
     (total, group) => ({
-      replies: total.replies + group._count._all,
+      calls: total.calls + group._count._all,
       inputTokens: total.inputTokens + (group._sum.inputTokens ?? 0),
       outputTokens: total.outputTokens + (group._sum.outputTokens ?? 0),
       cacheWriteTokens: total.cacheWriteTokens + (group._sum.cacheWriteTokens ?? 0),
@@ -228,7 +221,7 @@ export type DailyUsage = {
 export async function dailyUsage(userId: string, days: number, now: Date): Promise<DailyUsage[]> {
   const since = addDays(startOfDay(now), -(days - 1));
 
-  const rows = await db.message.findMany({
+  const rows = await db.apiUsage.findMany({
     where: whereClause({ userId, since }),
     select: {
       createdAt: true,

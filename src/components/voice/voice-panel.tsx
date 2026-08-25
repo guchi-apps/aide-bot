@@ -1,6 +1,6 @@
 "use client";
 
-import { Keyboard, Mic, Repeat, Settings2, Square, Volume2, VolumeX, X } from "lucide-react";
+import { Keyboard, Mic, Play, Repeat, Settings2, Square, Volume2, VolumeX, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useTalkMode } from "@/components/chat/talk-mode-context";
@@ -10,9 +10,11 @@ import { startRecognition, type RecognitionHandle } from "@/lib/speech/recogniti
 import {
   RATE_MAX,
   RATE_MIN,
-  SpeechReader,
-  isSpeechSynthesisSupported,
+  type Reader,
+  canSpeakWith,
+  createReader,
   primeSpeechSynthesis,
+  speakSample,
   watchJapaneseVoices,
 } from "@/lib/speech/synthesis";
 import {
@@ -20,6 +22,12 @@ import {
   useRecognitionSupported,
   useVoiceSettings,
 } from "@/lib/speech/voice-settings";
+import {
+  VOICEVOX_SPEAKERS,
+  parseVoicevoxSpeaker,
+  primeVoicevoxAudio,
+  voicevoxVoiceURI,
+} from "@/lib/speech/voicevox";
 import { cn } from "@/lib/utils";
 
 import { Orb, type OrbState } from "./orb";
@@ -58,6 +66,8 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
   const [lastUser, setLastUser] = useState<string | null>(null);
   const [reply, setReply] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // 失敗ではないが伝えておきたいこと（VOICEVOXが使えず端末の声で読んだ、など）。
+  const [notice, setNotice] = useState<string | null>(null);
   const [reacting, setReacting] = useState(false);
 
   const settings = useVoiceSettings();
@@ -66,7 +76,8 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   const recognitionRef = useRef<RecognitionHandle | null>(null);
-  const readerRef = useRef<SpeechReader | null>(null);
+  const readerRef = useRef<Reader | null>(null);
+  const sampleRef = useRef<Reader | null>(null);
   const finalRef = useRef("");
   const primedRef = useRef(false);
   const reactTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -99,6 +110,8 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
     recognitionRef.current = null;
     readerRef.current?.cancel();
     readerRef.current = null;
+    sampleRef.current?.cancel();
+    sampleRef.current = null;
     abort();
   }, [abort]);
 
@@ -112,6 +125,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
   const send = useCallback(
     async (text: string) => {
       setError(null);
+      setNotice(null);
       setLastUser(text);
       setReply("");
       setStatus("thinking");
@@ -120,11 +134,11 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
         { id: `local-user-${previous.length}`, role: "USER", content: text },
       ]);
 
-      // 返答は届いた端から文の切れ目で読み上げる。全部揃うまで待つと、字幕が出ているのに
-      // 声が始まらない時間ができる。
+      // 内蔵の声なら、届いた端から文の切れ目で読み上げる。全部揃うまで待つと、字幕が
+      // 出ているのに声が始まらない時間ができる（VOICEVOXは仕組み上まとめて合成する）。
       const reader =
-        settingsRef.current.speak && isSpeechSynthesisSupported()
-          ? new SpeechReader({
+        settingsRef.current.speak && canSpeakWith(settingsRef.current.voiceURI)
+          ? createReader({
               voiceURI: settingsRef.current.voiceURI,
               rate: settingsRef.current.rate,
               onStart: () => setStatus("speaking"),
@@ -133,6 +147,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
                 if (settingsRef.current.continuous) beginListeningRef.current();
                 else setStatus("idle");
               },
+              onNotice: setNotice,
             })
           : null;
       readerRef.current = reader;
@@ -231,13 +246,27 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
     beginListeningRef.current = beginListening;
   }, [beginListening]);
 
+  /** iOSは「画面を触った流れ」で一度鳴らしておかないと、以降が無音になる。 */
+  function prime() {
+    if (primedRef.current) return;
+    primeSpeechSynthesis();
+    primeVoicevoxAudio();
+    primedRef.current = true;
+  }
+
+  /** 選んでいる声で1文だけ鳴らす。押した操作をiOSの許可としても使う。 */
+  function onSample() {
+    prime();
+    setNotice(null);
+    sampleRef.current?.cancel();
+    sampleRef.current = speakSample(settings.voiceURI, settings.rate, setNotice);
+  }
+
   /** 中央の大きなボタン。いまの状態によって「始める」と「止める」が入れ替わる。 */
   function onPrimaryButton() {
-    if (!primedRef.current) {
-      // iOSは「画面を触った流れ」で一度 speak() を通しておかないと、以降が無音になる。
-      primeSpeechSynthesis();
-      primedRef.current = true;
-    }
+    prime();
+    sampleRef.current?.cancel();
+    sampleRef.current = null;
 
     if (status === "listening") {
       recognitionRef.current?.stop();
@@ -254,7 +283,8 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
   }
 
   const busy = status !== "idle";
-  const speakable = isSpeechSynthesisSupported();
+  const speakable = canSpeakWith(settings.voiceURI);
+  const voicevoxSpeaker = parseVoicevoxSpeaker(settings.voiceURI);
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -307,17 +337,52 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
               声
               <select
                 value={settings.voiceURI ?? ""}
-                onChange={(event) => updateVoiceSettings({ voiceURI: event.target.value || null })}
+                onChange={(event) => {
+                  sampleRef.current?.cancel();
+                  sampleRef.current = null;
+                  setNotice(null);
+                  updateVoiceSettings({ voiceURI: event.target.value || null });
+                }}
                 className="rounded-lg border border-border bg-background px-2.5 py-2 text-sm outline-none focus:border-accent"
               >
                 <option value="">端末におまかせ</option>
-                {voices.map((voice) => (
-                  <option key={voice.voiceURI} value={voice.voiceURI}>
-                    {voice.name}
-                  </option>
-                ))}
+                <optgroup label="VOICEVOX（インターネット経由）">
+                  {VOICEVOX_SPEAKERS.map((speaker) => (
+                    <option key={speaker.id} value={voicevoxVoiceURI(speaker.id)}>
+                      {speaker.label}
+                    </option>
+                  ))}
+                </optgroup>
+                {voices.length > 0 && (
+                  <optgroup label="この端末の声">
+                    {voices.map((voice) => (
+                      <option key={voice.voiceURI} value={voice.voiceURI}>
+                        {voice.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </label>
+
+            <button
+              type="button"
+              onClick={onSample}
+              disabled={!speakable}
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-2 text-sm transition-colors hover:bg-rail-active disabled:opacity-40"
+            >
+              <Play className="size-3.5" aria-hidden="true" />
+              試し聞き
+            </button>
+
+            {voicevoxSpeaker && (
+              <p className="mt-2 text-xs leading-relaxed text-muted">
+                {voicevoxSpeaker.credit}
+                <br />
+                返事の文面は、音声にするためVOICEVOXのWEB版API（api.tts.quest）へ送られます。
+                混み合っているときや通信できないときは、この端末の声で読み上げます。
+              </p>
+            )}
 
             <label className="flex flex-col gap-1.5 py-2 text-sm">
               <span className="flex items-center justify-between">
@@ -337,7 +402,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
 
             {!speakable && (
               <p className="mt-1 text-xs leading-relaxed text-muted">
-                このブラウザは読み上げに対応していません。返事は画面の文字でご確認ください。
+                このブラウザは端末の声での読み上げに対応していません。VOICEVOXの声を選ぶと読み上げられます。
               </p>
             )}
           </div>
@@ -401,6 +466,12 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
                   「書く」に切り替える
                 </button>
                 と、文字で相談できます。
+              </p>
+            )}
+
+            {notice && (
+              <p className="rounded-xl border border-border bg-surface px-4 py-2.5 text-sm text-muted">
+                {notice}
               </p>
             )}
 

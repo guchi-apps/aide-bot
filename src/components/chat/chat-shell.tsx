@@ -12,6 +12,8 @@ import type { ConversationSummary } from "./types";
 
 type Props = {
   conversations: ConversationSummary[];
+  /** 今月の概算費用（`$1.23` の形）。一覧の下に出す（#51）。 */
+  monthlyCostLabel: string;
   userLabel: string;
   userEmail: string | null;
   appVersion: string;
@@ -25,12 +27,22 @@ type Props = {
  * 取っているため。100dvhのままだと合計が画面より高くなり、ページ全体が数十pxだけ
  * 縦スクロールする（ホーム画面から起動したiOSで顕著）。
  */
-export function ChatShell({ conversations, userLabel, userEmail, appVersion, children }: Props) {
+export function ChatShell({
+  conversations,
+  monthlyCostLabel,
+  userLabel,
+  userEmail,
+  appVersion,
+  children,
+}: Props) {
   const pathname = usePathname();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
+  const isUsage = pathname === "/usage";
   const activeId = pathname.startsWith("/c/") ? pathname.slice("/c/".length) : null;
   const activeTitle = conversations.find((c) => c.id === activeId)?.title ?? "新しい相談";
+  // 使用量は相談ではないので、見出しも「話す / 書く」の切り替えもこの画面には出さない（#51）。
+  const heading = isUsage ? "使用量" : activeTitle;
 
   // 開いたドロワーは、閉じるボタン・スクリム・中のリンク（onNavigate）で閉じる。
   // pathnameの変化をuseEffectで見て閉じる形にはしない——描画のたびにsetStateが走る。
@@ -51,6 +63,8 @@ export function ChatShell({ conversations, userLabel, userEmail, appVersion, chi
         <ConversationRail
           conversations={conversations}
           activeId={activeId}
+          isUsageActive={isUsage}
+          monthlyCostLabel={monthlyCostLabel}
           userLabel={userLabel}
           userEmail={userEmail}
           appVersion={appVersion}
@@ -75,6 +89,8 @@ export function ChatShell({ conversations, userLabel, userEmail, appVersion, chi
             <ConversationRail
               conversations={conversations}
               activeId={activeId}
+              isUsageActive={isUsage}
+              monthlyCostLabel={monthlyCostLabel}
               userLabel={userLabel}
               userEmail={userEmail}
               appVersion={appVersion}
@@ -104,10 +120,10 @@ export function ChatShell({ conversations, userLabel, userEmail, appVersion, chi
           </button>
 
           <h1 className="min-w-0 flex-1 truncate text-center text-sm font-medium md:text-left md:text-[0.9375rem]">
-            {activeTitle}
+            {heading}
           </h1>
 
-          <TalkModeSwitch />
+          {!isUsage && <TalkModeSwitch />}
         </header>
 
         {children}

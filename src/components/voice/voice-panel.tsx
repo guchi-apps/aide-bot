@@ -30,7 +30,7 @@ import {
 } from "@/lib/speech/voicevox";
 import { cn } from "@/lib/utils";
 
-import { Orb, type OrbState } from "./orb";
+import { Robot, type RobotState } from "./robot";
 
 type Props = {
   /** 既存スレッドならそのID。新しい相談ならnull。 */
@@ -38,7 +38,7 @@ type Props = {
   initialMessages: ChatMessage[];
 };
 
-const STATUS_LABEL: Record<OrbState, string> = {
+const STATUS_LABEL: Record<RobotState, string> = {
   idle: "待っています",
   listening: "聞いています",
   thinking: "考えています",
@@ -53,9 +53,9 @@ const STATUS_LABEL: Record<OrbState, string> = {
  * `POST /api/chat` を使う。声で話した内容も同じ相談スレッドへ残るため、「書く」に
  * 切り替えれば文字で読み返せる。
  *
- * ひと往復は idle → listening → thinking → speaking → idle と進む。「続けて話す」が入なら
- * 最後の idle を挟まずに listening へ戻る。読み上げ中にマイクを開かないのは、自分の声を
- * 聞き返して延々と往復し続けるのを防ぐため。
+ * ひと往復は idle → listening → thinking →（VOICEVOXの声なら preparing →）speaking → idle と
+ * 進む。「続けて話す」が入なら最後の idle を挟まずに listening へ戻る。読み上げ中に
+ * マイクを開かないのは、自分の声を聞き返して延々と往復し続けるのを防ぐため。
  *
  * 考えている・話している最中でも、マイクを押せばその場で割り込める（#48）。押した時点で
  * 読み上げを止めて生成を打ち切り、thinking / speaking → listening へ飛ぶ。マイクを開くのは
@@ -66,7 +66,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
   const { send: sendMessage, abort } = useChatStream(conversationId);
 
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
-  const [status, setStatus] = useState<OrbState>("idle");
+  const [status, setStatus] = useState<RobotState>("idle");
   const [heard, setHeard] = useState("");
   const [lastUser, setLastUser] = useState<string | null>(null);
   const [reply, setReply] = useState("");
@@ -473,7 +473,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
         )}
 
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 px-6 py-6 text-center">
-          <Orb
+          <Robot
             state={status}
             reacting={reacting}
             className="size-[168px] md:size-[184px] lg:size-[200px]"

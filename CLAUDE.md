@@ -112,6 +112,32 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   黙ってから聞き取りを開く」形で、読み上げ中もマイクを開きっぱなしにする常時バージインは
   採っていない（自分の声を拾って往復が止まらなくなるため）
 
+## APIの消費量（#51）
+
+Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として残し、`/usage` の画面で
+日・月・累計に足し上げて出す。左メニューの下部に今月の概算費用も出る。
+
+- **数える単位は「API呼び出し1回」で、秘書の返答（`Message`）には持たせない。** 返答は
+  `answer.trim() !== ""` のときしか保存されず、1文字も出ないうちに割り込まれた往復・生成に
+  失敗した往復では行そのものが作られない。履歴を毎回まるごと送り直す設計上、**入力ぶんは
+  その時点で使い終わっている**ので、返答の行に相乗りさせるとそこが丸ごと落ちる（#51の計画レビュー）。
+  1発言に対してAPIを複数回叩く形になっても、この単位なら数え方が変わらない
+- **トークン数は `message_start` と `message_delta` の両方から拾う。** 入力ぶんは `message_start`、
+  出力ぶんは `message_delta`（累計値。生成中に何度か届く）に乗る。`content_block_delta` しか
+  見ていないと1つも取れない
+- **途中で遮られた往復（#48）では `message_delta` が届かず、出力ぶんが実際より少なく残る。**
+  `message_start` 時点の値（数トークン）のままになる。埋め合わせの推定はせず、画面の注記で断っている
+- **使用量の記録に失敗しても相談は止めない。** `ApiUsage` の書き込みは独立したtry/catchに置き、
+  失敗はログにだけ残す（記録できないことより、返答が返らないことの方が重い）
+- **単価表は `src/lib/usage.ts` の `MODEL_PRICING`。** Anthropicが単価を変えたらここを直す。
+  呼び出した時点のモデル名で引き直すため、使うのをやめたモデルの行も消さない。画面に出るのは
+  概算で、実際の請求額ではない（円は `USD_JPY_RATE` の固定レートでの参考値）
+- **キャッシュぶんの列（`cacheWriteTokens` / `cacheReadTokens`）はいまは常に0。** プロンプト
+  キャッシュを使っていないため。単価が入力と違うので列は持つが、画面の内訳には出していない
+- **`src/lib/usage.ts` はサーバー専用。** Prismaと（`@/lib/anthropic` 経由で）Anthropic SDKを
+  引き込むため、クライアントコンポーネントからimportしない。`/usage` の画面
+  （`src/components/chat/usage-view.tsx`）は数字を見るだけなのでサーバーコンポーネントのまま置いている
+
 ## 音声対話（話す / 書く）
 
 **このアプリの本来の使い方は音声**で、文字入力は声を出せない場面と言い直しのために残している（#27）。
@@ -144,7 +170,7 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   **最大2回に分ける**——1文目が揃った時点で1回目を依頼して返答の生成中に合成を進め、残りは
   1回目が鳴り始めてから依頼する（そこまでで7秒前後経つので5秒の制限に触れない）。
   実測で「返答が出てから声が始まるまで」が約7秒→約0.5秒になった
-- **待っていることを必ず画面へ出す**（`onPreparing` → `OrbState` の `preparing`）。
+- **待っていることを必ず画面へ出す**（`onPreparing` → `RobotState` の `preparing`）。
   「考えています」のままにすると返事が来ていないように見え、利用者がマイクを押して
   割り込む——割り込みは読み上げを取り消すので、**一度も鳴らないまま終わる**
 - **合成や再生に失敗したら端末内蔵の声へ落とす**（`VoicevoxReader`）。外部サービスが混んでいる
@@ -160,10 +186,15 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 - **iOSは「画面を触った流れ」で一度 `speak()` を通さないと、以降の読み上げが無音になる。**
   マイクを押した時点で `primeSpeechSynthesis()` を呼び、その操作を許可として使っている
 - **読み上げ中にマイクを開かない。** 自分の声を聞き返して往復が止まらなくなる。
-  ひと往復は idle → listening → thinking → speaking → idle で、次の状態を決めるのは
-  読み上げの完了（`SpeechReader` の `onDrain`）
+  ひと往復は idle → listening → thinking →（VOICEVOXなら preparing →）speaking → idle で、
+  次の状態を決めるのは読み上げの完了（`SpeechReader` の `onDrain`）
 - **返答は届いた端から文の切れ目で読み上げる。** 全部揃うまで待つと、字幕は出ているのに
   声が始まらない時間ができる。1回の `speak()` を長くしすぎない（Chromeが途中で打ち切る）
+- **画面の中央にいるロボットは `src/components/voice/robot.tsx`、動きは `globals.css` の `.bot` 系**
+  （#49）。待つ・聞く・考える・話すの4状態を1つの値から出し分ける。**部品を動かすときは
+  `transform-box: view-box` を付けてから `transform-origin` をviewBoxの座標で書く。**
+  既定（`fill-box`）だと基準が部品ごとの外接矩形になり、目や口が自分の中心ではないところを
+  軸に動く（`librsvg` はこの指定を解釈しないので、見た目の確認はブラウザで行う）
 - 音声モードは `mode: "voice"` を送り、`VOICE_STYLE_INSTRUCTION` と `VOICE_MAX_OUTPUT_TOKENS`
   （1200）が効く。**聞くだけの返答は戻って読み直せない**ため、文字のときと同じ上限にしない
 - **localStorageの値をuseStateの初期値やuseEffectで入れない。** ESLintの
@@ -183,14 +214,17 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   `public/apple-icon.png`・`src/app/favicon.ico` はすべてそこからの書き出し物で、
   `scripts/build-icons.sh`（`rsvg-convert` と ImageMagick を使う）で作り直す。
   PNGを直接編集しても、次にスクリプトを流した時点で戻る
-- **`public/icon.svg` の絵は `<g transform="translate(38.4 18.4) scale(0.85)">` の中に置く。**
+- **`public/icon.svg` の絵は `<g transform="translate(38.4 24) scale(0.85)">` の中に置く。**
   `manifest.ts` は512pxを `purpose: "maskable"` としても宣言しており、Androidのアダプティブ
-  アイコンは中心から半径204.8pxの円の外を切り落とす。素の512px座標のままだと、下端の
-  リボンタイが欠ける
+  アイコンは中心から半径204.8pxの円の外を切り落とす。素の512px座標のままだと、頭の
+  アンテナと下端の足が欠ける
 - 画面の中で使うアイコンは `src/components/brand/app-icon.tsx`（インラインSVG）。26px前後で置く
   場所が多いため、ファイルを `<img>` で読ませない。**絵を変えるときはSVGファイルと
-  このコンポーネントの両方を揃えて直す**（グラデーションとmaskableの余白は、この大きさでは
-  効かないのでコンポーネント側には持たせていない）
+  このコンポーネントの両方を揃えて直す**（グラデーション・編み目の模様・maskableの余白は、
+  この大きさでは効かないのでコンポーネント側には持たせていない）
+- **`app-icon.tsx` では `id` を使わない**（#49）。「書く」画面は返答1件ごとにこのアイコンを
+  描くため、グラデーションを `url(#…)` で参照する書き方にすると、同じidが1ページに何個も出る。
+  ベタ塗りで足りる大きさなので、グラデーションはSVGファイル側にだけ持たせている
 
 ## バージョン表示
 
@@ -223,6 +257,20 @@ Messages APIのSSE（`message_start` → `content_block_delta`×n → `message_s
 渡している履歴（割り込みの注記など）もそのまま読める。
 
 `curl -sN` を `timeout` で切れば「利用者が途中で止めた」経路をそのまま再現できる。
+
+**画面の動き（CSSアニメーション）を確かめるときは、`rsvg-convert` の書き出しを根拠にしない**（#49）。
+librsvgは `transform-box` を解釈しないため、ブラウザでは正しい位置で動く部品が、書き出したPNGでは
+まったく別の場所へ飛ぶ。ヘッドレスChromeは `~/.cache/ms-playwright/chromium_headless_shell-*/` に
+入っており、Playwrightを使わなくても1枚だけなら撮れる。
+
+```bash
+chrome-headless-shell --headless --disable-gpu --no-sandbox --window-size=1060,300 \
+  --screenshot=out.png "file:///<確認用のHTML>"
+```
+
+**撮った瞬間はアニメーションの0秒地点なので、途中の姿は写らない。** `--virtual-time-budget` を
+足してもCSSアニメーションは進まない。見たい時点があるなら、確認用のHTML側で
+`animation-delay: -0.5s` のように負の値を当てて、その姿で止めてから撮る。
 
 **検証用に一時的なページを足して消したら、`rm -rf .next` してから型チェックする。**
 `next dev` が生成する `.next/dev/types/validator.ts` は消したルートを参照したまま残り、

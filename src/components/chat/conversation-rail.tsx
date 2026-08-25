@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus } from "lucide-react";
+import { BarChart3, Plus } from "lucide-react";
 import Link from "next/link";
 
 import { AppIcon } from "@/components/brand/app-icon";
@@ -11,6 +11,10 @@ import type { ConversationSummary } from "./types";
 type Props = {
   conversations: ConversationSummary[];
   activeId: string | null;
+  /** 使用量の画面を開いているか。相談は選ばれていない状態になる。 */
+  isUsageActive: boolean;
+  /** 今月の概算費用（`$1.23` の形）。集計はサーバー側で済ませて文字列で受け取る。 */
+  monthlyCostLabel: string;
   userLabel: string;
   userEmail: string | null;
   appVersion: string;
@@ -23,6 +27,8 @@ type Props = {
 export function ConversationRail({
   conversations,
   activeId,
+  isUsageActive,
+  monthlyCostLabel,
   userLabel,
   userEmail,
   appVersion,
@@ -85,6 +91,23 @@ export function ConversationRail({
       </nav>
 
       <div className="border-t border-border">
+        {/* APIの消費量（#51）。金額だけを一覧に出し、内訳は専用の画面で見る。 */}
+        <Link
+          href="/usage"
+          onClick={onNavigate}
+          aria-current={isUsageActive ? "page" : undefined}
+          className={cn(
+            "mx-2.5 mt-2 flex items-center justify-between gap-2 rounded-[9px] px-2.5 py-2 text-[0.8125rem] transition-colors hover:bg-rail-active focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            isUsageActive && "bg-rail-active shadow-[inset_2px_0_0_var(--accent)]",
+          )}
+        >
+          <span className="flex items-center gap-1.5">
+            <BarChart3 className="size-3.5 text-muted" aria-hidden="true" />
+            使用量
+          </span>
+          <span className="tabular-nums font-bold text-accent">今月 {monthlyCostLabel}</span>
+        </Link>
+
         <div className="flex items-center justify-between gap-2.5 px-4 pb-2 pt-3">
           <div className="min-w-0">
             <b className="block text-[0.8125rem] font-medium">{userLabel}</b>

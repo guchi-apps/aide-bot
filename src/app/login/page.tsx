@@ -45,7 +45,7 @@ export default async function LoginPage({
         {/* ハイドレーション前でも押せるよう、素のリンクでサーバー側の導線へ渡す。 */}
         <a
           href={`/auth/signin?next=${encodeURIComponent(next)}`}
-          className="mt-8 flex h-12 w-full items-center justify-center rounded-lg bg-accent font-medium text-white transition-opacity hover:opacity-90"
+          className="mt-8 flex h-12 w-full items-center justify-center rounded-lg bg-accent font-medium text-accent-foreground transition-opacity hover:opacity-90"
         >
           Googleでログイン
         </a>

@@ -22,8 +22,9 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  conversations Conversation[]
-  apiUsages     ApiUsage[]
+  conversations  Conversation[]
+  apiUsages      ApiUsage[]
+  mcpConnections McpConnection[]
 }
 
 // --- チャット ---
@@ -62,13 +63,13 @@ model Message {
   conversationId String
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
-  role MessageRole
+  role        MessageRole
   // 返答はMarkdownで数千字になりうるため、VARCHARではなくTEXTにする。
-  content String @db.Text
+  content     String      @db.Text
   // 利用者に割り込まれて途中で終わった返答（#48）。次の往復でモデルへ「言い切っていない」
   // ことを伝えるために持つ。本文へ注記を混ぜないのは、保存した文面をそのまま画面へ出すため。
   // USERの発言では常にfalse。
-  interrupted Boolean @default(false)
+  interrupted Boolean     @default(false)
 
   createdAt DateTime @default(now())
 
@@ -97,8 +98,8 @@ model ApiUsage {
   // 過去ぶんの概算費用まで新しい単価で計算し直されてしまう。
   model String @db.VarChar(64)
 
-  inputTokens  Int
-  outputTokens Int
+  inputTokens      Int
+  outputTokens     Int
   // プロンプトキャッシュ（いまは使っていないため常に0。単価が入力と違うので別に持つ）。
   cacheWriteTokens Int @default(0)
   cacheReadTokens  Int @default(0)
@@ -107,4 +108,58 @@ model ApiUsage {
 
   // 画面は「自分のぶんを期間で切る」形でしか引かない。
   @@index([userId, createdAt])
+}
+
+// --- 外部サービスとの接続（#46） ---
+// 秘書がAIDEやNotionのMCPサーバーを使えるようにするための接続先。1利用者につき複数持てる。
+//
+// ツールの実行はAnthropic側（Messages APIのMCPコネクタ）が行うため、aide-botが持つのは
+// 「どこへ・どの資格情報で繋ぐか」だけ。MCPクライアントの実装もセッションの保持も無い。
+
+model McpConnection {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// 画面に出す名前。
+  label String @db.VarChar(60)
+  /// Messages APIへ渡すサーバー名。返答の中で「どのサーバーのツールか」を指す識別子にもなる。
+  slug  String @db.VarChar(40)
+  /// MCPサーバーのURL（末尾の `/mcp` まで含む）。
+  url   String @db.VarChar(500)
+
+  /// 外すと、相談のときにこの接続を渡さなくなる。消さずに一時的に切るための列。
+  enabled Boolean @default(true)
+
+  // --- OAuth ---
+  // 認可サーバーのエンドポイントは接続したときに一度だけ引き、以後はここを見る。
+  // 毎回ディスカバリを回すと、相手が落ちているだけで既存の接続まで使えなくなる。
+  authorizationEndpoint String? @db.VarChar(500)
+  tokenEndpoint         String? @db.VarChar(500)
+
+  /// 動的クライアント登録（RFC 7591）の結果。公開クライアントなのでsecretは無いことが多い。
+  clientId     String? @db.VarChar(255)
+  clientSecret String? @db.Text
+
+  // トークンは平文で持つ（#46）。同一VPS・利用者1人という前提と、接続先であるAIDE自身が
+  // `data/auth/` に平文で持っていることに合わせた。暗号化するとシークレットが1つ増える。
+  accessToken  String?   @db.Text
+  refreshToken String?   @db.Text
+  /// アクセストークンの期限。この手前で自動的に更新する。
+  expiresAt    DateTime?
+
+  // --- 認可の途中（コールバックで消す） ---
+  // 認可コードを受け取るまでの間だけ値が入る。残っていても害は無いが、繋ぎ直すたび上書きする。
+  pendingState       String? @db.VarChar(64)
+  pendingVerifier    String? @db.VarChar(128)
+  /// 認可を始めたときのredirect_uri。トークン交換で同じ値を送る必要がある。
+  pendingRedirectUri String? @db.VarChar(500)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 同じ利用者の中でslugは重複させない。Messages APIのサーバー名が衝突するため。
+  @@unique([userId, slug])
+  // コールバックはstateだけを手掛かりに引く。
+  @@index([pendingState])
 }

@@ -5,9 +5,10 @@ import { NextResponse } from "next/server";
 import {
   CHAT_MODEL,
   HISTORY_LIMIT,
-  MAX_OUTPUT_TOKENS,
-  SECRETARY_SYSTEM_PROMPT,
   getAnthropicClient,
+  maxOutputTokens,
+  secretarySystemPrompt,
+  type ReplyStyle,
 } from "@/lib/anthropic";
 import { getCurrentUser } from "@/lib/auth-user";
 import { MAX_MESSAGE_LENGTH, buildConversationTitle } from "@/lib/conversation";
@@ -19,6 +20,8 @@ export const dynamic = "force-dynamic";
 type ChatRequestBody = {
   conversationId?: string | null;
   message?: unknown;
+  /** `voice` なら音声モード。返答の形だけが変わり、保存の仕方は同じ（#27）。 */
+  mode?: unknown;
 };
 
 const encoder = new TextEncoder();
@@ -124,6 +127,10 @@ export async function POST(request: Request) {
 
   const promptMessages = toPromptMessages(history.reverse());
 
+  // 音声で聞くかどうかはこの1往復ぶんの都合なので、スレッドには持たせず毎回受け取る。
+  // 同じスレッドを「話す」と「書く」で行き来しても、履歴はそのまま繋がる。
+  const style: ReplyStyle = body.mode === "voice" ? "voice" : "text";
+
   let client: Anthropic;
   try {
     client = getAnthropicClient();
@@ -145,8 +152,8 @@ export async function POST(request: Request) {
         const messageStream = client.messages.stream(
           {
             model: CHAT_MODEL,
-            max_tokens: MAX_OUTPUT_TOKENS,
-            system: SECRETARY_SYSTEM_PROMPT,
+            max_tokens: maxOutputTokens(style),
+            system: secretarySystemPrompt(style),
             messages: promptMessages,
           },
           { signal: request.signal },

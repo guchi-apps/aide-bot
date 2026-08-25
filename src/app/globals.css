@@ -192,3 +192,191 @@ body {
   border: 0;
   border-top: 1px solid var(--border);
 }
+
+/*
+ * 画面中央の「秘書」。状態ごとのキーフレームはTailwindのユーティリティでは書けないため、
+ * .chat-md と同じくここへまとめて置く。大きさは呼ぶ側がwidth/heightで決め、中身は
+ * すべて割合で追従させる（スマホでは大きく、PCではやや小さく置くため）。
+ */
+.orb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.orb-core {
+  position: relative;
+  z-index: 2;
+  width: 62%;
+  height: 62%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 32% 28%,
+    color-mix(in oklab, var(--accent) 35%, white) 0%,
+    var(--accent) 52%,
+    color-mix(in oklab, var(--accent) 72%, black) 100%
+  );
+  box-shadow: 0 0 26px -2px color-mix(in oklab, var(--accent) 55%, transparent);
+}
+
+.orb-halo {
+  position: absolute;
+  inset: 12%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--accent) 26%, transparent) 0%,
+    transparent 68%
+  );
+}
+
+/* 聞き取り中に外へ広がる輪。3つを時間差で出して、途切れずに広がって見せる。 */
+.orb-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in oklab, var(--accent) 55%, transparent);
+  opacity: 0;
+  animation: orb-ripple 2.1s ease-out infinite;
+}
+
+.orb-ring:nth-of-type(2) {
+  animation-delay: 0.7s;
+}
+
+.orb-ring:nth-of-type(3) {
+  animation-delay: 1.4s;
+}
+
+/* 考え中に球の周りだけを回す帯。中心をmaskで抜いて輪にする。 */
+.orb-sweep {
+  position: absolute;
+  inset: 16%;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    color-mix(in oklab, var(--accent) 62%, transparent) 70deg,
+    transparent 150deg
+  );
+  -webkit-mask: radial-gradient(circle, transparent 58%, black 60%);
+  mask: radial-gradient(circle, transparent 58%, black 60%);
+  animation: orb-spin 1.5s linear infinite;
+}
+
+.orb-idle .orb-core {
+  animation: orb-breathe 4.6s ease-in-out infinite;
+}
+
+.orb-idle .orb-halo {
+  opacity: 0.55;
+}
+
+.orb-listening .orb-core {
+  animation: orb-listen 1.15s ease-in-out infinite;
+}
+
+/* 声が届いた直後だけ、ひと回り大きくして反応を返す。 */
+.orb-listening.orb-reacting .orb-core {
+  animation-duration: 0.7s;
+  transform: scale(1.12);
+}
+
+.orb-thinking .orb-core {
+  animation: orb-shrink 1.9s ease-in-out infinite;
+}
+
+.orb-speaking .orb-core {
+  animation: orb-pulse 0.62s ease-in-out infinite;
+}
+
+.orb-speaking .orb-halo {
+  animation: orb-pulse-halo 0.62s ease-in-out infinite;
+}
+
+@keyframes orb-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.07);
+  }
+}
+
+@keyframes orb-listen {
+  0%,
+  100% {
+    transform: scale(1.04);
+  }
+  40% {
+    transform: scale(1.16);
+  }
+  70% {
+    transform: scale(1.09);
+  }
+}
+
+@keyframes orb-shrink {
+  0%,
+  100% {
+    transform: scale(0.8);
+  }
+  50% {
+    transform: scale(0.72);
+  }
+}
+
+@keyframes orb-pulse {
+  0%,
+  100% {
+    transform: scale(1.02);
+  }
+  50% {
+    transform: scale(1.13);
+  }
+}
+
+@keyframes orb-pulse-halo {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+@keyframes orb-ripple {
+  0% {
+    transform: scale(0.62);
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(1.15);
+    opacity: 0;
+  }
+}
+
+@keyframes orb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/*
+ * 動きを減らす設定の端末では、球を止める。状態は文言（「聞いています」等）でも
+ * 出しているため、止めても何が起きているかは分かる。
+ */
+@media (prefers-reduced-motion: reduce) {
+  .orb *,
+  .orb-ring,
+  .orb-sweep {
+    animation: none !important;
+  }
+
+  .orb-ring {
+    opacity: 0.35;
+  }
+}

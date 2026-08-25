@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 
-import { ChatPanel } from "@/components/chat/chat-panel";
+import { ConversationView } from "@/components/chat/conversation-view";
 import { getCurrentUser } from "@/lib/auth-user";
 import { db } from "@/lib/db";
 
@@ -28,5 +28,7 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
     notFound();
   }
 
-  return <ChatPanel conversationId={conversation.id} initialMessages={conversation.messages} />;
+  return (
+    <ConversationView conversationId={conversation.id} initialMessages={conversation.messages} />
+  );
 }

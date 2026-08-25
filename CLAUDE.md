@@ -89,6 +89,38 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 - 入力欄のEnter送信は `event.nativeEvent.isComposing` で必ず弾く。日本語入力の変換確定の
   Enterがそのまま送信になる
 
+## 音声対話（話す / 書く）
+
+**このアプリの本来の使い方は音声**で、文字入力は声を出せない場面と言い直しのために残している（#27）。
+どちらのモードでも同じ `Conversation` へ残り、`POST /api/chat` も共通。既定は「話す」で、
+選んだモードはCookie `aide-bot-talk-mode`（`src/lib/talk-mode.ts`）に持つ。
+
+- **聞き取り・読み上げはブラウザ内蔵のWeb Speech APIだけで行う**（`src/lib/speech/`）。
+  音声を外部へ送らないので追加のAPIキーも実費も無い。対応はChrome / Edge / Safariに限られ、
+  **Firefoxは聞き取りに非対応**。使えない端末には案内を出して「書く」へ寄せる。
+  外部STT/TTSへ寄せる判断をするときは、依存とキーと実費が増えることをIssueで先に確認する
+- **`SpeechRecognition` の型はTypeScriptの標準libに無い。** `src/types/speech.d.ts` に使う範囲
+  だけを宣言してある。接頭辞なしと `webkit` 付きの両方を見ること（Safariは `webkit` 付きのみ）
+- **iOSは「画面を触った流れ」で一度 `speak()` を通さないと、以降の読み上げが無音になる。**
+  マイクを押した時点で `primeSpeechSynthesis()` を呼び、その操作を許可として使っている
+- **読み上げ中にマイクを開かない。** 自分の声を聞き返して往復が止まらなくなる。
+  ひと往復は idle → listening → thinking → speaking → idle で、次の状態を決めるのは
+  読み上げの完了（`SpeechReader` の `onDrain`）
+- **返答は届いた端から文の切れ目で読み上げる。** 全部揃うまで待つと、字幕は出ているのに
+  声が始まらない時間ができる。1回の `speak()` を長くしすぎない（Chromeが途中で打ち切る）
+- 音声モードは `mode: "voice"` を送り、`VOICE_STYLE_INSTRUCTION` と `VOICE_MAX_OUTPUT_TOKENS`
+  （1200）が効く。**聞くだけの返答は戻って読み直せない**ため、文字のときと同じ上限にしない
+- **localStorageの値をuseStateの初期値やuseEffectで入れない。** ESLintの
+  `react-hooks/set-state-in-effect` に掛かり、ハイドレーションもずれる。
+  `useSyncExternalStore`（`src/lib/speech/voice-settings.ts`）で外部ストアとして扱う
+- **マイクはHTTPS（またはlocalhost）でしか開けない**（secure context 限定）。
+  **`sslip.io` はスマホ実機での音声確認に使えない**——http でしか開けないため、画面は出るのに
+  マイクが起動しない（`scripts/dev.sh` は `next dev` を素で起動しTLSを張らない）。
+  実機で音声を確かめるときは `tailscale serve --bg --https=443 <ポート>` でHTTPSを付け、
+  `https://subpc.<tailnet>.ts.net/` を開く。`allowedDevOrigins` には `**.ts.net` が入っている。
+  **サブPCのTailnetはHTTPS証明書が未有効**（`tailscale status --json` の `CertDomains` が
+  `null`）なので、初回は管理画面での有効化が要る（#32）
+
 ## アイコン
 
 - **アイコンの正は `public/icon.svg` の1枚だけ。** `public/icon-192.png`・`public/icon-512.png`・

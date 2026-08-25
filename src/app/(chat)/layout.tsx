@@ -1,9 +1,12 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { ChatShell } from "@/components/chat/chat-shell";
+import { TalkModeProvider } from "@/components/chat/talk-mode-context";
 import { getCurrentUser } from "@/lib/auth-user";
 import { conversationGroupLabel } from "@/lib/conversation";
 import { db } from "@/lib/db";
+import { TALK_MODE_COOKIE, normalizeTalkMode } from "@/lib/talk-mode";
 
 // 一覧に出す件数の上限。これより古いものは、いまのところ辿る導線を持たない。
 const CONVERSATION_LIMIT = 100;
@@ -26,17 +29,23 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
 
   const now = new Date();
 
+  // 最初の描画からモードを確定させたいのでCookieから読む。クライアント側で決めると、
+  // 「書く」を選んでいる人にも一瞬だけ音声画面が出る。
+  const mode = normalizeTalkMode((await cookies()).get(TALK_MODE_COOKIE)?.value);
+
   return (
-    <ChatShell
-      conversations={conversations.map((conversation) => ({
-        id: conversation.id,
-        title: conversation.title,
-        group: conversationGroupLabel(conversation.updatedAt, now),
-      }))}
-      userLabel={user.name ?? user.email ?? "ログイン中"}
-      userEmail={user.email}
-    >
-      {children}
-    </ChatShell>
+    <TalkModeProvider initialMode={mode}>
+      <ChatShell
+        conversations={conversations.map((conversation) => ({
+          id: conversation.id,
+          title: conversation.title,
+          group: conversationGroupLabel(conversation.updatedAt, now),
+        }))}
+        userLabel={user.name ?? user.email ?? "ログイン中"}
+        userEmail={user.email}
+      >
+        {children}
+      </ChatShell>
+    </TalkModeProvider>
   );
 }

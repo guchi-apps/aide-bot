@@ -151,6 +151,11 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   読み上げの完了（`SpeechReader` の `onDrain`）
 - **返答は届いた端から文の切れ目で読み上げる。** 全部揃うまで待つと、字幕は出ているのに
   声が始まらない時間ができる。1回の `speak()` を長くしすぎない（Chromeが途中で打ち切る）
+- **画面の中央にいるロボットは `src/components/voice/robot.tsx`、動きは `globals.css` の `.bot` 系**
+  （#49）。待つ・聞く・考える・話すの4状態を1つの値から出し分ける。**部品を動かすときは
+  `transform-box: view-box` を付けてから `transform-origin` をviewBoxの座標で書く。**
+  既定（`fill-box`）だと基準が部品ごとの外接矩形になり、目や口が自分の中心ではないところを
+  軸に動く（`librsvg` はこの指定を解釈しないので、見た目の確認はブラウザで行う）
 - 音声モードは `mode: "voice"` を送り、`VOICE_STYLE_INSTRUCTION` と `VOICE_MAX_OUTPUT_TOKENS`
   （1200）が効く。**聞くだけの返答は戻って読み直せない**ため、文字のときと同じ上限にしない
 - **localStorageの値をuseStateの初期値やuseEffectで入れない。** ESLintの
@@ -170,14 +175,17 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   `public/apple-icon.png`・`src/app/favicon.ico` はすべてそこからの書き出し物で、
   `scripts/build-icons.sh`（`rsvg-convert` と ImageMagick を使う）で作り直す。
   PNGを直接編集しても、次にスクリプトを流した時点で戻る
-- **`public/icon.svg` の絵は `<g transform="translate(38.4 18.4) scale(0.85)">` の中に置く。**
+- **`public/icon.svg` の絵は `<g transform="translate(38.4 24) scale(0.85)">` の中に置く。**
   `manifest.ts` は512pxを `purpose: "maskable"` としても宣言しており、Androidのアダプティブ
-  アイコンは中心から半径204.8pxの円の外を切り落とす。素の512px座標のままだと、下端の
-  リボンタイが欠ける
+  アイコンは中心から半径204.8pxの円の外を切り落とす。素の512px座標のままだと、頭の
+  アンテナと下端の足が欠ける
 - 画面の中で使うアイコンは `src/components/brand/app-icon.tsx`（インラインSVG）。26px前後で置く
   場所が多いため、ファイルを `<img>` で読ませない。**絵を変えるときはSVGファイルと
-  このコンポーネントの両方を揃えて直す**（グラデーションとmaskableの余白は、この大きさでは
-  効かないのでコンポーネント側には持たせていない）
+  このコンポーネントの両方を揃えて直す**（グラデーション・編み目の模様・maskableの余白は、
+  この大きさでは効かないのでコンポーネント側には持たせていない）
+- **`app-icon.tsx` では `id` を使わない**（#49）。「書く」画面は返答1件ごとにこのアイコンを
+  描くため、グラデーションを `url(#…)` で参照する書き方にすると、同じidが1ページに何個も出る。
+  ベタ塗りで足りる大きさなので、グラデーションはSVGファイル側にだけ持たせている
 
 ## バージョン表示
 
@@ -210,6 +218,20 @@ Messages APIのSSE（`message_start` → `content_block_delta`×n → `message_s
 渡している履歴（割り込みの注記など）もそのまま読める。
 
 `curl -sN` を `timeout` で切れば「利用者が途中で止めた」経路をそのまま再現できる。
+
+**画面の動き（CSSアニメーション）を確かめるときは、`rsvg-convert` の書き出しを根拠にしない**（#49）。
+librsvgは `transform-box` を解釈しないため、ブラウザでは正しい位置で動く部品が、書き出したPNGでは
+まったく別の場所へ飛ぶ。ヘッドレスChromeは `~/.cache/ms-playwright/chromium_headless_shell-*/` に
+入っており、Playwrightを使わなくても1枚だけなら撮れる。
+
+```bash
+chrome-headless-shell --headless --disable-gpu --no-sandbox --window-size=1060,300 \
+  --screenshot=out.png "file:///<確認用のHTML>"
+```
+
+**撮った瞬間はアニメーションの0秒地点なので、途中の姿は写らない。** `--virtual-time-budget` を
+足してもCSSアニメーションは進まない。見たい時点があるなら、確認用のHTML側で
+`animation-delay: -0.5s` のように負の値を当てて、その姿で止めてから撮る。
 
 **検証用に一時的なページを足して消したら、`rm -rf .next` してから型チェックする。**
 `next dev` が生成する `.next/dev/types/validator.ts` は消したルートを参照したまま残り、

@@ -183,6 +183,18 @@ Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として
   音声を外部へ送らないので追加のAPIキーも実費も無い。対応はChrome / Edge / Safariに限られ、
   **Firefoxは聞き取りに非対応**。使えない端末には案内を出して「書く」へ寄せる。
   外部STTへ寄せる判断をするときは、依存とキーと実費が増えることをIssueで先に確認する
+- **1回の聞き取りは、話し始めないまま数秒経つと `no-speech` で勝手に終わる**（#67）。
+  そこで待機へ戻すと、「続けて話す」で自動的に開いたマイクが、利用者が話し出す前に
+  閉じたきりになる——**画面は「待っています」のままで、話しかけても何も起きない。**
+  `no-speech` は文言を出さない扱いなので、エラーの手掛かりも残らない。何も聞き取れないまま
+  閉じたぶんは `VoicePanel` が開き直す（`SILENT_RESTART_LIMIT` 回まで）。
+  **開き直さないのは、利用者自身が閉じたとき・文言付きのエラーで終わったとき**
+  （マイクが許可されていない等。開き直しても同じところで失敗する）
+- **新しい相談の1通目では、`/c/<ID>` への移動でこの画面が作り直される**（#67）。
+  ルートをまたぐ移動なのでReactは `VoicePanel` を作り直し、**送信の後も続いている読み上げと、
+  「続けて話す」で開いたばかりのマイクが巻き添えで畳まれる。** `useChatStream` の
+  `deferNavigation` で移動を預かり、待機に入ってから `flushNavigation()` で移る。
+  **「書く」へ切り替えるときも消化する**——`/` のままだと新しい相談として開いてしまう
 - **読み上げだけは外へ出る経路がある。** 声にVOICEVOXの話者（ずんだもん等）を選び、かつ
   **自前のVOICEVOX ENGINEが設定されていない（または届かない）ときに限り**、返答の文面が
   WEB版VOICEVOX API（`api.tts.quest`。VOICEVOX公式ではない第三者のサービス）へ
@@ -359,6 +371,19 @@ Messages APIのSSE（`message_start` → `content_block_delta`×n → `message_s
 渡している履歴（割り込みの注記など）もそのまま読める。
 
 `curl -sN` を `timeout` で切れば「利用者が途中で止めた」経路をそのまま再現できる。
+
+### 聞き取りをマイク無しで確かめる
+
+**`window.SpeechRecognition` を差し替えれば、マイクの無いサブPCでも「話す」の往復を丸ごと
+動かせる**（#67）。ヘッドレスChromeを `--remote-debugging-port` 付きで起こし、CDPの
+`Page.addScriptToEvaluateOnNewDocument` で偽の `SpeechRecognition`（`start()` の回数を数え、
+`no-speech` → `end` を返すだけ）を仕込んでから開く。開発用ログインのCookieは
+`Network.setCookie` で渡せる。声の設定はlocalStorage（`aide-bot-voice-settings`）に
+先に書いておけば効く。
+
+`[aria-live="polite"]` の文言（「待っています」「聞いています」…）と `start()` の回数を
+一定間隔で読むだけで、**開き直しているか・どこで畳まれたかが分かる。**
+Playwrightは要らない（Node 22以降の `WebSocket` でCDPへ直接繋げる）。
 
 **画面の動き（CSSアニメーション）を確かめるときは、`rsvg-convert` の書き出しを根拠にしない**（#49）。
 librsvgは `transform-box` を解釈しないため、ブラウザでは正しい位置で動く部品が、書き出したPNGでは

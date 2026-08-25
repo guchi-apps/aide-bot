@@ -64,10 +64,14 @@ function describeError(code: string): string | null {
 }
 
 /**
- * 聞き取りを1回ぶん始める。対応していない場合は `null`。
+ * 聞き取りを1回ぶん始める。始められなかった場合は `null`。
  *
  * `continuous` を false にしているのは、黙ったところで自動的に終わらせるため。true にすると
  * 生活音を拾い続けて終わらず、いつ送られるのかが利用者から分からなくなる。
+ *
+ * **`null` を返したときは `onError` も `onEnd` も呼ばない。** 直前の聞き取りがまだ畳まれて
+ * いないだけのこともあり、そこで赤字を出して終わらせると、少し待てば開けた場面まで失敗に
+ * なる。開き直すか諦めるかは呼ぶ側が決める（#67）。
  */
 export function startRecognition(handlers: RecognitionHandlers): RecognitionHandle | null {
   const Constructor = getConstructor();
@@ -101,8 +105,6 @@ export function startRecognition(handlers: RecognitionHandlers): RecognitionHand
     recognition.start();
   } catch {
     // 直前の聞き取りがまだ終わっていない場合にここへ来る。二重には始めない。
-    handlers.onError("聞き取りを開始できませんでした。少し待ってからもう一度お試しください。");
-    handlers.onEnd();
     return null;
   }
 

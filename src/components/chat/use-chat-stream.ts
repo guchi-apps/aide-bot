@@ -28,6 +28,14 @@ export type SendOptions = {
   onTool?: (activity: { server: string; tool: string }) => void;
   /** 利用者へ出す文言。中断のときは呼ばれない。 */
   onError: (message: string) => void;
+  /**
+   * 新しい相談で `/c/<ID>` へ移るのを、呼ぶ側が `flushNavigation()` を呼ぶまで遅らせる（#67）。
+   *
+   * この移動はルートをまたぐため、画面（`VoicePanel` など）が作り直される。「話す」では
+   * 送信を終えた後も読み上げと聞き取りが続いているので、途中で作り直されると読み上げが
+   * 途切れ、開いたばかりのマイクごと畳まれて「待っています」へ戻ってしまう。
+   */
+  deferNavigation?: boolean;
 };
 
 export type SendResult = {
@@ -48,6 +56,9 @@ export function useChatStream(conversationId: string | null) {
   // 一度受け取ったIDを覚えておき、propsが追いつくまではこちらを使う（#48）。
   const startedIdRef = useRef<string | null>(null);
 
+  // `deferNavigation` で遅らせている移動先。`flushNavigation()` で消化する。
+  const pendingConversationIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     startedIdRef.current = null;
   }, [conversationId]);
@@ -60,6 +71,20 @@ export function useChatStream(conversationId: string | null) {
   const abort = useCallback(() => {
     abortRef.current?.abort();
   }, []);
+
+  /**
+   * 遅らせておいた `/c/<ID>` への移動を行う（#67）。
+   *
+   * 呼ぶ側が「いま画面を作り直されても失うものが無い」と判断した時点で呼ぶ。遅らせて
+   * いない送信では何もしない。
+   */
+  const flushNavigation = useCallback(() => {
+    const pendingId = pendingConversationIdRef.current;
+    if (!pendingId) return;
+
+    pendingConversationIdRef.current = null;
+    router.replace(`/c/${pendingId}`);
+  }, [router]);
 
   const send = useCallback(
     async (message: string, options: SendOptions): Promise<SendResult> => {
@@ -135,7 +160,10 @@ export function useChatStream(conversationId: string | null) {
 
         if (conversationId === null && createdConversationId !== null) {
           // 新しく作られたスレッドのURLへ移す。同じ内容がDBにあるので表示は変わらない。
-          router.replace(`/c/${createdConversationId}`);
+          // ただしルートをまたぐ移動なので画面は作り直される。まだ続きがある画面では
+          // `flushNavigation()` まで待たせる（#67）。
+          if (options.deferNavigation) pendingConversationIdRef.current = createdConversationId;
+          else router.replace(`/c/${createdConversationId}`);
         }
         // 一覧の並び順とタイトルを取り直す。
         router.refresh();
@@ -146,5 +174,5 @@ export function useChatStream(conversationId: string | null) {
     [conversationId, router],
   );
 
-  return { send, abort };
+  return { send, abort, flushNavigation };
 }

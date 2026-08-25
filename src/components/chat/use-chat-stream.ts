@@ -122,7 +122,9 @@ export function useChatStream(conversationId: string | null) {
           options.onError(caught instanceof Error ? caught.message : "送信できませんでした。");
         }
       } finally {
-        abortRef.current = null;
+        // 自分のcontrollerのときだけ外す。割り込みで往復が重なった場合に無条件で外すと、
+        // 後から始まった往復の「止める」が効かなくなる（#48）。
+        if (abortRef.current === controller) abortRef.current = null;
 
         if (conversationId === null && createdConversationId !== null) {
           // 新しく作られたスレッドのURLへ移す。同じ内容がDBにあるので表示は変わらない。

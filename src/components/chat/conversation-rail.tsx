@@ -3,6 +3,7 @@
 import { Plus } from "lucide-react";
 import Link from "next/link";
 
+import { AppIcon } from "@/components/brand/app-icon";
 import { cn } from "@/lib/utils";
 
 import type { ConversationSummary } from "./types";
@@ -31,9 +32,7 @@ export function ConversationRail({
     <div className="flex h-full min-h-0 flex-col bg-rail">
       <div className="flex flex-col gap-3.5 px-4 pb-3.5 pt-4">
         <div className="flex items-center gap-2.5 text-[0.9375rem] font-semibold">
-          <span className="grid size-6 place-items-center rounded-lg bg-accent text-xs font-bold text-accent-foreground">
-            秘
-          </span>
+          <AppIcon className="size-6" />
           秘書アプリ
         </div>
 

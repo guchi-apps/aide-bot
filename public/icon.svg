@@ -1,13 +1,35 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="秘書アプリ">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#1e3a8a"/>
-      <stop offset="1" stop-color="#0f766e"/>
+      <stop offset="0" stop-color="#3ddbc6"/>
+      <stop offset="1" stop-color="#0d9488"/>
     </linearGradient>
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <path d="M136 128h240a40 40 0 0 1 40 40v144a40 40 0 0 1-40 40H248l-72 60v-60h-40a40 40 0 0 1-40-40V168a40 40 0 0 1 40-40z" fill="#f8fafc"/>
-  <circle cx="200" cy="240" r="18" fill="#1e3a8a"/>
-  <circle cx="256" cy="240" r="18" fill="#1e3a8a"/>
-  <circle cx="312" cy="240" r="18" fill="#1e3a8a"/>
+  <!--
+    絵の本体は maskable（Androidのアダプティブアイコン）の安全領域に収める。
+    中心から半径204.8pxの円の外は切り落とされうるため、0.85倍して20px上へ寄せてある。
+    座標を直接いじらず、この1つのtransformで寄せているので、絵を描き直すときは
+    512x512の素の座標で描いてからここへ入れ直せばよい。
+  -->
+  <g transform="translate(38.4 18.4) scale(0.85)">
+    <!-- 耳 -->
+    <path d="M152 222 L167 104 L253 175 Z" fill="#fff6ea"/>
+    <path d="M360 222 L345 104 L259 175 Z" fill="#fff6ea"/>
+    <path d="M180 197 L188 143 L227 180 Z" fill="#f6a09a"/>
+    <path d="M332 197 L324 143 L285 180 Z" fill="#f6a09a"/>
+    <!-- 顔 -->
+    <circle cx="256" cy="284" r="132" fill="#fff6ea"/>
+    <circle cx="163" cy="322" r="21" fill="#f6a09a"/>
+    <circle cx="349" cy="322" r="21" fill="#f6a09a"/>
+    <ellipse cx="205" cy="272" rx="16" ry="20" fill="#12403c"/>
+    <ellipse cx="307" cy="272" rx="16" ry="20" fill="#12403c"/>
+    <circle cx="211" cy="265" r="5" fill="#fff6ea"/>
+    <circle cx="313" cy="265" r="5" fill="#fff6ea"/>
+    <path d="M232 320 q12 19 24 0 q12 19 24 0" fill="none" stroke="#12403c" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- リボンタイ -->
+    <path d="M196 410 L247 444 L196 478 Z" fill="#e8695c"/>
+    <path d="M316 410 L265 444 L316 478 Z" fill="#e8695c"/>
+    <circle cx="256" cy="444" r="18" fill="#cf5346"/>
+  </g>
 </svg>

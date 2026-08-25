@@ -3,6 +3,7 @@
 import { ArrowUp, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { AppIcon } from "@/components/brand/app-icon";
 import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
 import { cn } from "@/lib/utils";
 
@@ -253,14 +254,7 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
 }
 
 function SecretaryAvatar() {
-  return (
-    <span
-      aria-hidden="true"
-      className="mt-0.5 grid size-[26px] shrink-0 place-items-center rounded-full bg-accent text-[0.6875rem] font-bold text-accent-foreground"
-    >
-      秘
-    </span>
-  );
+  return <AppIcon className="mt-0.5 size-[26px] shrink-0" />;
 }
 
 function SecretaryLabel() {

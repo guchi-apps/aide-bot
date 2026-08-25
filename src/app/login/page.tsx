@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { AppIcon } from "@/components/brand/app-icon";
 import { isDevLoginEnabled } from "@/lib/ci-auth-bypass";
 import { safeInternalPath } from "@/lib/safe-path";
 
@@ -25,7 +26,9 @@ export default async function LoginPage({
   return (
     <main className="grid min-h-dvh place-items-center px-6 py-12">
       <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 shadow-sm">
-        <h1 className="text-xl font-semibold">秘書アプリ</h1>
+        {/* svgは既定でinline。blockにしないと下に行の余白が入り、見出しとの間隔がずれる。 */}
+        <AppIcon className="block size-13" />
+        <h1 className="mt-4 text-xl font-semibold">秘書アプリ</h1>
         <p className="mt-2 text-sm text-muted">
           NotionやAIDEを参照して、あなたのプライベートを補佐します。
         </p>

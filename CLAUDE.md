@@ -95,10 +95,26 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 どちらのモードでも同じ `Conversation` へ残り、`POST /api/chat` も共通。既定は「話す」で、
 選んだモードはCookie `aide-bot-talk-mode`（`src/lib/talk-mode.ts`）に持つ。
 
-- **聞き取り・読み上げはブラウザ内蔵のWeb Speech APIだけで行う**（`src/lib/speech/`）。
+- **聞き取りはブラウザ内蔵のWeb Speech APIだけで行う**（`src/lib/speech/`）。
   音声を外部へ送らないので追加のAPIキーも実費も無い。対応はChrome / Edge / Safariに限られ、
   **Firefoxは聞き取りに非対応**。使えない端末には案内を出して「書く」へ寄せる。
-  外部STT/TTSへ寄せる判断をするときは、依存とキーと実費が増えることをIssueで先に確認する
+  外部STTへ寄せる判断をするときは、依存とキーと実費が増えることをIssueで先に確認する
+- **読み上げだけは外へ出る経路がある。** 声にVOICEVOXの話者（ずんだもん等）を選んだときに限り、
+  返答の文面がWEB版VOICEVOX API（`api.tts.quest`。VOICEVOX公式ではない第三者のサービス）へ
+  送られる（#41、`src/lib/speech/voicevox.ts`）。**既定は端末内蔵の声のまま**にしてあり、
+  APIキー・依存パッケージ・サーバー側のルートはいずれも増やしていない（CORSが開いているので
+  ブラウザから直接呼ぶ）。話者を増減させるときは `VOICEVOX_SPEAKERS` を直す。
+  一覧を返すエンドポイントは公開されていないため、IDと名前は合成の応答（`speakerName`）で確かめる
+- **VOICEVOXはキー無しだと5秒に1リクエスト。** 超えると `retryAfter` 付きで断られるため、
+  内蔵の声のように文ごとへ刻めない。返答が出そろってから1回だけ合成へ出し、
+  合成しながら流れてくる `mp3StreamingUrl` を `<audio>` で鳴らす。
+  **断られたことは HTTP 429 で返るが、待つ秒数は本文にしか入っていない。**
+  ステータスだけで例外にすると、待てば通る場合まで失敗になる
+- **合成や再生に失敗したら端末内蔵の声へ落とす**（`VoicevoxReader`）。外部サービスが混んでいる
+  だけで秘書が黙り込むのを防ぐため。鳴り始めた後で切れたぶんは読み直さない
+- **`<audio>` は1つを使い回す。** iOSは「画面を触った流れ」で一度 `play()` を通した要素しか
+  後から鳴らせない。マイクを押した時点で `primeVoicevoxAudio()` を呼び、その要素の `src` を
+  差し替えて使う（内蔵の声の `primeSpeechSynthesis()` と同じ考え方）
 - **`SpeechRecognition` の型はTypeScriptの標準libに無い。** `src/types/speech.d.ts` に使う範囲
   だけを宣言してある。接頭辞なしと `webkit` 付きの両方を見ること（Safariは `webkit` 付きのみ）
 - **iOSは「画面を触った流れ」で一度 `speak()` を通さないと、以降の読み上げが無音になる。**

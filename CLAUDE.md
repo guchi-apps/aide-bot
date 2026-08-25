@@ -28,6 +28,7 @@ GitHub変数 `vars.PORT` は使わない。マニフェストへ戻さないこ�
 
 ```
 src/app/          画面とRoute Handler（App Router）
+src/components/   画面のUIコンポーネント（機能ごとのディレクトリに分ける）
 src/lib/          Supabaseクライアント・Prismaクライアント・共通ユーティリティ
 src/proxy.ts      Next.js 16のミドルウェア。全リクエストのセッション検証を担う
 prisma/           スキーマとマイグレーション
@@ -49,6 +50,92 @@ scripts/          開発・デプロイ補助スクリプト
   認可URLを組み立てて302）、ログアウトはフォームのPOSTで `/auth/signout`。
   ハイドレーション前でも押せるようにするため
 
+### 開発用ログイン（Cookieバイパス）
+
+**エージェントは対話的なOAuthを完了できないため、ログイン後の画面はこの導線からしか見られない。**
+判定は `src/lib/ci-auth-bypass.ts` に閉じてあり、`src/lib/supabase/middleware.ts` と
+`src/lib/auth-user.ts` の**両方**が同じ判定を行う（middlewareだけ通してもデータが引けない）。
+
+```bash
+pnpm db:seed:dev   # ダミーユーザーを投入し CI_LOGIN_BYPASS_SECRET を .env.local へ生成する
+pnpm dev           # 生成した値は再起動しないと効かない
+curl -s -c /tmp/cookies.txt -o /dev/null -w '%{http_code} -> %{redirect_url}\n' \
+  -X POST http://localhost:<ポート>/api/dev/login          # 303 -> /
+curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<ポート>/   # 200
+```
+
+- **本番で有効にならないことを二重に塞いでいる。** `NODE_ENV=production` での無効化と、
+  `CI_LOGIN_BYPASS_SECRET` 未設定での無効化。**片方だけ緩めない**
+- ダミーユーザーの `supabaseUserId` は `ci-screenshot-bot`。値は `src/lib/ci-auth-bypass.ts` と
+  `scripts/seed-ci-db.mjs` に二重に持っている（後者はプレーンJSでTSをimportできない）。
+  **片方だけ変えると、ログインは通るのに画面が `/login` へ戻り続ける**
+- **画面に出るモデルを追加したIssueは、同じPRで `scripts/seed-ci-db.mjs` へダミーデータも足す。**
+  認証を抜けても開発DBが空なら画面は空のままで検証にならない
+- シークレットの実値はコミット・PR本文・Issueコメント・ログのいずれにも書かない
+
+## チャット（相談）
+
+- 相談は話題ごとの `Conversation` に分ける。**対話相手は常に同じ「秘書」1人**で、
+  相手を選ぶ・切り替える導線は作らない。スレッドは相手の分け目ではなく話題の分け目（#24）
+- 返答の生成は `POST /api/chat`。`src/lib/anthropic.ts` の `CHAT_MODEL`（`claude-opus-5`）を
+  Messages APIのストリーミングで叩き、Server-Sent Eventsで逐次返す
+- **`ANTHROPIC_API_KEY` はモジュールの読み込み時に検証しない。** ビルド時にはこの値が無く
+  （CIもActions上のビルドも持たない）、importの時点で投げると `next build` が落ちる。
+  `getAnthropicClient()` の中で見る
+- 履歴は毎回まるごと送り直すため、`HISTORY_LIMIT`（直近30発言）で頭を切る。上限を外すと
+  長いスレッドほど1往復の入力トークンが際限なく伸びる
+- **`Conversation.updatedAt` は発言を足しても動かない。** 一覧の並び順はこの列だけを見ている
+  ので、発言を保存するときは同じトランザクションで `conversation.update` も呼ぶ
+- 入力欄のEnter送信は `event.nativeEvent.isComposing` で必ず弾く。日本語入力の変換確定の
+  Enterがそのまま送信になる
+
+## 音声対話（話す / 書く）
+
+**このアプリの本来の使い方は音声**で、文字入力は声を出せない場面と言い直しのために残している（#27）。
+どちらのモードでも同じ `Conversation` へ残り、`POST /api/chat` も共通。既定は「話す」で、
+選んだモードはCookie `aide-bot-talk-mode`（`src/lib/talk-mode.ts`）に持つ。
+
+- **聞き取り・読み上げはブラウザ内蔵のWeb Speech APIだけで行う**（`src/lib/speech/`）。
+  音声を外部へ送らないので追加のAPIキーも実費も無い。対応はChrome / Edge / Safariに限られ、
+  **Firefoxは聞き取りに非対応**。使えない端末には案内を出して「書く」へ寄せる。
+  外部STT/TTSへ寄せる判断をするときは、依存とキーと実費が増えることをIssueで先に確認する
+- **`SpeechRecognition` の型はTypeScriptの標準libに無い。** `src/types/speech.d.ts` に使う範囲
+  だけを宣言してある。接頭辞なしと `webkit` 付きの両方を見ること（Safariは `webkit` 付きのみ）
+- **iOSは「画面を触った流れ」で一度 `speak()` を通さないと、以降の読み上げが無音になる。**
+  マイクを押した時点で `primeSpeechSynthesis()` を呼び、その操作を許可として使っている
+- **読み上げ中にマイクを開かない。** 自分の声を聞き返して往復が止まらなくなる。
+  ひと往復は idle → listening → thinking → speaking → idle で、次の状態を決めるのは
+  読み上げの完了（`SpeechReader` の `onDrain`）
+- **返答は届いた端から文の切れ目で読み上げる。** 全部揃うまで待つと、字幕は出ているのに
+  声が始まらない時間ができる。1回の `speak()` を長くしすぎない（Chromeが途中で打ち切る）
+- 音声モードは `mode: "voice"` を送り、`VOICE_STYLE_INSTRUCTION` と `VOICE_MAX_OUTPUT_TOKENS`
+  （1200）が効く。**聞くだけの返答は戻って読み直せない**ため、文字のときと同じ上限にしない
+- **localStorageの値をuseStateの初期値やuseEffectで入れない。** ESLintの
+  `react-hooks/set-state-in-effect` に掛かり、ハイドレーションもずれる。
+  `useSyncExternalStore`（`src/lib/speech/voice-settings.ts`）で外部ストアとして扱う
+- **マイクはHTTPS（またはlocalhost）でしか開けない**（secure context 限定）。
+  **`sslip.io` はスマホ実機での音声確認に使えない**——http でしか開けないため、画面は出るのに
+  マイクが起動しない（`scripts/dev.sh` は `next dev` を素で起動しTLSを張らない）。
+  実機で音声を確かめるときは `tailscale serve --bg --https=443 <ポート>` でHTTPSを付け、
+  `https://subpc.<tailnet>.ts.net/` を開く。`allowedDevOrigins` には `**.ts.net` が入っている。
+  **サブPCのTailnetはHTTPS証明書が未有効**（`tailscale status --json` の `CertDomains` が
+  `null`）なので、初回は管理画面での有効化が要る（#32）
+
+## アイコン
+
+- **アイコンの正は `public/icon.svg` の1枚だけ。** `public/icon-192.png`・`public/icon-512.png`・
+  `public/apple-icon.png`・`src/app/favicon.ico` はすべてそこからの書き出し物で、
+  `scripts/build-icons.sh`（`rsvg-convert` と ImageMagick を使う）で作り直す。
+  PNGを直接編集しても、次にスクリプトを流した時点で戻る
+- **`public/icon.svg` の絵は `<g transform="translate(38.4 18.4) scale(0.85)">` の中に置く。**
+  `manifest.ts` は512pxを `purpose: "maskable"` としても宣言しており、Androidのアダプティブ
+  アイコンは中心から半径204.8pxの円の外を切り落とす。素の512px座標のままだと、下端の
+  リボンタイが欠ける
+- 画面の中で使うアイコンは `src/components/brand/app-icon.tsx`（インラインSVG）。26px前後で置く
+  場所が多いため、ファイルを `<img>` で読ませない。**絵を変えるときはSVGファイルと
+  このコンポーネントの両方を揃えて直す**（グラデーションとmaskableの余白は、この大きさでは
+  効かないのでコンポーネント側には持たせていない）
+
 ## 検証コマンド
 
 ```bash
@@ -59,6 +146,11 @@ pnpm build:ci    # prisma generate && next build
 
 CI（`.github/workflows/ci.yml`）はこの3つを実行する。ビルドは外部サービスへ接続しないため、
 `DATABASE_URL` と `NEXT_PUBLIC_SUPABASE_*` はCI専用のプレースホルダーでよい。
+
+**検証用に一時的なページを足して消したら、`rm -rf .next` してから型チェックする。**
+`next dev` が生成する `.next/dev/types/validator.ts` は消したルートを参照したまま残り、
+`pnpm typecheck` と `pnpm build:ci` が `TS2307: Cannot find module '../../../src/app/<消した名前>/page.js'`
+で落ちる。ソースにはもうそのファイルが無いので、原因がコードの側に見えない。
 
 ## ローカル開発
 
@@ -71,6 +163,19 @@ pnpm dev                 # http://localhost:3000
 ```
 
 Supabase の Redirect URLs に、開発で使うオリジンの `/auth/callback` を登録しておく必要がある。
+
+### worktreeで画面を確認するときの注意
+
+- **`.env.local` の `DATABASE_URL` は全worktreeで同じローカルDB（`app_aide_bot`）を指す。**
+  別Issueのセッションが `prisma migrate dev` を流していると、こちらのスキーマには無いテーブルが
+  すでに存在する。壊し合わないよう、検証で書き込みを伴う場合はDB名を変えて隔離する
+  （`CREATE DATABASE app_aide_bot_issue<番号>` → `pnpm db:migrate:deploy` → 確認後に `DROP`）
+- **Next.js 16の `next dev` は同じディレクトリで2つ起動できない**（`Another next dev server is
+  already running.` で終了する）。ポートを変えても回避できないので、環境変数を変えて起動し直す
+  検証では、先に動いているサーバーを落とす
+- **`next start` も `.env.local` を読む。** 本番相当（`NODE_ENV=production`）での無効化を
+  確かめるときは、開発用の値が読み込まれていることを `/proc/<pid>/environ` で確認したうえで
+  試す。読み込まれていないだけなら「シークレット未設定」側の錠が効いただけで、確認にならない
 
 ## デプロイ
 
@@ -177,7 +282,7 @@ VPS上で `pnpm exec prisma migrate resolve --rolled-back <マイグレーショ
 | `21.plan-required` | 実装前に計画を提示し、承認を得てから実装に入る |
 | `22.merge-confirm-required` | 内容によらず、developへのマージ前に必ず `00.check-user` を付ける |
 | `23.preview-required` | PR作成前に開発サーバーの画面で確認し、承認を得る |
-| `24.screenshot-required` | PR作成前にスクリーンショットで確認し、承認を得る。**無人実行では現状使えない**（全画面がSupabase Auth + Google OAuthの背後にあり、CIログインバイパスもPlaywright依存も無いため） |
+| `24.screenshot-required` | PR作成前にスクリーンショットで確認し、承認を得る。**無人実行ではまだ使えない**（開発用ログイン（Cookieバイパス）は#25で入ったが、スクリーンショットを撮るPlaywright依存とワークフロー側の手当てが無いため） |
 | `25.artifact-required` | 実装着手前に見た目のアーティファクトを公開し、承認を得る（ローカル実行専用） |
 | `11.local` | 付いている間、無人実行ワークフローが計画・実装・分割・追加対応を行わない。ローカルのClaude Codeセッションと二重に進めないための停止フラグ |
 | `71.manual-step` | エージェントが代行できないユーザー自身の手作業を追跡するIssue |

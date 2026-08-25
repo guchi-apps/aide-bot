@@ -21,4 +21,50 @@ model User {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  conversations Conversation[]
+}
+
+// --- チャット ---
+// 相談は話題ごとのスレッドに分ける。対話相手は常に同じ「秘書」1人なので、Conversationは
+// 相手の分け目ではなく話題の分け目でしかない（#24）。単一スレッドにしなかったのは、
+// 同時に複数の依頼を投げたときに、片方の返答がまだ保存されていない履歴でもう片方が動き、
+// 返答が食い違うため。
+
+model Conversation {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // 最初の発言から自動で付ける。手で付け直す導線は今回は作らない。
+  title String @db.VarChar(120)
+
+  createdAt DateTime @default(now())
+  // 発言を足しても親のこの列は自動では動かないため、APIハンドラ側で明示的に更新する。
+  // 一覧の並び順がここだけを見ているため、動かないと新しい相談が下に沈む。
+  updatedAt DateTime @updatedAt
+
+  messages Message[]
+
+  // 一覧は「自分のもの・更新が新しい順」でしか引かない。
+  @@index([userId, updatedAt])
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  role MessageRole
+  // 返答はMarkdownで数千字になりうるため、VARCHARではなくTEXTにする。
+  content String @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@index([conversationId, createdAt])
 }

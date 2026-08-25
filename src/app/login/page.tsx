@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 
+import { AppIcon } from "@/components/brand/app-icon";
+import { isDevLoginEnabled } from "@/lib/ci-auth-bypass";
 import { safeInternalPath } from "@/lib/safe-path";
 
 export const metadata: Metadata = {
@@ -24,7 +26,9 @@ export default async function LoginPage({
   return (
     <main className="grid min-h-dvh place-items-center px-6 py-12">
       <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 shadow-sm">
-        <h1 className="text-xl font-semibold">秘書アプリ</h1>
+        {/* svgは既定でinline。blockにしないと下に行の余白が入り、見出しとの間隔がずれる。 */}
+        <AppIcon className="block size-13" />
+        <h1 className="mt-4 text-xl font-semibold">秘書アプリ</h1>
         <p className="mt-2 text-sm text-muted">
           NotionやAIDEを参照して、あなたのプライベートを補佐します。
         </p>
@@ -47,6 +51,25 @@ export default async function LoginPage({
         </a>
 
         <p className="mt-4 text-xs text-muted">許可されたGoogleアカウントのみ利用できます。</p>
+
+        {/*
+          開発用ログイン（#25）。CI_LOGIN_BYPASS_SECRET が設定された開発環境でだけ出る。
+          本番では isDevLoginEnabled() が常に偽になるため、ボタン自体が描画されない。
+        */}
+        {isDevLoginEnabled() && (
+          <form action="/api/dev/login" method="post" className="mt-8 border-t border-border pt-6">
+            <button
+              type="submit"
+              className="flex h-11 w-full items-center justify-center rounded-lg border border-border text-sm transition-colors hover:bg-background"
+            >
+              開発用ダミーユーザーでログイン
+            </button>
+            <p className="mt-2 text-xs text-muted">
+              開発環境専用の導線です。<code>pnpm db:seed:dev</code> が投入したダミーデータに
+              紐づきます。
+            </p>
+          </form>
+        )}
       </div>
     </main>
   );

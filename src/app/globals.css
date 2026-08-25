@@ -7,6 +7,14 @@
   --muted: #64748b;
   --border: #e2e8f0;
   --accent: #0f766e;
+  /* アクセントとは別系統の「うまくいかなかった」ことを示す色。 */
+  --danger: #b91c1c;
+  --danger-surface: #fef2f2;
+  /* 会話の一覧を置く帯。背景よりわずかに沈ませて、本文と地を分ける。 */
+  --rail: #eef1f6;
+  --rail-active: #e0e7ef;
+  --accent-surface: #dff0ed;
+  --accent-foreground: #ffffff;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -17,6 +25,12 @@
     --muted: #94a3b8;
     --border: #1e293b;
     --accent: #2dd4bf;
+    --danger: #fca5a5;
+    --danger-surface: #2a1416;
+    --rail: #0d1424;
+    --rail-active: #172136;
+    --accent-surface: #14403c;
+    --accent-foreground: #04211f;
   }
 }
 
@@ -27,6 +41,12 @@
   --color-muted: var(--muted);
   --color-border: var(--border);
   --color-accent: var(--accent);
+  --color-danger: var(--danger);
+  --color-danger-surface: var(--danger-surface);
+  --color-rail: var(--rail);
+  --color-rail-active: var(--rail-active);
+  --color-accent-surface: var(--accent-surface);
+  --color-accent-foreground: var(--accent-foreground);
 }
 
 body {
@@ -35,4 +55,328 @@ body {
   font-family: system-ui, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
   /* iOSでホーム画面から起動したときに、下端のホームインジケータへ内容が潜り込まないようにする。 */
   padding-bottom: env(safe-area-inset-bottom);
+}
+
+/*
+ * 秘書の返答（Markdown）の表示。react-markdown は素のHTMLしか吐かないため、
+ * Tailwindのユーティリティではなくここでまとめて当てる。生成物1つ1つにclassNameを
+ * 配ると、要素が増えるたびにコンポーネント側が膨らむ。
+ */
+.chat-md {
+  font-size: 0.875rem;
+  line-height: 1.85;
+}
+
+.chat-md > :first-child {
+  margin-top: 0;
+}
+
+.chat-md > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-md p {
+  margin: 0 0 0.75rem;
+}
+
+.chat-md h1,
+.chat-md h2,
+.chat-md h3,
+.chat-md h4,
+.chat-md h5,
+.chat-md h6 {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.chat-md ul,
+.chat-md ol {
+  margin: 0 0 0.75rem;
+  padding-left: 1.4em;
+}
+
+.chat-md ul {
+  list-style: disc;
+}
+
+.chat-md ol {
+  list-style: decimal;
+}
+
+.chat-md li {
+  margin-bottom: 0.3rem;
+}
+
+.chat-md li::marker {
+  color: var(--muted);
+}
+
+.chat-md strong {
+  font-weight: 700;
+}
+
+.chat-md em {
+  font-style: italic;
+}
+
+.chat-md a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-md blockquote {
+  margin: 0 0 0.75rem;
+  padding-left: 0.9rem;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.chat-md code {
+  padding: 0.05em 0.35em;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875em;
+}
+
+.chat-md pre {
+  margin: 0 0 0.75rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  /* 長い行でページ全体が横に伸びないよう、コードブロックの中だけを横スクロールさせる。 */
+  overflow-x: auto;
+}
+
+.chat-md pre code {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 0.8125rem;
+  line-height: 1.7;
+}
+
+/* 表も同じ理由で、包んだ側（.chat-md-scroll）に横スクロールを持たせる。 */
+.chat-md-scroll {
+  margin: 0 0 0.75rem;
+  overflow-x: auto;
+}
+
+.chat-md table {
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.chat-md th,
+.chat-md td {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.chat-md th {
+  background: var(--rail);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.chat-md hr {
+  margin: 1.25rem 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+/*
+ * 画面中央の「秘書」。状態ごとのキーフレームはTailwindのユーティリティでは書けないため、
+ * .chat-md と同じくここへまとめて置く。大きさは呼ぶ側がwidth/heightで決め、中身は
+ * すべて割合で追従させる（スマホでは大きく、PCではやや小さく置くため）。
+ */
+.orb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.orb-core {
+  position: relative;
+  z-index: 2;
+  width: 62%;
+  height: 62%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 32% 28%,
+    color-mix(in oklab, var(--accent) 35%, white) 0%,
+    var(--accent) 52%,
+    color-mix(in oklab, var(--accent) 72%, black) 100%
+  );
+  box-shadow: 0 0 26px -2px color-mix(in oklab, var(--accent) 55%, transparent);
+}
+
+.orb-halo {
+  position: absolute;
+  inset: 12%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--accent) 26%, transparent) 0%,
+    transparent 68%
+  );
+}
+
+/* 聞き取り中に外へ広がる輪。3つを時間差で出して、途切れずに広がって見せる。 */
+.orb-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in oklab, var(--accent) 55%, transparent);
+  opacity: 0;
+  animation: orb-ripple 2.1s ease-out infinite;
+}
+
+.orb-ring:nth-of-type(2) {
+  animation-delay: 0.7s;
+}
+
+.orb-ring:nth-of-type(3) {
+  animation-delay: 1.4s;
+}
+
+/* 考え中に球の周りだけを回す帯。中心をmaskで抜いて輪にする。 */
+.orb-sweep {
+  position: absolute;
+  inset: 16%;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    color-mix(in oklab, var(--accent) 62%, transparent) 70deg,
+    transparent 150deg
+  );
+  -webkit-mask: radial-gradient(circle, transparent 58%, black 60%);
+  mask: radial-gradient(circle, transparent 58%, black 60%);
+  animation: orb-spin 1.5s linear infinite;
+}
+
+.orb-idle .orb-core {
+  animation: orb-breathe 4.6s ease-in-out infinite;
+}
+
+.orb-idle .orb-halo {
+  opacity: 0.55;
+}
+
+.orb-listening .orb-core {
+  animation: orb-listen 1.15s ease-in-out infinite;
+}
+
+/* 声が届いた直後だけ、ひと回り大きくして反応を返す。 */
+.orb-listening.orb-reacting .orb-core {
+  animation-duration: 0.7s;
+  transform: scale(1.12);
+}
+
+.orb-thinking .orb-core {
+  animation: orb-shrink 1.9s ease-in-out infinite;
+}
+
+.orb-speaking .orb-core {
+  animation: orb-pulse 0.62s ease-in-out infinite;
+}
+
+.orb-speaking .orb-halo {
+  animation: orb-pulse-halo 0.62s ease-in-out infinite;
+}
+
+@keyframes orb-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.07);
+  }
+}
+
+@keyframes orb-listen {
+  0%,
+  100% {
+    transform: scale(1.04);
+  }
+  40% {
+    transform: scale(1.16);
+  }
+  70% {
+    transform: scale(1.09);
+  }
+}
+
+@keyframes orb-shrink {
+  0%,
+  100% {
+    transform: scale(0.8);
+  }
+  50% {
+    transform: scale(0.72);
+  }
+}
+
+@keyframes orb-pulse {
+  0%,
+  100% {
+    transform: scale(1.02);
+  }
+  50% {
+    transform: scale(1.13);
+  }
+}
+
+@keyframes orb-pulse-halo {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+@keyframes orb-ripple {
+  0% {
+    transform: scale(0.62);
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(1.15);
+    opacity: 0;
+  }
+}
+
+@keyframes orb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/*
+ * 動きを減らす設定の端末では、球を止める。状態は文言（「聞いています」等）でも
+ * 出しているため、止めても何が起きているかは分かる。
+ */
+@media (prefers-reduced-motion: reduce) {
+  .orb *,
+  .orb-ring,
+  .orb-sweep {
+    animation: none !important;
+  }
+
+  .orb-ring {
+    opacity: 0.35;
+  }
 }

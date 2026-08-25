@@ -15,6 +15,24 @@ import { PrismaClient } from "@prisma/client";
 
 const CI_BYPASS_SUPABASE_USER_ID = "ci-screenshot-bot";
 
+// 使用量の画面（#51）で使うモデル名。単価表（src/lib/usage.ts）にある値にしておかないと、
+// 画面の概算費用が「表に無いモデル」の扱いになる。
+const USAGE_MODEL = "claude-opus-5";
+
+/**
+ * 秘書の返答1件ぶんのダミーのトークン数。
+ *
+ * 履歴は毎回まるごと送り直すため、同じスレッドでは往復を重ねるほど入力ぶんが増える。
+ * 画面で内訳を見たときに不自然にならないよう、その形に寄せてある。
+ */
+const dummyUsage = (turnIndex) => ({
+  model: USAGE_MODEL,
+  inputTokens: 3200 + turnIndex * 2600,
+  outputTokens: 540 + turnIndex * 160,
+  cacheWriteTokens: 0,
+  cacheReadTokens: 0,
+});
+
 const db = new PrismaClient();
 
 // ダミーの相談。一覧の見出し（今日 / 今週 / それ以前）が分かれて見えるよう、
@@ -114,14 +132,70 @@ async function main() {
         createdAt: seed.startedAt,
         updatedAt: lastMessageAt,
         messages: {
-          create: seed.messages.map((message, index) => ({
-            role: index % 2 === 0 ? "USER" : "ASSISTANT",
-            // createdAtが同一だと並び順が不定になるため、1分ずつずらす。
-            createdAt: new Date(seed.startedAt.getTime() + index * 60_000),
-            content: typeof message === "string" ? message : message.content,
-            interrupted: typeof message === "string" ? false : message.interrupted === true,
-          })),
+          create: seed.messages.map((message, index) => {
+            const isAssistant = index % 2 === 1;
+
+            return {
+              role: isAssistant ? "ASSISTANT" : "USER",
+              // createdAtが同一だと並び順が不定になるため、1分ずつずらす。
+              createdAt: new Date(seed.startedAt.getTime() + index * 60_000),
+              content: typeof message === "string" ? message : message.content,
+              interrupted: typeof message === "string" ? false : message.interrupted === true,
+              // トークン数は秘書の返答にだけ入る（#51）。利用者の発言はnullのまま。
+              ...(isAssistant ? dummyUsage((index - 1) / 2) : {}),
+            };
+          }),
         },
+      },
+    });
+  }
+
+  // 使用量の画面（#51）は日別のグラフを持つ。相談が数日ぶんしか無いとグラフがほぼ空になり、
+  // 「日ごとに並んで見えるか」を確かめられないため、直近14日ぶんの往復を1本のスレッドへ入れる。
+  const USAGE_HISTORY_TITLE = "毎日のこまごました相談";
+  // 日ごとの往復数（古い日→今日）。棒の高さが散るように、あえて凸凹させてある。
+  const USAGE_DAILY_TURNS = [1, 2, 3, 1, 4, 1, 2, 3, 1, 5, 1, 3, 2, 2];
+
+  const usageHistoryExists = await db.conversation.findFirst({
+    where: { userId: user.id, title: USAGE_HISTORY_TITLE },
+    select: { id: true },
+  });
+
+  if (!usageHistoryExists) {
+    const messages = [];
+
+    USAGE_DAILY_TURNS.forEach((turns, dayIndex) => {
+      // 配列の先頭がいちばん古い日。最後の要素が今日。
+      const daysBefore = USAGE_DAILY_TURNS.length - 1 - dayIndex;
+
+      for (let turn = 0; turn < turns; turn += 1) {
+        // 同じ日の中でも時刻をずらす。9時台から1往復ごとに1時間ずつ後ろへ。
+        const askedAt = new Date(daysAgo(daysBefore).getTime());
+        askedAt.setHours(9 + turn, 0, 0, 0);
+
+        messages.push({
+          role: "USER",
+          createdAt: askedAt,
+          content: `${daysBefore}日前の${turn + 1}件目の相談です。`,
+          interrupted: false,
+        });
+        messages.push({
+          role: "ASSISTANT",
+          createdAt: new Date(askedAt.getTime() + 60_000),
+          content: "承知しました。要点だけお伝えします。",
+          interrupted: false,
+          ...dummyUsage(turn),
+        });
+      }
+    });
+
+    await db.conversation.create({
+      data: {
+        userId: user.id,
+        title: USAGE_HISTORY_TITLE,
+        createdAt: messages[0].createdAt,
+        updatedAt: messages[messages.length - 1].createdAt,
+        messages: { create: messages },
       },
     });
   }

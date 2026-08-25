@@ -36,6 +36,20 @@ function fail(message: string, status: number) {
 }
 
 /**
+ * 1回の生成で使ったトークン数（#51）。返答と同じ行へ保存し、使用量の画面が足し上げる。
+ *
+ * `null` は「数えていない」を意味する。イベントを1つも受け取れずに終わった場合はnullのまま
+ * 保存し、0として合計に混ぜない。
+ */
+type GenerationUsage = {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheWriteTokens: number;
+  cacheReadTokens: number;
+};
+
+/**
  * 生成中のスレッドと、その後片付けが終わるまでのプロミス（#48）。
  *
  * 利用者は返答の途中でも次の発言を送れる。そのとき走っている生成は打ち切られ、そこまでの
@@ -200,6 +214,8 @@ export async function POST(request: Request) {
         let errorMessage: string | null = null;
         // 利用者に遮られたか。割り込んだ側の発言に答えられるよう、保存時に印を付ける（#48）。
         let interrupted = false;
+        // このリクエストで使ったトークン数（#51）。
+        let usage: GenerationUsage | null = null;
 
         try {
           const messageStream = client.messages.stream(
@@ -216,6 +232,31 @@ export async function POST(request: Request) {
             if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
               answer += event.delta.text;
               controller.enqueue(sse("delta", { text: event.delta.text }));
+              continue;
+            }
+
+            // トークン数は最初と最後のイベントに乗ってくる（#51）。
+            // `message_start` は入力ぶんが確定した時点、`message_delta` はそこまでの累計で、
+            // 生成が終わるまで何度か届く。後から来た値で上書きする。
+            if (event.type === "message_start") {
+              usage = {
+                model: event.message.model,
+                inputTokens: event.message.usage.input_tokens,
+                outputTokens: event.message.usage.output_tokens,
+                cacheWriteTokens: event.message.usage.cache_creation_input_tokens ?? 0,
+                cacheReadTokens: event.message.usage.cache_read_input_tokens ?? 0,
+              };
+              continue;
+            }
+
+            if (event.type === "message_delta" && usage) {
+              usage = {
+                model: usage.model,
+                inputTokens: event.usage.input_tokens ?? usage.inputTokens,
+                outputTokens: event.usage.output_tokens,
+                cacheWriteTokens: event.usage.cache_creation_input_tokens ?? usage.cacheWriteTokens,
+                cacheReadTokens: event.usage.cache_read_input_tokens ?? usage.cacheReadTokens,
+              };
             }
           }
         } catch (error) {
@@ -239,6 +280,13 @@ export async function POST(request: Request) {
                   role: "ASSISTANT",
                   content: answer,
                   interrupted,
+                  // 途中で遮られた往復では `message_delta` が届かないことがあり、出力ぶんが
+                  // 実際より少なく残る。合計を過大に見せないため、そのまま入れる（#51）。
+                  model: usage?.model ?? null,
+                  inputTokens: usage?.inputTokens ?? null,
+                  outputTokens: usage?.outputTokens ?? null,
+                  cacheWriteTokens: usage?.cacheWriteTokens ?? null,
+                  cacheReadTokens: usage?.cacheReadTokens ?? null,
                 },
               }),
               db.conversation.update({

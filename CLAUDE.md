@@ -112,6 +112,26 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   黙ってから聞き取りを開く」形で、読み上げ中もマイクを開きっぱなしにする常時バージインは
   採っていない（自分の声を拾って往復が止まらなくなるため）
 
+## APIの消費量（#51）
+
+秘書の返答1件ごとに、Messages APIが返したトークン数を `Message` へ保存し、`/usage` の画面で
+日・月・累計に足し上げて出す。左メニューの下部に今月の概算費用も出る。
+
+- **トークン数は `message_start` と `message_delta` の両方から拾う。** 入力ぶんは `message_start`、
+  出力ぶんは `message_delta`（累計値。生成中に何度か届く）に乗る。`content_block_delta` しか
+  見ていないと1つも取れない
+- **途中で遮られた往復（#48）では `message_delta` が届かず、出力ぶんが実際より少なく残る。**
+  `message_start` 時点の値（数トークン）のままになる。埋め合わせの推定はせず、画面の注記で断っている
+- **`null` は「数えていない」で、0とは違う。** 利用者の発言と、この機能より前に保存された返答は
+  nullのまま。集計では `NOT: { inputTokens: null, outputTokens: null }` で外す（0として混ぜると
+  往復数だけが増える）
+- **単価表は `src/lib/usage.ts` の `MODEL_PRICING`。** Anthropicが単価を変えたらここを直す。
+  保存時のモデル名で引き直すため、使うのをやめたモデルの行も消さない。画面に出るのは概算で、
+  実際の請求額ではない（円は `USD_JPY_RATE` の固定レートでの参考値）
+- **`src/lib/usage.ts` はサーバー専用。** Prismaと（`@/lib/anthropic` 経由で）Anthropic SDKを
+  引き込むため、クライアントコンポーネントからimportしない。`/usage` の画面
+  （`src/components/chat/usage-view.tsx`）は数字を見るだけなのでサーバーコンポーネントのまま置いている
+
 ## 音声対話（話す / 書く）
 
 **このアプリの本来の使い方は音声**で、文字入力は声を出せない場面と言い直しのために残している（#27）。

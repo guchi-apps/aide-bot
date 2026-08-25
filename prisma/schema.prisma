@@ -68,6 +68,22 @@ model Message {
   // USERの発言では常にfalse。
   interrupted Boolean @default(false)
 
+  // --- APIの消費量（#51） ---
+  // Messages APIが返したトークン数を、その返答を作った1リクエストぶんとして持つ。
+  // 使用量の画面はこの列だけを足し上げて出す。
+  //
+  // **nullは「数えていない」を意味し、0とは違う。** USERの発言と、この機能より前に
+  // 保存された返答はnullのまま残る。合計に混ぜないよう、集計時はnullを除いて数える。
+  //
+  // モデル名も一緒に持つのは、単価がモデルごとに違うため。保存時のモデルが分からないと、
+  // CHAT_MODELを変えた時点で過去ぶんの概算費用まで新しい単価で計算し直されてしまう。
+  model             String? @db.VarChar(64)
+  inputTokens       Int?
+  outputTokens      Int?
+  // プロンプトキャッシュ（今は使っていないが、単価が入力と違うため別に持つ）。
+  cacheWriteTokens  Int?
+  cacheReadTokens   Int?
+
   createdAt DateTime @default(now())
 
   @@index([conversationId, createdAt])

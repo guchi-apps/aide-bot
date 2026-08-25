@@ -1,7 +1,13 @@
 import { cn } from "@/lib/utils";
 
-/** 秘書のいまの状態。画面の文言と球の見た目はこの1つの値から決める。 */
-export type OrbState = "idle" | "listening" | "thinking" | "speaking";
+/**
+ * 秘書のいまの状態。画面の文言と球の見た目はこの1つの値から決める。
+ *
+ * `preparing` はVOICEVOXの声で合成の出来上がりを待っている間（#52）。返答はもう出ているので
+ * `thinking` ではなく、まだ鳴っていないので `speaking` でもない。ここを `thinking` のままに
+ * すると、7秒前後の無音が「返事が来ないだけ」に見えて、利用者はマイクを押して割り込む。
+ */
+export type OrbState = "idle" | "listening" | "thinking" | "preparing" | "speaking";
 
 type Props = {
   state: OrbState;
@@ -30,7 +36,7 @@ export function Orb({ state, reacting = false, className }: Props) {
           <span className="orb-ring" />
         </>
       )}
-      {state === "thinking" && <span className="orb-sweep" />}
+      {(state === "thinking" || state === "preparing") && <span className="orb-sweep" />}
       <span className="orb-halo" />
       <span className="orb-core" />
     </div>

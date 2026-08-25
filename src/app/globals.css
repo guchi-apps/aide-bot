@@ -283,7 +283,9 @@ body {
   transform: scale(1.12);
 }
 
-.orb-thinking .orb-core {
+/* 声の用意待ち（#52）は考え中と同じ動きにする。「まだ鳴らない」ことだけ伝われば足りる。 */
+.orb-thinking .orb-core,
+.orb-preparing .orb-core {
   animation: orb-shrink 1.9s ease-in-out infinite;
 }
 

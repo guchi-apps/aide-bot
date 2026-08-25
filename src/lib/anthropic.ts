@@ -4,12 +4,39 @@ import Anthropic from "@anthropic-ai/sdk";
 export const CHAT_MODEL = "claude-opus-5";
 
 /**
- * 1回の送信でモデルへ渡す過去の発言数の上限（今回の発言を含む）。
+ * 1回の送信でモデルへ渡す過去の発言数の目安（今回の発言を含む）。
  *
  * 履歴は毎回まるごと送り直すため、上限が無いと長く続いたスレッドほど1往復の入力トークンが
  * 際限なく伸びる。相談の文脈として遡れれば十分な範囲に切る。
+ *
+ * **ちょうどこの数で切るわけではない**（#56）。窓の先頭は `HISTORY_WINDOW_STEP` の刻みでしか
+ * 動かさないため、実際に送るのは `HISTORY_LIMIT` 〜 `HISTORY_LIMIT + HISTORY_WINDOW_STEP - 1`
+ * 発言になる。理由は `historyWindowSkip()` を参照。
  */
 export const HISTORY_LIMIT = 30;
+
+/**
+ * 履歴の窓の先頭を動かす刻み（#56）。
+ *
+ * プロンプトキャッシュは前方一致で、プレフィックスが1バイトでも変わると以降が全部無効になる。
+ * `HISTORY_LIMIT` を超えたスレッドで窓を1発言ずつ滑らせると、**往復のたびに先頭の発言が
+ * 変わり、キャッシュが一度も効かない。** 先頭をこの刻みでしか動かさないことで、刻みぶんの
+ * あいだは同じプレフィックスを送り続けられる。
+ */
+export const HISTORY_WINDOW_STEP = 10;
+
+/**
+ * 履歴の窓の先頭（古い方から読み飛ばす発言数）を返す（#56）。
+ *
+ * 窓は `HISTORY_LIMIT` ちょうどではなく `HISTORY_LIMIT + HISTORY_WINDOW_STEP - 1` 発言まで
+ * 伸びる。伸びたぶんはキャッシュ読み（通常の入力の約1/10の単価）で乗るので、毎回まるごと
+ * 読み直させるより安い。
+ */
+export function historyWindowSkip(totalMessages: number): number {
+  if (totalMessages <= HISTORY_LIMIT) return 0;
+
+  return Math.floor((totalMessages - HISTORY_LIMIT) / HISTORY_WINDOW_STEP) * HISTORY_WINDOW_STEP;
+}
 
 /** 返答1回あたりの上限トークン。思考ぶんもここから消費される。 */
 export const MAX_OUTPUT_TOKENS = 16000;

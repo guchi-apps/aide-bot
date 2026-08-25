@@ -76,6 +76,18 @@ export const EMPTY_SUMMARY: UsageSummary = {
 };
 
 /**
+ * 入力ぶんのトークン数の合計（#56）。
+ *
+ * **`inputTokens` はキャッシュに載らなかった残りだけを指す。** プロンプトキャッシュを入れて
+ * からは入力の大半がキャッシュ読みへ移るため、この列だけを「入力」として画面に出すと、
+ * 実際には同じだけ送っているのに使用量が激減したように見える。画面では必ずこの合計を出し、
+ * うちキャッシュから読んだぶんを内訳として添える。
+ */
+export function promptTokens(row: UsageSummary): number {
+  return row.inputTokens + row.cacheReadTokens + row.cacheWriteTokens;
+}
+
+/**
  * 単価を引く。表に無いモデルは、いま使っているモデルの単価で概算する。
  *
  * 0円として捨てると「使っていない」と読めてしまうため、近い値を出して概算だと断る方を採る。

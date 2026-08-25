@@ -42,9 +42,9 @@ export function ChatShell({
   const activeId = pathname.startsWith("/c/") ? pathname.slice("/c/".length) : null;
   const isSettings = pathname === "/settings";
   const activeTitle = conversations.find((c) => c.id === activeId)?.title ?? "新しい相談";
-  // 使用量（#51）と接続（#46）は相談ではないので、見出しも「話す / 書く」の切り替えも
+  // 使用量（#51）と設定（#46・#71）は相談ではないので、見出しも「話す / 書く」の切り替えも
   // これらの画面には出さない。
-  const heading = isUsage ? "使用量" : isSettings ? "接続" : activeTitle;
+  const heading = isUsage ? "使用量" : isSettings ? "設定" : activeTitle;
 
   // 開いたドロワーは、閉じるボタン・スクリム・中のリンク（onNavigate）で閉じる。
   // pathnameの変化をuseEffectで見て閉じる形にはしない——描画のたびにsetStateが走る。

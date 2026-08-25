@@ -15,9 +15,13 @@ import { PrismaClient } from "@prisma/client";
 
 const CI_BYPASS_SUPABASE_USER_ID = "ci-screenshot-bot";
 
-// 使用量の画面（#51）で使うモデル名。単価表（src/lib/usage.ts）にある値にしておかないと、
-// 画面の概算費用が「表に無いモデル」の扱いになる。
-const USAGE_MODEL = "claude-opus-5";
+// 使用量の画面（#51）で使うモデル名。単価表（src/lib/chat-model.ts の MODEL_PRICING）に
+// ある値にしておかないと、画面の概算費用が「表に無いモデル」の扱いになる。
+//
+// 返答のモデルは設定の画面から切り替えられる（#71）。**切り替えた前後が混ざった記録**を
+// 入れておかないと、モデルごとに単価を引き直せているかを画面で確かめられない。
+const USAGE_MODELS = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"];
+const USAGE_MODEL = USAGE_MODELS[0];
 
 /**
  * API呼び出し1回ぶんのダミーのトークン数（`ApiUsage` の1行）。
@@ -25,10 +29,10 @@ const USAGE_MODEL = "claude-opus-5";
  * 履歴は毎回まるごと送り直すため、同じスレッドでは往復を重ねるほど入力ぶんが増える。
  * 画面で内訳を見たときに不自然にならないよう、その形に寄せてある。
  */
-const dummyUsage = (turnIndex, createdAt, userId) => ({
+const dummyUsage = (turnIndex, createdAt, userId, model = USAGE_MODEL) => ({
   // Conversation配下のネストで作るためconversationIdは省けるが、userIdは自分で繋ぐ必要がある。
   user: { connect: { id: userId } },
-  model: USAGE_MODEL,
+  model,
   inputTokens: 3200 + turnIndex * 2600,
   outputTokens: 540 + turnIndex * 160,
   cacheWriteTokens: 0,
@@ -219,7 +223,15 @@ async function main() {
           content: "承知しました。要点だけお伝えします。",
           interrupted: false,
         });
-        usages.push(dummyUsage(turn, new Date(askedAt.getTime() + 60_000), user.id));
+        // 日ごとにモデルを回して、単価の違う記録が混ざった状態を作る（#71）。
+        usages.push(
+          dummyUsage(
+            turn,
+            new Date(askedAt.getTime() + 60_000),
+            user.id,
+            USAGE_MODELS[dayIndex % USAGE_MODELS.length],
+          ),
+        );
       }
     });
 

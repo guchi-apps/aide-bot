@@ -1,7 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
 
-/** 返答の生成に使うモデル。 */
-export const CHAT_MODEL = "claude-opus-5";
+import type { ReplyStyle } from "@/lib/chat-model";
+
+/**
+ * 返答の生成に使うモデルの定義は `@/lib/chat-model` にある（#71）。
+ *
+ * このモジュールはAnthropic SDKを引き込むため、モデルを選ぶ画面からはimportできない。
+ * 単価・選べるモデル・既定値はそちらへ置き、ここには体裁の指示と上限トークンだけを残す。
+ */
 
 /**
  * 1回の送信でモデルへ渡す過去の発言数の目安（今回の発言を含む）。
@@ -66,8 +72,13 @@ export const MCP_BETA = "mcp-client-2025-11-20";
  */
 export const MCP_TOKEN_ALLOWANCE = 4000;
 
-/** 返答をどう受け取るか。体裁の指示と上限トークンがこれで変わる（#27）。 */
-export type ReplyStyle = "text" | "voice";
+/**
+ * 返答をどう受け取るか（#27）。定義は `@/lib/chat-model` にあり、ここでは読み直すだけ。
+ *
+ * モデルを選ぶ画面（クライアント）と、返答を作る側（サーバー）の両方が同じ型を使うため、
+ * Anthropic SDKを引き込まない側に本体を置いてある。
+ */
+export type { ReplyStyle };
 
 const SECRETARY_INTRO = `あなたは利用者ひとりに付く秘書です。プライベートの相談相手として、日本語で応対します。`;
 

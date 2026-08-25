@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 
 import { RATE_DEFAULT, RATE_MAX, RATE_MIN } from "./synthesis";
 import { isSpeechRecognitionSupported } from "./recognition";
+import { VOICEVOX_PREFIX, parseVoicevoxSpeaker } from "./voicevox";
 
 /** 端末ごとの好み。相談の内容ではないのでDBへは持たず、その端末のlocalStorageに置く。 */
 const STORAGE_KEY = "aide-bot-voice-settings";
@@ -13,6 +14,12 @@ export type VoiceSettings = {
   continuous: boolean;
   /** 読み上げそのものの入切。 */
   speak: boolean;
+  /**
+   * 読み上げる声。`null` は端末におまかせ。
+   *
+   * VOICEVOXの声は `voicevox:<話者ID>`（`./voicevox` の `VOICEVOX_PREFIX`）で表す。
+   * 端末内蔵の声の `voiceURI` とは形が違うので、この1つの値で読み方まで決まる。
+   */
   voiceURI: string | null;
   rate: number;
 };
@@ -24,6 +31,18 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   rate: RATE_DEFAULT,
 };
 
+/**
+ * 保存されていた声を読む。
+ *
+ * VOICEVOXの話者は、一覧から消したIDが端末に残っていることがある。そのまま使うと合成が
+ * 毎回失敗して端末の声へ落ち続けるので、知らないIDならおまかせに戻す。
+ */
+function readVoiceURI(value: unknown): string | null {
+  if (typeof value !== "string" || value === "") return null;
+  if (value.startsWith(VOICEVOX_PREFIX)) return parseVoicevoxSpeaker(value) ? value : null;
+  return value;
+}
+
 function read(): VoiceSettings {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -33,7 +52,7 @@ function read(): VoiceSettings {
     return {
       continuous: parsed.continuous ?? DEFAULT_VOICE_SETTINGS.continuous,
       speak: parsed.speak ?? DEFAULT_VOICE_SETTINGS.speak,
-      voiceURI: typeof parsed.voiceURI === "string" ? parsed.voiceURI : null,
+      voiceURI: readVoiceURI(parsed.voiceURI),
       rate:
         typeof parsed.rate === "number" && parsed.rate >= RATE_MIN && parsed.rate <= RATE_MAX
           ? parsed.rate

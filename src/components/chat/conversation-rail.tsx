@@ -13,6 +13,7 @@ type Props = {
   activeId: string | null;
   userLabel: string;
   userEmail: string | null;
+  appVersion: string;
   onNavigate?: () => void;
 };
 
@@ -24,6 +25,7 @@ export function ConversationRail({
   activeId,
   userLabel,
   userEmail,
+  appVersion,
   onNavigate,
 }: Props) {
   let lastGroup: string | null = null;
@@ -82,20 +84,25 @@ export function ConversationRail({
         )}
       </nav>
 
-      <div className="flex items-center justify-between gap-2.5 border-t border-border px-4 py-3">
-        <div className="min-w-0">
-          <b className="block text-[0.8125rem] font-medium">{userLabel}</b>
-          {userEmail && <span className="block truncate text-[0.6875rem] text-muted">{userEmail}</span>}
+      <div className="border-t border-border">
+        <div className="flex items-center justify-between gap-2.5 px-4 pb-2 pt-3">
+          <div className="min-w-0">
+            <b className="block text-[0.8125rem] font-medium">{userLabel}</b>
+            {userEmail && <span className="block truncate text-[0.6875rem] text-muted">{userEmail}</span>}
+          </div>
+
+          <form action="/auth/signout" method="post">
+            <button
+              type="submit"
+              className="whitespace-nowrap rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-rail-active"
+            >
+              ログアウト
+            </button>
+          </form>
         </div>
 
-        <form action="/auth/signout" method="post">
-          <button
-            type="submit"
-            className="whitespace-nowrap rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-rail-active"
-          >
-            ログアウト
-          </button>
-        </form>
+        {/* どの版を見ているかが画面だけで分かるようにする。値は package.json の version。 */}
+        <p className="px-4 pb-3 text-[0.6875rem] text-muted">v{appVersion}</p>
       </div>
     </div>
   );

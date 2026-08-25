@@ -156,6 +156,16 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   このコンポーネントの両方を揃えて直す**（グラデーションとmaskableの余白は、この大きさでは
   効かないのでコンポーネント側には持たせていない）
 
+## バージョン表示
+
+- **画面に出るバージョンの正は `package.json` の `version`。** 左メニュー（`ConversationRail`）の
+  最下部に `v0.3.0` の形で出る。リリース時のbumpを忘れると、本番の画面に古い版が出続ける
+- **`src/lib/app-version.ts` はサーバーコンポーネント専用。クライアントコンポーネントから
+  importしないこと。** JSONのimportはプロパティ単位では削られず、`package.json` が丸ごと
+  クライアントバンドルへ入る（実際に依存パッケージ名と `packageManager` のハッシュが
+  `.next/static/chunks` に出た）。値は `src/app/(chat)/layout.tsx` で読み、
+  `ChatShell` → `ConversationRail` へpropsで渡している
+
 ## 検証コマンド
 
 ```bash

@@ -200,6 +200,17 @@ pnpm build:ci    # prisma generate && next build
 CI（`.github/workflows/ci.yml`）はこの3つを実行する。ビルドは外部サービスへ接続しないため、
 `DATABASE_URL` と `NEXT_PUBLIC_SUPABASE_*` はCI専用のプレースホルダーでよい。
 
+### 返答の生成をキー無しで確かめる
+
+`ANTHROPIC_API_KEY` が手元に無くても、**`ANTHROPIC_BASE_URL` をローカルのスタブへ向ければ
+`/api/chat` を丸ごと動かせる。** SDKは `${ANTHROPIC_BASE_URL}/v1/messages` を叩くだけなので、
+Messages APIのSSE（`message_start` → `content_block_delta`×n → `message_stop`）を1秒あたり数個の
+ペースで返すHTTPサーバーを立てれば、ストリーミング・中断・保存・履歴の組み立てまで実キーも
+実費もなしに確かめられる。受け取った `messages` をファイルへ書き出しておくと、モデルへ実際に
+渡している履歴（割り込みの注記など）もそのまま読める。
+
+`curl -sN` を `timeout` で切れば「利用者が途中で止めた」経路をそのまま再現できる。
+
 **検証用に一時的なページを足して消したら、`rm -rf .next` してから型チェックする。**
 `next dev` が生成する `.next/dev/types/validator.ts` は消したルートを参照したまま残り、
 `pnpm typecheck` と `pnpm build:ci` が `TS2307: Cannot find module '../../../src/app/<消した名前>/page.js'`

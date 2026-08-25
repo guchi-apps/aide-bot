@@ -239,7 +239,7 @@ VPS上で `pnpm exec prisma migrate resolve --rolled-back <マイグレーショ
 
 `@claude` コメントを起点に、計画提示〜実装〜develop向けPR作成〜レビュー〜マージまでをGitHub Actions上で
 無人実行する運用を導入している。仕組みの本体は `guchi-apps/issue-deck` にあり、aide-botはその
-再利用可能ワークフロー（`workflows/v25` タグ）を参照する側として構成している。
+再利用可能ワークフロー（`workflows/v27` タグ）を参照する側として構成している。
 
 設計の詳細・各モードの判定ロジックは issue-deck の `docs/multi-agent-workflow.md`・`docs/multi-agent/` を
 一次情報源とする。ここにはaide-bot側の運用に必要な事項のみを置く。
@@ -343,7 +343,7 @@ Prismaスキーマのフィールド削除・関数やエクスポートの改�
 
 ## ワークフローの構成
 
-すべてissue-deckの再利用可能ワークフローを `@workflows/v25` で参照する薄いcallerで、
+すべてissue-deckの再利用可能ワークフローを `@workflows/v27` で参照する薄いcallerで、
 ジョブ本体はこのリポジトリに持たない。
 
 | ファイル | 内容 |
@@ -354,6 +354,8 @@ Prismaスキーマのフィールド削除・関数やエクスポートの改�
 | `claude-conflict-resolve.yml` | developとのコンフリクト自動解消 |
 | `claude-ci-fix.yml` | CI失敗の自動修正 |
 | `claude-pr-repair.yml` | Issueに紐づかないPRの修復（画面のボタンから起動） |
+| `deploy-retry.yml` | デプロイ失敗の再実行（画面のボタンから起動） |
+| `sync-secrets.yml` | 1Password（正）からこのリポジトリのsecret / variableへ同期（画面のボタンから起動） |
 | `release-develop-to-main.yml` | バージョンbump PR・develop→mainのリリースPR作成 |
 | `version-tag-check.yml` | main宛PRでのリリースタグ重複・デプロイ設定漏れの検査 |
 
@@ -366,19 +368,19 @@ Prismaスキーマのフィールド削除・関数やエクスポートの改�
 **存在しない入力を渡すと `startup_failure` になる。** ジョブが1つも作られず、ログも残らないため
 原因が分かりにくい。タグを上げるときも、増やした入力がそのタグに実在するかを確かめる。
 
-実際に踏んだ形（aide-bot#1）。`workflows/v25` 時点で次の2つがある。
+実際に踏んだ形（aide-bot#1）。
 
 - **`database-name` を受け取るのは `reusable-issue-dispatch.yml` だけ。**
   `reusable-claude-ci-fix.yml`・`reusable-claude-conflict-resolve.yml` には無い。
   DBを使うリポジトリで揃えたくなるが、渡してはいけない
-- **`reusable-deploy-retry.yml` は `workflows/v25` に存在しない**（issue-deckのdevelopにはある）。
-  そのため `deploy-retry.yml` のcallerは置いていない。入れるのは、これを含むタグへ上げてから
+- **`reusable-deploy-retry.yml` は `workflows/v25` に存在しなかった**ため、当時は
+  `deploy-retry.yml` のcallerを置けなかった。`workflows/v27` には入っているので現在は置いてある
 
 確認は次のコマンドでできる（issue-deckのチェックアウトが手元にある場合）。
 
 ```bash
 cd ~/apps/issue-deck
-git show workflows/v25:.github/workflows/reusable-claude-ci-fix.yml | awk '/^  workflow_call:/,/^jobs:/'
+git show workflows/v27:.github/workflows/reusable-claude-ci-fix.yml | awk '/^  workflow_call:/,/^jobs:/'
 ```
 
 無人実行のたびに `.shared-context/`（共有知識）と `.shared-prompts/`（issue-deck側の

@@ -22,10 +22,12 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  conversations  Conversation[]
-  apiUsages      ApiUsage[]
-  toolCalls      ToolCall[]
-  mcpConnections McpConnection[]
+  conversations     Conversation[]
+  apiUsages         ApiUsage[]
+  toolCalls         ToolCall[]
+  mcpConnections    McpConnection[]
+  pushSubscriptions PushSubscription[]
+  notificationLogs  NotificationLog[]
 }
 
 // --- チャット ---
@@ -207,4 +209,75 @@ model ToolCall {
 
   @@index([userId, createdAt])
   @@index([conversationId, createdAt])
+}
+
+// --- プロアクティブ通知（#79） ---
+// 秘書の方から状況を知らせるための購読先と、送った記録。
+//
+// 配る先はaide-bot自身のWeb Push（#77で決定）。Signalyへ流す案を採らなかったのは、
+// 通知を押したときに戻ってくる先がSignalyのPWAになり、そのまま秘書へ返事ができないため。
+
+/**
+ * Web Pushの購読先。**端末ごとに1行**になる（iPhone・PCで別々に購読する）。
+ *
+ * `endpoint` はブラウザベンダーのURLで、数百文字になることがあるためTEXTで持つ。
+ * MariaDBは長いTEXTへそのまま一意制約を張れないので、SHA-256の64文字を別の列に持ち、
+ * そちらへ張る（guchi-apps/signaly の PushSubscription と同じ手）。
+ */
+model PushSubscription {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  endpoint String @db.Text
+  /// `endpoint` のSHA-256（hex 64文字）。一意制約はこちらに張る。
+  endpointHash String @db.VarChar(64)
+
+  /// 購読の鍵（`PushSubscription.getKey()` をbase64urlにしたもの）。
+  p256dh String @db.VarChar(255)
+  auth   String @db.VarChar(255)
+
+  /// どの端末かを画面で見分けるための覚え書き。User-Agentから機械的に作る。
+  deviceLabel String @db.VarChar(120)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  /// 最後に送信が通った時刻。届かなくなった購読を見分ける手掛かりにする。
+  lastNotifiedAt DateTime?
+
+  @@unique([endpointHash])
+  @@index([userId, createdAt])
+}
+
+/**
+ * 送った通知の記録。**これは履歴ではなく抑制のための錠**（#79）。
+ *
+ * AIDEの `src/worker/notify.ts` が「成功を毎回送ると肝心の失敗が埋もれる」という失敗を
+ * 既にしている。同じ理由（kind）・同じ状態（dedupeKey）の通知は一度しか送らない、を
+ * DBの一意制約で守る。朝の見通しでは dedupeKey が日本時間の日付になるため、cronが
+ * 何度叩かれても1日1本までしか出ない。
+ */
+model NotificationLog {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// 通知の種類。いまは `morning-briefing` だけ。
+  kind String @db.VarChar(40)
+  /// 同じ理由の通知を抑制するための鍵。朝の見通しでは `2026-08-26` の形。
+  dedupeKey String @db.VarChar(120)
+
+  title String @db.VarChar(120)
+  /// 送った本文。空文字は「知らせることが無いと判断して黙った」ことを表す。
+  body  String @db.Text
+
+  /// 通知を押したときに開く相談。黙ったときはnull。
+  conversationId String? @db.VarChar(191)
+  /// 実際に届けられた端末の数。0なら購読が全部落ちていた。
+  deliveredCount Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, kind, dedupeKey])
+  @@index([userId, createdAt])
 }

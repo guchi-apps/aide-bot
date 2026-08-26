@@ -12,7 +12,7 @@ import {
   refreshTokens,
   registerClient,
 } from "@/lib/mcp/oauth";
-import { findPreset } from "@/lib/mcp/presets";
+import { findPreset, writeToolsFor } from "@/lib/mcp/presets";
 
 /**
  * 外部サービスとの接続の出し入れ（#46）。
@@ -299,11 +299,45 @@ export async function listConnectedServers(userId: string): Promise<ConnectedSer
  *
  * **`mcp_servers` だけでは400になる。** サーバーの定義と、それを指す `mcp_toolset` が
  * `tools` 側にも要る（1サーバーにつきちょうど1つ）。
+ *
+ * `allowWriteTools` が偽のときは、把握している書き込みの道具を `configs` で止める（#78）。
+ * **`mcp-client-2025-11-20` に `allowed_tools` は無い。** 絞り込みは
+ * 「既定は全部有効（`default_config`）＋道具ごとの上書き（`configs`）」という形で、
+ * 名指しした道具だけを `enabled: false` にできる。挙げ漏らした道具はそのまま渡る。
+ *
+ * 止めた道具の名前は `withheldTools` で返す。システムプロンプト側で「いまは書き込みの
+ * 道具が渡っていない」と伝えるのに使う——伝えないと、渡っていないことに気付かないまま
+ * 「登録しておきました」と答えてしまう。
  */
-export function toMcpRequestParts(servers: ConnectedServer[]): {
+export function toMcpRequestParts(
+  servers: ConnectedServer[],
+  allowWriteTools: boolean,
+): {
   mcpServers: Anthropic.Beta.BetaRequestMCPServerURLDefinition[];
   tools: Anthropic.Beta.BetaMCPToolset[];
+  withheldTools: string[];
 } {
+  const withheldTools: string[] = [];
+
+  const tools = servers.map((server) => {
+    // 並びは `MCP_PRESETS` の記述順のまま。プロンプトキャッシュは `tools` を含む前方一致で
+    // 効くため、往復ごとにキーの順が変わると、そこから後ろが全部書き直しになる（#56）。
+    const withheld = allowWriteTools ? [] : writeToolsFor(server.url);
+    withheldTools.push(...withheld);
+
+    return {
+      type: "mcp_toolset" as const,
+      mcp_server_name: server.slug,
+      ...(withheld.length > 0
+        ? {
+            configs: Object.fromEntries(
+              withheld.map((name) => [name, { enabled: false }] as const),
+            ),
+          }
+        : {}),
+    };
+  });
+
   return {
     mcpServers: servers.map((server) => ({
       type: "url" as const,
@@ -311,9 +345,7 @@ export function toMcpRequestParts(servers: ConnectedServer[]): {
       url: server.url,
       authorization_token: server.accessToken,
     })),
-    tools: servers.map((server) => ({
-      type: "mcp_toolset" as const,
-      mcp_server_name: server.slug,
-    })),
+    tools,
+    withheldTools,
   };
 }

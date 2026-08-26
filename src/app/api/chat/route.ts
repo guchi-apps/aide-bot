@@ -20,6 +20,8 @@ import {
   toMcpRequestParts,
   type ConnectedServer,
 } from "@/lib/mcp/connections";
+import { writeToolsAllowed } from "@/lib/mcp/write-tools";
+import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
 
 /**
  * 1回の送信で回すモデルとのやり取りの上限（#46）。
@@ -275,7 +277,11 @@ export async function POST(request: Request) {
     console.error("[aide-bot] 接続の読み出しに失敗した", error);
   }
 
-  const { mcpServers, tools } = toMcpRequestParts(servers);
+  // 書き込みの道具を渡すかどうか（#78）。既定は渡さない。モデルの選択と同じくCookieに
+  // 持たせてあり、知らない値は「渡さない」へ落ちる。
+  const allowWriteTools = writeToolsAllowed(await selectedWriteToolPolicy(), style);
+
+  const { mcpServers, tools, withheldTools } = toMcpRequestParts(servers, allowWriteTools);
   // ツール実行を画面へ出すとき、利用者に見せるのはslugではなく付けた名前。
   const labelBySlug = new Map(servers.map((server) => [server.slug, server.label]));
 
@@ -332,6 +338,7 @@ export async function POST(request: Request) {
                 system: secretarySystemPrompt(
                   style,
                   servers.map((server) => server.label),
+                  withheldTools.length > 0,
                 ),
                 messages: turns,
               },

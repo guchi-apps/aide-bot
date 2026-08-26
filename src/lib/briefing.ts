@@ -125,7 +125,9 @@ async function generateBriefing(userId: string): Promise<string> {
     throw new Error("外部サービスへ繋いでいないため、今日の材料を取れませんでした。");
   }
 
-  const { mcpServers, tools } = toMcpRequestParts(servers);
+  // **書き込みの道具は設定によらず常に止める**（#78・#79）。相談側は設定で渡せるが、
+  // ここは利用者のいないところで動いており、登録の前に復唱して確かめる相手がいない。
+  const { mcpServers, tools } = toMcpRequestParts(servers, false);
   const client = getAnthropicClient();
 
   const turns: Anthropic.Beta.BetaMessageParam[] = [

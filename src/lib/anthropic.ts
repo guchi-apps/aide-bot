@@ -127,21 +127,38 @@ const VOICE_FORMAT_RULES = [
  *
  * ツールの説明文だけでも呼び分けはできるが、**音声モードでは「短く答える」指示と
  * ぶつかって呼ばずに済ませてしまう**。手元に無い事実は調べてから答える、と明示する。
+ *
+ * 書き込みについての一文は**繋いでいれば常に置く**（#78）。渡す道具を絞り込めるのは
+ * 名前を把握している接続先だけで、把握していない接続先の書き込みは絞り込みの設定に
+ * よらず渡り続ける。「絞り込んだから安全」と見なさず、確認を取る指示は常に効かせる。
+ *
+ * `writeToolsWithheld` は、こちらが書き込みの道具を止めたかどうか。止めたことを伝えないと、
+ * 道具が見当たらないまま「登録しておきました」と答えてしまう。
  */
-function connectedServiceRules(labels: string[]): string[] {
+function connectedServiceRules(labels: string[], writeToolsWithheld: boolean): string[] {
   if (labels.length === 0) return [];
 
   return [
     `${labels.join("・")}に繋がっていて、その中のデータを取ってくる道具が使えます`,
     "残高・予定・部屋の状態・記録の中身など、手元に無い事実を尋ねられたら、推測せず道具で調べてから答える",
     "道具で取れなかったときは、取れなかったことをそのまま言う。それらしい数字で埋めない",
+    "記録の追加・登録・作成のように、あとから取り消せない結果が残る道具は、呼ぶ前に何をどう登録するか（金額・日付・店名・相手など）を復唱し、そのとおりでよいと言われてから呼ぶ。声で聞き取った内容はそのまま送られてくるので、聞き間違いがそのまま記録になる。頼まれていない書き込みはしない",
+    ...(writeToolsWithheld
+      ? [
+          "いまは書き込みの道具が渡っていません。記録の追加や登録を頼まれたら、書けたことにせず、設定の画面で書き込みを許可すれば使えると伝える",
+        ]
+      : []),
   ];
 }
 
-export function secretarySystemPrompt(style: ReplyStyle, connectedLabels: string[] = []): string {
+export function secretarySystemPrompt(
+  style: ReplyStyle,
+  connectedLabels: string[] = [],
+  writeToolsWithheld = false,
+): string {
   const rules = [
     ...COMMON_RULES,
-    ...connectedServiceRules(connectedLabels),
+    ...connectedServiceRules(connectedLabels, writeToolsWithheld),
     ...(style === "voice" ? VOICE_FORMAT_RULES : TEXT_FORMAT_RULES),
   ];
 
@@ -179,6 +196,25 @@ export const BRIEFING_SKIP_TOKEN = "NO_BRIEFING";
 export const MORNING_BRIEFING_REQUEST =
   "（自動）おはよう。今日の予定・移動・天気と、部屋やシステムに気になることがないかを確かめて、今日の見通しを短くまとめて。";
 
+/**
+ * 朝の見通しで、繋いでいる外部サービスについて添える指示（#79）。
+ *
+ * 相談の `connectedServiceRules()` を使い回さない。あちらは「尋ねられたら調べる」「登録の前に
+ * 復唱して確認する」（#78）という、**相手がその場にいる前提**の指示で、利用者のいない朝の
+ * 生成には噛み合わない。復唱しても答える人がいない。
+ *
+ * **書き込みの道具は設定によらず常に止める**（`toMcpRequestParts(servers, false)`）。
+ * 確認を取る相手がいない場面で、取り消せない結果が残る道具を渡す理由が無い。
+ */
+function briefingServiceRules(labels: string[]): string[] {
+  if (labels.length === 0) return [];
+
+  return [
+    `${labels.join("・")}に繋がっていて、その中のデータを取ってくる道具が使えます`,
+    "記録の追加・登録・変更をする道具は呼ばない。これは利用者のいないところで動いており、確かめる相手がいない",
+  ];
+}
+
 /** 朝の見通しの体裁。 */
 const BRIEFING_FORMAT_RULES = [
   "本文は200文字以内。端末の通知にそのまま出るため、これより長いと途中で切られる",
@@ -199,7 +235,7 @@ export function briefingSystemPrompt(connectedLabels: string[]): string {
     "手元には材料が無い。予定・天気・部屋やシステムの状態は、必ず道具で調べてから書く",
     "道具で取れなかった項目は書かない。それらしい数字や予定を作らない",
     `知らせる価値があることが1つも無ければ、本文を書かずに ${BRIEFING_SKIP_TOKEN} とだけ返す。無理に何か書かない`,
-    ...connectedServiceRules(connectedLabels),
+    ...briefingServiceRules(connectedLabels),
     ...BRIEFING_FORMAT_RULES,
   ];
 

@@ -820,6 +820,43 @@ cd ~/apps/issue-deck
 git show workflows/v27:.github/workflows/reusable-claude-ci-fix.yml | awk '/^  workflow_call:/,/^jobs:/'
 ```
 
+### CIのチェックが `queued` のまま完了しないとき（#85）
+
+**GitHub Actions側の障害中に作られたrunは、ジョブが1つも作られないまま壊れる。**
+runそのものは `completed` / `failure` になるのに、`lint-and-build` の**check runだけが
+`queued` のまま永久に残る**。`develop` の必須チェックはこの1つだけなので、PRは
+`mergeStateStatus: BLOCKED` から動かなくなり、レビューも自動マージも「CI待ち」で止まる。
+2026-08-26のActions障害（15:11〜18:01 UTC。DBのプライマリ障害）でPR #84がこの状態になった。
+
+- **見分け方は「runは終わっているのにジョブが0件」**。ログが無いので `--log-failed` では何も出ない
+
+  ```bash
+  gh api repos/guchi-apps/aide-bot/actions/runs/<runID> --jq '{status, conclusion}'   # completed / failure
+  gh api repos/guchi-apps/aide-bot/actions/runs/<runID>/jobs --jq .total_count        # 0
+  gh api repos/guchi-apps/aide-bot/commits/<PRのheadSHA>/check-runs \
+    --jq '.check_runs[] | select(.status != "completed") | .name'                     # lint-and-build
+  ```
+
+- **`gh run rerun` はCIを走らせ直さない。ブロックだけを外す。** 壊れたrunのレコードを
+  再利用するため、再実行しても `run_attempt` は1のままジョブが作られない（#85で25分待って
+  0件を実測）。**一方で、再実行した時点で古いcheck runがheadのSHAから消える。**
+  必須チェックが「Queuedのまま」ではなく「存在しない」状態になるので、**PRのブロックは
+  外れる**——#85では再実行の約23分後に、15:33の時点で有効化されていたAuto-mergeが
+  そのままPR #84をマージした。**CIが通ったのではなく、チェックごと消えて通り抜けた**ので、
+  これに頼るなら中身は別の手段で検証しておくこと
+- **CIを実際に走らせたいなら新しいrunを作る。** `workflow_dispatch` を足してあるので、
+  まずこれを使う。check runはブランチ先端のSHA（＝PRのhead）に付くため、必須チェックも満たせる
+
+  ```bash
+  gh workflow run ci.yml --repo guchi-apps/aide-bot --ref issue-<番号>
+  ```
+
+- それでも駄目なら**PRをclose → reopen**する（`pull_request: reopened` でCIが走る）。
+  空コミットのpushでも直るが、**他Issueのブランチを書き換えることになるので最後の手段**
+- **障害の窓に入ったrunは他のワークフローにもある。** `Issue Labels` などが `queued` のまま
+  居座っていても実害は無いが、`gh api ".../actions/runs?status=queued"` で範囲を把握しておくと
+  「今も壊れているのか、当時のものが残っているだけか」を切り分けられる
+
 無人実行のたびに `.shared-context/`（共有知識）と `.shared-prompts/`（issue-deck側の
 実装プロンプト）がワークツリーへcheckoutされる。**どちらもこのリポジトリの管理対象ではない。**
 `.gitignore` 済みなので、**編集・`git add`・コミットを一切行わないこと。**

@@ -110,6 +110,9 @@ jobs:
       ALLOWED_GOOGLE_EMAILS: ${{ secrets.ALLOWED_GOOGLE_EMAILS }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       SIGNALY_WEBHOOK_URL: ${{ secrets.SIGNALY_WEBHOOK_URL }}
+      VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+      VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+      BRIEFING_TRIGGER_TOKEN: ${{ secrets.BRIEFING_TRIGGER_TOKEN }}
 
     steps:
       - name: Checkout code
@@ -187,6 +190,9 @@ jobs:
       ALLOWED_GOOGLE_EMAILS: ${{ secrets.ALLOWED_GOOGLE_EMAILS }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       SIGNALY_WEBHOOK_URL: ${{ secrets.SIGNALY_WEBHOOK_URL }}
+      VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+      VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+      BRIEFING_TRIGGER_TOKEN: ${{ secrets.BRIEFING_TRIGGER_TOKEN }}
 
     steps:
       - name: Checkout code
@@ -231,6 +237,9 @@ jobs:
           NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
           ALLOWED_GOOGLE_EMAILS: ${{ env.ALLOWED_GOOGLE_EMAILS }}
           ANTHROPIC_API_KEY: ${{ env.ANTHROPIC_API_KEY }}
+          VAPID_PUBLIC_KEY: ${{ env.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ env.VAPID_PRIVATE_KEY }}
+          BRIEFING_TRIGGER_TOKEN: ${{ env.BRIEFING_TRIGGER_TOKEN }}
           TARGET_DIR: ${{ env.TARGET_DIR }}
         with:
           host: ${{ env.HOST }}
@@ -238,7 +247,7 @@ jobs:
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: ${{ env.SSH_PORT }}
           # ここに無い変数はSSH先に存在しない。env: と同じ名前を必ず並べる。
-          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,ALLOWED_GOOGLE_EMAILS,ANTHROPIC_API_KEY,TARGET_DIR
+          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,ALLOWED_GOOGLE_EMAILS,ANTHROPIC_API_KEY,VAPID_PUBLIC_KEY,VAPID_PRIVATE_KEY,BRIEFING_TRIGGER_TOKEN,TARGET_DIR
           script: |
             set -euo pipefail
             cd "${TARGET_DIR}"
@@ -267,6 +276,12 @@ jobs:
             update_env NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY "$NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"
             update_env ALLOWED_GOOGLE_EMAILS "$ALLOWED_GOOGLE_EMAILS"
             update_env ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
+            # プロアクティブ通知（#79）。VAPIDの鍵が片方でも空だと設定の画面に通知の導線が
+            # 出ず、BRIEFING_TRIGGER_TOKEN が空だと cron からの POST /api/briefing が
+            # 401 で閉じたままになる。
+            update_env VAPID_PUBLIC_KEY "$VAPID_PUBLIC_KEY"
+            update_env VAPID_PRIVATE_KEY "$VAPID_PRIVATE_KEY"
+            update_env BRIEFING_TRIGGER_TOKEN "$BRIEFING_TRIGGER_TOKEN"
 
             echo "Installing production dependencies..."
             corepack enable pnpm >/dev/null 2>&1 || true

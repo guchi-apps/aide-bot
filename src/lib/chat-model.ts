@@ -74,6 +74,21 @@ export const CHAT_MODELS: ChatModelOption[] = [
 export const DEFAULT_CHAT_MODEL: ChatModelId = "claude-opus-5";
 
 /**
+ * 朝の見通し（#79）を書くモデル。
+ *
+ * **設定の画面からは選べない。** 選ぶ主体が居ない場面（cronから叩かれる）で使うため、
+ * Cookieを読めない。変えたいときはここを直す。
+ *
+ * 軽いモデルにしてあるのは、やることが「AIDEから取った材料を200文字にまとめる」だけで、
+ * 込み入った判断を含まないため。1日1本なので、いちばん高いモデルにしても月100〜200円の
+ * 差でしかないが、**同じ結果に高い方を払う理由が無い**。
+ *
+ * プロンプトキャッシュは効かない（1日1回では保持時間の5分をとうに過ぎている）。
+ * `cacheMinimumTokens` を気にしなくてよい数少ない経路でもある。
+ */
+export const BRIEFING_MODEL: ChatModelId = "claude-haiku-4-5";
+
+/**
  * 選んだモデルを置くCookie（`aide-bot-talk-mode` と同じ考え方）。
  *
  * localStorageではなくCookieなのは、**サーバー側でも同じ値を読む必要がある**ため。

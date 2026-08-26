@@ -148,6 +148,66 @@ export function secretarySystemPrompt(style: ReplyStyle, connectedLabels: string
   return `${SECRETARY_INTRO}\n\n${rules.map((rule) => `- ${rule}`).join("\n")}`;
 }
 
+/**
+ * 朝の見通し（#79）で使う体裁と上限。
+ *
+ * 相談の返答と違い、**読むのは端末の通知**（ロック画面・通知センター）。見出しも箇条書きも
+ * 表示されず、長い本文は途中で切られる。音声モードに近いが、聞くのではなく一目で読むため
+ * 「話し言葉」ではなく短い平叙文に寄せる。
+ */
+export const BRIEFING_MAX_OUTPUT_TOKENS = 1500;
+
+/**
+ * 「今日は知らせることが無い」と判断したときにモデルへ返させる合図（#79）。
+ *
+ * **黙れることがモデルを通す唯一の理由**。定型文で組み立てるだけなら、材料はAIDEが
+ * 構造化JSONで返すのでAPI費用は0円で済む。裏を返すと、この合図が効かなければ
+ * モデルを通す意味がほとんど無い。
+ *
+ * 本文へ混ぜず単独で返させるのは、部分一致で判定すると「特に無いと言いたいところですが」の
+ * ような文まで黙らせてしまうため。
+ */
+export const BRIEFING_SKIP_TOKEN = "NO_BRIEFING";
+
+/**
+ * 朝の見通しを頼む文面（#79）。
+ *
+ * **これはそのまま相談の1通目として保存される。** 通知を押すとこの相談が開き、利用者は
+ * マイクを押してそのまま続きを話せる。実際にモデルへ渡している依頼そのものなので、
+ * 画面に出しても嘘にならない。
+ */
+export const MORNING_BRIEFING_REQUEST =
+  "（自動）おはよう。今日の予定・移動・天気と、部屋やシステムに気になることがないかを確かめて、今日の見通しを短くまとめて。";
+
+/** 朝の見通しの体裁。 */
+const BRIEFING_FORMAT_RULES = [
+  "本文は200文字以内。端末の通知にそのまま出るため、これより長いと途中で切られる",
+  "見出し・箇条書き・表・記号の装飾・URLは使わない。ふつうの文を2〜4文",
+  "いちばん今日を左右することから書く。予定が無い日は天気と体調に関わることだけでよい",
+  "数字はそのまま書く（気温・時刻・件数）。「やや高め」のような言い換えで具体を消さない",
+];
+
+/**
+ * 朝の見通しのシステムプロンプト（#79）。
+ *
+ * **道具を必ず使わせる。** 手元には何の材料も無く、繋いでいる外部サービス（AIDE）から
+ * 取ってこないと書けない。相談のときと違って利用者が続きを促せないので、
+ * 「取れなかったので分かりません」で終わらせないことも明示する。
+ */
+export function briefingSystemPrompt(connectedLabels: string[]): string {
+  const rules = [
+    "手元には材料が無い。予定・天気・部屋やシステムの状態は、必ず道具で調べてから書く",
+    "道具で取れなかった項目は書かない。それらしい数字や予定を作らない",
+    `知らせる価値があることが1つも無ければ、本文を書かずに ${BRIEFING_SKIP_TOKEN} とだけ返す。無理に何か書かない`,
+    ...connectedServiceRules(connectedLabels),
+    ...BRIEFING_FORMAT_RULES,
+  ];
+
+  const intro = `${SECRETARY_INTRO}\n\n今は朝です。利用者から聞かれる前に、あなたの方から今日の見通しを1本だけ届けます。`;
+
+  return `${intro}\n\n${rules.map((rule) => `- ${rule}`).join("\n")}`;
+}
+
 export function maxOutputTokens(style: ReplyStyle, hasTools = false): number {
   const base = style === "voice" ? VOICE_MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS;
   return hasTools ? base + MCP_TOKEN_ALLOWANCE : base;

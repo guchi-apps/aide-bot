@@ -799,10 +799,15 @@ runそのものは `completed` / `failure` になるのに、`lint-and-build` �
     --jq '.check_runs[] | select(.status != "completed") | .name'                     # lint-and-build
   ```
 
-- **`gh run rerun` では直らない。** 壊れたrunのレコードを再利用するため、再実行しても
-  `run_attempt` は1のままジョブが作られず、また `queued` で固まる（#85で25分待って0件を実測）
-- **直すには新しいrunを作る。** `workflow_dispatch` を足してあるので、まずこれを使う。
-  check runはブランチ先端のSHA（＝PRのhead）に付くため、必須チェックはこれで満たされる
+- **`gh run rerun` はCIを走らせ直さない。ブロックだけを外す。** 壊れたrunのレコードを
+  再利用するため、再実行しても `run_attempt` は1のままジョブが作られない（#85で25分待って
+  0件を実測）。**一方で、再実行した時点で古いcheck runがheadのSHAから消える。**
+  必須チェックが「Queuedのまま」ではなく「存在しない」状態になるので、**PRのブロックは
+  外れる**——#85では再実行の約23分後に、15:33の時点で有効化されていたAuto-mergeが
+  そのままPR #84をマージした。**CIが通ったのではなく、チェックごと消えて通り抜けた**ので、
+  これに頼るなら中身は別の手段で検証しておくこと
+- **CIを実際に走らせたいなら新しいrunを作る。** `workflow_dispatch` を足してあるので、
+  まずこれを使う。check runはブランチ先端のSHA（＝PRのhead）に付くため、必須チェックも満たせる
 
   ```bash
   gh workflow run ci.yml --repo guchi-apps/aide-bot --ref issue-<番号>

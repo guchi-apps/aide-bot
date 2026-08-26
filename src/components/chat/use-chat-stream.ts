@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef } from "react";
 
+import type { ChatToolCall } from "@/components/chat/types";
 import { parseStreamEvent, readString } from "@/lib/sse";
 
 /**
@@ -26,6 +27,14 @@ export type SendOptions = {
   onDelta: (text: string) => void;
   /** 繋いだ外部サービスの道具を使い始めたとき（#46）。返答が始まるまでの間を埋めるために使う。 */
   onTool?: (activity: { server: string; tool: string }) => void;
+  /**
+   * 書き込みの道具の呼び出しが済んだとき（#81）。
+   *
+   * `onTool` が「いま調べています」という一瞬の表示なのに対し、こちらは**そのまま記録として
+   * 残るもの**。サーバー側でも同じ内容を `ToolCall` へ保存しているので、呼ぶ側は
+   * 再読み込みしたときと同じ並び——秘書の返答より前——へ足せばよい。
+   */
+  onRecord?: (call: ChatToolCall) => void;
   /** 利用者へ出す文言。中断のときは呼ばれない。 */
   onError: (message: string) => void;
   /**
@@ -140,6 +149,16 @@ export function useChatStream(conversationId: string | null) {
               options.onTool?.({
                 server: readString(event.data, "server") ?? "外部サービス",
                 tool: readString(event.data, "tool") ?? "",
+              });
+            } else if (event.name === "record") {
+              options.onRecord?.({
+                kind: "tool",
+                id: readString(event.data, "id") ?? `tool-${Date.now()}`,
+                server: readString(event.data, "server") ?? "外部サービス",
+                tool: readString(event.data, "tool") ?? "",
+                input: readString(event.data, "input") ?? "",
+                output: readString(event.data, "output"),
+                failed: event.data.failed === true,
               });
             } else if (event.name === "error") {
               failed = true;

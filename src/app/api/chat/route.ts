@@ -20,8 +20,14 @@ import {
   toMcpRequestParts,
   type ConnectedServer,
 } from "@/lib/mcp/connections";
+import { writeToolsFor } from "@/lib/mcp/presets";
 import { writeToolsAllowed } from "@/lib/mcp/write-tools";
 import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
+import {
+  TOOL_CALL_INPUT_LIMIT,
+  TOOL_CALL_OUTPUT_LIMIT,
+  truncateToolText,
+} from "@/lib/tool-call";
 
 /**
  * 1回の送信で回すモデルとのやり取りの上限（#46）。
@@ -65,6 +71,57 @@ type GenerationUsage = {
   cacheWriteTokens: number;
   cacheReadTokens: number;
 };
+
+/**
+ * 書き込みの道具を1回呼んだ記録（#81）。`ToolCall` の1行として残す。
+ *
+ * 残すのは**書き込みだと把握している道具**（`MCP_PRESETS` の `writeTools`）だけ。取得系まで
+ * 残すと、相談のたびに数行ずつ増えて肝心の書き込みが埋もれる。**挙げ漏らした道具は絞り込みと
+ * 同じくここにも残らない**ので、「記録に無い＝書き込んでいない」とは読めない（#78）。
+ */
+type WriteToolCall = {
+  /** `mcp_tool_use` のID。結果（`mcp_tool_result`）と突き合わせるために持つ。 */
+  toolUseId: string;
+  serverSlug: string;
+  serverLabel: string;
+  toolName: string;
+  /** `input_json_delta` を継ぎ足したもの。届かなかった場合は `fallbackInput` を使う。 */
+  input: string;
+  /** `content_block_start` に載っていた引数。刻まれずに一度で届く場合の受け皿。 */
+  fallbackInput: string;
+  output: string | null;
+  failed: boolean;
+  /**
+   * 呼んだ時刻。
+   *
+   * 行を作るのは返答を保存した後なので、`createdAt` を既定のnow()に任せると、相談の画面で
+   * 秘書の返答より後ろに並ぶ。呼んだ時点の時刻をここで押さえ、そのまま列へ入れる。
+   */
+  occurredAt: Date;
+};
+
+/** 画面へ流す形（`ChatToolCall`）。DBの行と同じ内容を、保存を待たずに送る。 */
+function toRecordEvent(call: WriteToolCall) {
+  return {
+    id: call.toolUseId,
+    server: call.serverLabel,
+    tool: call.toolName,
+    input: toolCallInput(call),
+    output: call.output,
+    failed: call.failed,
+  };
+}
+
+/** 保存・表示に使う引数。刻まれて届いたぶんを優先し、無ければ最初に載っていたぶんを使う。 */
+function toolCallInput(call: WriteToolCall): string {
+  return truncateToolText(call.input !== "" ? call.input : call.fallbackInput, TOOL_CALL_INPUT_LIMIT);
+}
+
+/** `mcp_tool_result` の中身を、そのまま残せる文字列に均す。 */
+function toolResultText(content: string | { type: "text"; text: string }[]): string {
+  if (typeof content === "string") return content;
+  return content.map((block) => block.text).join("\n");
+}
 
 /**
  * 生成中のスレッドと、その後片付けが終わるまでのプロミス（#48）。
@@ -284,6 +341,11 @@ export async function POST(request: Request) {
   const { mcpServers, tools, withheldTools } = toMcpRequestParts(servers, allowWriteTools);
   // ツール実行を画面へ出すとき、利用者に見せるのはslugではなく付けた名前。
   const labelBySlug = new Map(servers.map((server) => [server.slug, server.label]));
+  // 記録に残す対象（#81）。絞り込みと同じ名前の表を引く——止める側と残す側で表が分かれると、
+  // 片方だけに足したときに「渡っているのに記録されない」道具ができる。
+  const writeToolsBySlug = new Map(
+    servers.map((server) => [server.slug, new Set(writeToolsFor(server.url))]),
+  );
 
   let client: Anthropic;
   try {
@@ -317,6 +379,13 @@ export async function POST(request: Request) {
         const usages: GenerationUsage[] = [];
         // いま流れている呼び出しぶん。`usages` へ載せた実体をそのまま書き換える。
         let usage: GenerationUsage | null = null;
+        // この往復で呼ばれた書き込みの道具（#81）。`ToolCall` へ残し、画面へも流す。
+        const writeCalls: WriteToolCall[] = [];
+        // 引数は `input_json_delta` で刻まれて届く。内容ブロックの番号で突き合わせる
+        // （番号は1メッセージの中でしか通じないので `message_start` で捨てる）。
+        const writeCallByIndex = new Map<number, WriteToolCall>();
+        // 結果は `tool_use` のIDで返ってくる。こちらはメッセージをまたいでも変わらない。
+        const writeCallByUseId = new Map<string, WriteToolCall>();
 
         try {
           // `pause_turn` で戻ってきたときは、そこまでの内容を足して続きを頼む（#46）。
@@ -356,12 +425,52 @@ export async function POST(request: Request) {
               // 何も出ないまま数秒黙るのを防ぐ。
               if (event.type === "content_block_start" && event.content_block.type === "mcp_tool_use") {
                 const block = event.content_block;
-                controller.enqueue(
-                  sse("tool", {
-                    server: labelBySlug.get(block.server_name) ?? block.server_name,
-                    tool: block.name,
-                  }),
-                );
+                const serverLabel = labelBySlug.get(block.server_name) ?? block.server_name;
+                controller.enqueue(sse("tool", { server: serverLabel, tool: block.name }));
+
+                // 書き込みの道具だけ、あとから辿れるよう控えておく（#81）。
+                if (writeToolsBySlug.get(block.server_name)?.has(block.name)) {
+                  const call: WriteToolCall = {
+                    toolUseId: block.id,
+                    serverSlug: block.server_name,
+                    serverLabel,
+                    toolName: block.name,
+                    input: "",
+                    fallbackInput: JSON.stringify(block.input ?? {}),
+                    output: null,
+                    failed: false,
+                    occurredAt: new Date(),
+                  };
+                  writeCalls.push(call);
+                  writeCallByIndex.set(event.index, call);
+                  writeCallByUseId.set(block.id, call);
+                }
+                continue;
+              }
+
+              // 引数は刻まれて届く。ここで拾わないと、記録に残るのは道具の名前だけになる（#81）。
+              if (event.type === "content_block_delta" && event.delta.type === "input_json_delta") {
+                const call = writeCallByIndex.get(event.index);
+                if (call) call.input += event.delta.partial_json;
+                continue;
+              }
+
+              // 結果が返ったところで画面へ流す（#81）。ここまで来れば「実際に外へ出た」ことが
+              // 確定しているので、生成中の一瞬の表示ではなく残る記録として扱える。
+              if (
+                event.type === "content_block_start" &&
+                event.content_block.type === "mcp_tool_result"
+              ) {
+                const block = event.content_block;
+                const call = writeCallByUseId.get(block.tool_use_id);
+                if (call) {
+                  call.failed = block.is_error;
+                  call.output = truncateToolText(
+                    toolResultText(block.content),
+                    TOOL_CALL_OUTPUT_LIMIT,
+                  );
+                  controller.enqueue(sse("record", toRecordEvent(call)));
+                }
                 continue;
               }
 
@@ -372,6 +481,10 @@ export async function POST(request: Request) {
               // **`message_start` を受けた時点で `usages` へ載せる。** 途中で遮られると
               // `message_delta` は届かないが、入力ぶんはその時点でもう使い終わっている。
               if (event.type === "message_start") {
+                // 内容ブロックの番号は1メッセージの中でしか通じない（#81）。`pause_turn` で
+                // 頼み直した続きでは0から振り直されるため、ここで捨てないと前のメッセージの
+                // 呼び出しへ引数を継ぎ足してしまう。
+                writeCallByIndex.clear();
                 usage = {
                   model: event.message.model,
                   inputTokens: event.message.usage.input_tokens,
@@ -454,6 +567,31 @@ export async function POST(request: Request) {
           } catch (error) {
             // 記録できなくても相談は続けられる。画面へは出さず、ログにだけ残す。
             console.error("[aide-bot] 使用量の記録に失敗した", error);
+          }
+        }
+
+        // 書き込みの道具を呼んだ記録（#81）。`ApiUsage` と同じく、**失敗しても相談は止めない**
+        // ——記録できないことより、返答が返らないことの方が重い。
+        //
+        // 返答を保存した後に書いているが、並びは崩れない。`createdAt` には呼んだ時点の時刻を
+        // 明示的に入れてあり、画面はその時刻で発言と混ぜて並べる。
+        for (const call of writeCalls) {
+          try {
+            await db.toolCall.create({
+              data: {
+                userId: user.id,
+                conversationId: conversation.id,
+                serverLabel: call.serverLabel,
+                serverSlug: call.serverSlug,
+                toolName: call.toolName,
+                input: toolCallInput(call),
+                output: call.output,
+                failed: call.failed,
+                createdAt: call.occurredAt,
+              },
+            });
+          } catch (error) {
+            console.error("[aide-bot] 書き込みの記録に失敗した", error);
           }
         }
 

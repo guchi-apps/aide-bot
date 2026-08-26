@@ -8,21 +8,23 @@ import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
 import { cn } from "@/lib/utils";
 
 import { Markdown } from "./markdown";
-import type { ChatMessage } from "./types";
+import { ToolCallNote } from "./tool-call-note";
+import type { ChatEntry, ChatToolCall } from "./types";
 import { useChatStream } from "./use-chat-stream";
 
 type Props = {
   /** 既存スレッドならそのID。新しい相談ならnull。 */
   conversationId: string | null;
-  initialMessages: ChatMessage[];
+  /** 発言と、書き込みの道具を使った記録（#81）を時刻順に混ぜたもの。 */
+  initialEntries: ChatEntry[];
 };
 
 type Status = "idle" | "thinking" | "streaming";
 
-export function ChatPanel({ conversationId, initialMessages }: Props) {
+export function ChatPanel({ conversationId, initialEntries }: Props) {
   const { send: sendMessage, abort } = useChatStream(conversationId);
 
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const [entries, setEntries] = useState<ChatEntry[]>(initialEntries);
   const [input, setInput] = useState("");
   const [answer, setAnswer] = useState("");
   const [status, setStatus] = useState<Status>("idle");
@@ -72,7 +74,7 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
     const behavior = firstScrollRef.current ? "auto" : "smooth";
     firstScrollRef.current = false;
     bottomRef.current?.scrollIntoView({ behavior, block: "end" });
-  }, [messages, answer, status]);
+  }, [entries, answer, status]);
 
   // 入力欄を中身の高さに合わせる。上限を超えたら中でスクロールさせる。
   useEffect(() => {
@@ -84,9 +86,9 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
 
   async function runTurn(text: string) {
     setError(null);
-    setMessages((previous) => [
+    setEntries((previous) => [
       ...previous,
-      { id: `local-user-${previous.length}`, role: "USER", content: text },
+      { kind: "message", id: `local-user-${previous.length}`, role: "USER", content: text },
     ]);
     answerBufferRef.current = "";
     setAnswer("");
@@ -101,6 +103,9 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
         scheduleFlush();
       },
       onTool: setActivity,
+      // 書き込みの記録は、その場で流れの中へ足す（#81）。サーバー側でも同じ内容を保存して
+      // いるので、再読み込みしても同じ位置——秘書の返答より前——に残る。
+      onRecord: (call: ChatToolCall) => setEntries((previous) => [...previous, call]),
       onError: setError,
     });
 
@@ -108,9 +113,10 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
 
     // 途中で止めた場合も、そこまでの返答は残す。消えると何を聞いたかだけが残る。
     if (result.answer.trim() !== "") {
-      setMessages((previous) => [
+      setEntries((previous) => [
         ...previous,
         {
+          kind: "message",
           id: `local-assistant-${previous.length}`,
           role: "ASSISTANT",
           content: result.answer,
@@ -159,7 +165,7 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
     });
   }
 
-  const isEmpty = messages.length === 0 && status === "idle";
+  const isEmpty = entries.length === 0 && status === "idle";
   const overLimit = input.length > MAX_MESSAGE_LENGTH;
   const busy = status !== "idle";
 
@@ -182,20 +188,22 @@ export function ChatPanel({ conversationId, initialMessages }: Props) {
             </div>
           )}
 
-          {messages.map((message) =>
-            message.role === "USER" ? (
-              <div key={message.id} className="flex justify-end">
+          {entries.map((entry) =>
+            entry.kind === "tool" ? (
+              <ToolCallNote key={entry.id} call={entry} />
+            ) : entry.role === "USER" ? (
+              <div key={entry.id} className="flex justify-end">
                 <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-[16px_16px_4px_16px] border border-accent/25 bg-accent-surface px-4 py-2.5 text-sm md:max-w-[30rem]">
-                  {message.content}
+                  {entry.content}
                 </div>
               </div>
             ) : (
-              <div key={message.id} className="flex gap-3">
+              <div key={entry.id} className="flex gap-3">
                 <SecretaryAvatar />
                 <div className="min-w-0 flex-1">
                   <SecretaryLabel />
-                  <Markdown>{message.content}</Markdown>
-                  {message.interrupted && <InterruptedNote />}
+                  <Markdown>{entry.content}</Markdown>
+                  {entry.interrupted && <InterruptedNote />}
                 </div>
               </div>
             ),

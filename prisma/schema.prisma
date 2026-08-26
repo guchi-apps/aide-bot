@@ -24,6 +24,7 @@ model User {
 
   conversations  Conversation[]
   apiUsages      ApiUsage[]
+  toolCalls      ToolCall[]
   mcpConnections McpConnection[]
 }
 
@@ -48,6 +49,7 @@ model Conversation {
 
   messages  Message[]
   apiUsages ApiUsage[]
+  toolCalls ToolCall[]
 
   // 一覧は「自分のもの・更新が新しい順」でしか引かない。
   @@index([userId, updatedAt])
@@ -162,4 +164,47 @@ model McpConnection {
   @@unique([userId, slug])
   // コールバックはstateだけを手掛かりに引く。
   @@index([pendingState])
+}
+
+// --- 書き込みの道具の記録（#81） ---
+// 秘書が「あとから取り消せない書き込み」を行ったときだけ、その1回を1行として残す（#78）。
+//
+// **Messageとは別のテーブルに置く。** ツールの呼び出しと結果を発言として保存すると、
+// 次の往復で宙に浮いた `tool_use` を履歴へ渡すことになる（#46「保存するのは本文だけ」）。
+// ここはモデルへ渡す履歴の組み立て（route.tsの `toPromptMessages()`）が一切見ない場所なので、
+// 画面に記録を残しても送るリクエストの形は変わらない。
+//
+// **残るのは「書き込みだと把握している道具」だけ。** 名前の正は `MCP_PRESETS` の `writeTools`
+// （src/lib/mcp/presets.ts）で、挙げ漏らした道具は絞り込みと同じく記録にも残らない。
+// 「記録に無い＝書き込んでいない」とは読めない。
+
+model ToolCall {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // どの相談で呼んだか。スレッドを消しても「取り消せない書き込みをした事実」は残したいので、
+  // ApiUsageと同じくCascadeではなくSetNullにする（消えるのは紐付けだけ）。
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  /// 画面に出す接続先の名前。接続を消した後も読めるよう、slugと一緒にここへ写す。
+  serverLabel String @db.VarChar(60)
+  serverSlug  String @db.VarChar(40)
+  /// 道具の名前（`aide_zaim_payment` など）。
+  toolName    String @db.VarChar(120)
+
+  /// モデルが渡した引数のJSON。**「何を登録したのか」はここにしか残らない。**
+  input  String  @db.Text
+  /// 接続先が返した内容。受け取る前に打ち切られた往復ではnullのまま残る。
+  output String? @db.Text
+  /// 接続先が失敗を返した（`mcp_tool_result` の `is_error`）。
+  failed Boolean @default(false)
+
+  // 呼んだ時刻を明示的に入れる（route.ts）。行を作るのは返答を保存した後なので、
+  // 既定のnow()に任せると、相談の画面で秘書の返答より後ろに並ぶ。
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([conversationId, createdAt])
 }

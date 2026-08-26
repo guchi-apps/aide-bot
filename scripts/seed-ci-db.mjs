@@ -82,6 +82,45 @@ const CONVERSATION_SEEDS = [
     ],
   },
   {
+    // 書き込みの道具を使った記録（#81）が画面でどう見えるかを確かめるための1本。
+    // 成功した回と失敗した回の両方を、同じ流れの中へ混ぜてある。
+    title: "コンビニの支払いを記録しておく",
+    startedAt: daysAgo(2),
+    messages: [
+      "さっきファミマで1250円使った。家計簿に入れておいて。",
+      "ファミリーマートで1250円、食費として今日の日付で登録しました。",
+      "あと昨日のカフェの680円も。",
+      "登録しようとしましたが、家計簿側で弾かれました。もう一度お試しいただけますか。",
+    ],
+    // 秘書の返答（奇数番目の発言）の直前に置く。実際の並びと同じにするため、
+    // 発言の時刻の1秒前を呼び出しの時刻にしてある。
+    toolCalls: [
+      {
+        afterMessageIndex: 0,
+        serverLabel: "AIDE",
+        serverSlug: "aide",
+        toolName: "aide_zaim_payment",
+        input: JSON.stringify({
+          amount: 1250,
+          place: "ファミリーマート",
+          category: "食費",
+          date: "2026-08-24",
+        }),
+        output: "登録しました（money_id: 98765）",
+        failed: false,
+      },
+      {
+        afterMessageIndex: 2,
+        serverLabel: "AIDE",
+        serverSlug: "aide",
+        toolName: "aide_zaim_payment",
+        input: JSON.stringify({ amount: 680, place: "カフェ", category: "食費", date: "2026-08-23" }),
+        output: "Zaim API error: 401 Unauthorized",
+        failed: true,
+      },
+    ],
+  },
+  {
     // 割り込み（#48）が画面でどう見えるかを確かめるための1本。文字列の代わりに
     // オブジェクトを渡した発言は、途中で遮られた返答として投入する。
     title: "週末の予定を詰める",
@@ -170,6 +209,22 @@ async function main() {
             interrupted: typeof message === "string" ? false : message.interrupted === true,
           })),
         },
+        // 書き込みの道具の記録（#81）。発言とは別のテーブルに持ち、画面が時刻順に混ぜて出す。
+        toolCalls: {
+          create: (seed.toolCalls ?? []).map((call) => ({
+            user: { connect: { id: user.id } },
+            serverLabel: call.serverLabel,
+            serverSlug: call.serverSlug,
+            toolName: call.toolName,
+            input: call.input,
+            output: call.output,
+            failed: call.failed,
+            // 直後の返答より前に並ぶよう、その発言の1秒前にする。
+            createdAt: new Date(
+              seed.startedAt.getTime() + (call.afterMessageIndex + 1) * 60_000 - 1_000,
+            ),
+          })),
+        },
         // 消費量は返答とは別の行に持つ（#51）。返答1件につきAPIを1回呼んだ形にする。
         apiUsages: {
           create: seed.messages
@@ -248,7 +303,10 @@ async function main() {
   }
 
   const conversationCount = await db.conversation.count({ where: { userId: user.id } });
-  console.log(`[aide-bot] 相談スレッドを投入しました: ${conversationCount}件`);
+  const toolCallCount = await db.toolCall.count({ where: { userId: user.id } });
+  console.log(
+    `[aide-bot] 相談スレッドを投入しました: ${conversationCount}件（書き込みの記録 ${toolCallCount}件）`,
+  );
 
   // 外部サービスとの接続（#46）。slugは利用者の中で一意なのでupsertできる。
   for (const seed of CONNECTION_SEEDS) {

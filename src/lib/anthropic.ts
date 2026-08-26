@@ -127,21 +127,38 @@ const VOICE_FORMAT_RULES = [
  *
  * ツールの説明文だけでも呼び分けはできるが、**音声モードでは「短く答える」指示と
  * ぶつかって呼ばずに済ませてしまう**。手元に無い事実は調べてから答える、と明示する。
+ *
+ * 書き込みについての一文は**繋いでいれば常に置く**（#78）。渡す道具を絞り込めるのは
+ * 名前を把握している接続先だけで、把握していない接続先の書き込みは絞り込みの設定に
+ * よらず渡り続ける。「絞り込んだから安全」と見なさず、確認を取る指示は常に効かせる。
+ *
+ * `writeToolsWithheld` は、こちらが書き込みの道具を止めたかどうか。止めたことを伝えないと、
+ * 道具が見当たらないまま「登録しておきました」と答えてしまう。
  */
-function connectedServiceRules(labels: string[]): string[] {
+function connectedServiceRules(labels: string[], writeToolsWithheld: boolean): string[] {
   if (labels.length === 0) return [];
 
   return [
     `${labels.join("・")}に繋がっていて、その中のデータを取ってくる道具が使えます`,
     "残高・予定・部屋の状態・記録の中身など、手元に無い事実を尋ねられたら、推測せず道具で調べてから答える",
     "道具で取れなかったときは、取れなかったことをそのまま言う。それらしい数字で埋めない",
+    "記録の追加・登録・作成のように、あとから取り消せない結果が残る道具は、呼ぶ前に何をどう登録するか（金額・日付・店名・相手など）を復唱し、そのとおりでよいと言われてから呼ぶ。声で聞き取った内容はそのまま送られてくるので、聞き間違いがそのまま記録になる。頼まれていない書き込みはしない",
+    ...(writeToolsWithheld
+      ? [
+          "いまは書き込みの道具が渡っていません。記録の追加や登録を頼まれたら、書けたことにせず、設定の画面で書き込みを許可すれば使えると伝える",
+        ]
+      : []),
   ];
 }
 
-export function secretarySystemPrompt(style: ReplyStyle, connectedLabels: string[] = []): string {
+export function secretarySystemPrompt(
+  style: ReplyStyle,
+  connectedLabels: string[] = [],
+  writeToolsWithheld = false,
+): string {
   const rules = [
     ...COMMON_RULES,
-    ...connectedServiceRules(connectedLabels),
+    ...connectedServiceRules(connectedLabels, writeToolsWithheld),
     ...(style === "voice" ? VOICE_FORMAT_RULES : TEXT_FORMAT_RULES),
   ];
 

@@ -16,6 +16,13 @@ on:
   push:
     branches:
       - develop
+  # GitHub Actions側の障害中に作られたrunは、ジョブが1つも作られないまま`queued`で
+  # 固まることがある（#85）。必須チェックの`lint-and-build`がQueuedのまま残るため
+  # PRは永久にマージできず、`gh run rerun`でも直らない（runのレコードごと壊れている）。
+  # そのときに新しいrunを作り直すための逃げ道。`gh workflow run ci.yml --ref <ブランチ>`。
+  # ただしpull_requestのときと違い、developを取り込む前のブランチ先端を検査する
+  # （actions/checkoutが`refs/pull/<番号>/merge`ではなくブランチをチェックアウトするため）。
+  workflow_dispatch: {}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}

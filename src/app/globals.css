@@ -444,9 +444,165 @@ body {
 }
 
 /*
+ * 秘書の頭上の吹き出し（#93）。絵は `src/components/voice/speech-bubble.tsx` にあり、
+ * 見た目（色・余白・枠）はTailwindで書いてある。ここに置くのは動きだけ。
+ *
+ * **中身が変わるたび、出てくる動きを一度ずつ再生させる。** コンポーネント側が出す文字列を
+ * そのまま `key` にしているのでReactが要素を作り直し、`bubble-pop` が頭から走る。
+ * 待っている間・話している間・急ぎのときは、そのまま続く動きを後ろに繋げる
+ * （1つの `animation` にまとめて書かないと、後から当てたクラスに丸ごと上書きされる）。
+ */
+.bubble-pop {
+  animation: bubble-pop 0.34s cubic-bezier(0.18, 0.9, 0.32, 1.18) both;
+}
+
+.bubble-float {
+  animation:
+    bubble-pop 0.34s cubic-bezier(0.18, 0.9, 0.32, 1.18) both,
+    bubble-float 5s ease-in-out 0.34s infinite;
+}
+
+.bubble-beat {
+  animation:
+    bubble-pop 0.34s cubic-bezier(0.18, 0.9, 0.32, 1.18) both,
+    bubble-beat 1.05s ease-in-out 0.34s infinite;
+}
+
+/* 急ぎは、読む前に色で気付けるよう外側へ輪を広げる。 */
+.bubble-alert {
+  animation:
+    bubble-pop 0.34s cubic-bezier(0.18, 0.9, 0.32, 1.18) both,
+    bubble-alert 1.8s ease-in-out 0.34s infinite;
+}
+
+@keyframes bubble-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(9px) scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes bubble-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes bubble-beat {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-2px) scale(1.015);
+  }
+}
+
+@keyframes bubble-alert {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 30%, transparent);
+  }
+  55% {
+    box-shadow: 0 0 0 7px color-mix(in oklab, var(--accent) 0%, transparent);
+  }
+}
+
+/*
+ * 吹き出しの中の小さなしるし。状態ごとに動きを変え、文字を読まなくても——横目で見ただけでも
+ * ——いまどれなのかが分かるようにする。
+ */
+.ind-pulse {
+  animation: ind-pulse 2.4s ease-in-out infinite;
+}
+
+.ind-dots > span {
+  animation: ind-hop 1.15s ease-in-out infinite;
+}
+
+.ind-dots > span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.ind-dots > span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.ind-bars > span {
+  transform-origin: center;
+  animation: ind-bar 0.9s ease-in-out infinite;
+}
+
+.ind-bars > span:nth-child(2) {
+  animation-delay: 0.18s;
+}
+
+.ind-bars > span:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+/* 話しているときだけ速く振る。聞いているときとの区別を動きだけで付ける。 */
+.ind-bars-fast > span {
+  animation-duration: 0.5s;
+}
+
+.ind-spin {
+  animation: ind-spin 0.85s linear infinite;
+}
+
+@keyframes ind-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes ind-hop {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  50% {
+    transform: translateY(-5px);
+    opacity: 1;
+  }
+}
+
+@keyframes ind-bar {
+  0%,
+  100% {
+    transform: scaleY(0.32);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes ind-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/*
  * 動きを減らす設定の端末では、ロボットを止める。状態は文言（「聞いています」等）でも
  * 出しているため、止めても何が起きているかは分かる。ただし波は動きが消えると出ないまま
  * になるので、静止したまま出しておく。
+ *
+ * 吹き出しも同じ扱い。**止めるだけで消さない**——`bubble-pop` は `both` で始まりが
+ * 透明なので、animationごと無効にしないと出たまま見えなくなる。
  */
 @media (prefers-reduced-motion: reduce) {
   .bot * {
@@ -456,5 +612,16 @@ body {
   .bot-listening .bot-wave,
   .bot-speaking .bot-wave {
     opacity: 0.5;
+  }
+
+  .bubble-pop,
+  .bubble-float,
+  .bubble-beat,
+  .bubble-alert,
+  .ind-pulse,
+  .ind-spin,
+  .ind-dots > span,
+  .ind-bars > span {
+    animation: none !important;
   }
 }

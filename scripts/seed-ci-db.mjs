@@ -194,6 +194,53 @@ const BRIEFING_REQUEST =
 const BRIEFING_ANSWER =
   "今日は10時から歯科の予約が入っています。日中は27度まで上がり、夕方から雨の予報なので折りたたみ傘があると安心です。部屋のCO2が1200ppmまで上がっているので、出かける前に換気をおすすめします。";
 
+// お知らせの受け皿（#93）。「話す」画面の吹き出しは、ここに未読が1件も無ければ黙る——
+// 空のままだと、実装が効いているのか材料が無いだけなのかを画面から切り分けられない。
+//
+// **1件だけ「すでに出したもの」を入れてある。** 開いた直後の吹き出しに何か出ている状態と、
+// 一度出したものが二度と選ばれないことの両方を確かめるため。
+//
+// 期限（expiresAt）は投入時刻からの相対で入れる。固定の日時にすると、シードを流した翌日に
+// すべて期限切れになり、候補が0件のまま「黙っているのが正しいのか」が分からなくなる。
+const NOTICE_SEEDS = [
+  {
+    source: "aide",
+    kind: "schedule",
+    dedupeKey: "dev-dental",
+    body: "13時から歯科の予約があります。自宅からは電車で25分かかります。",
+    priority: "URGENT",
+    expiresInMinutes: 180,
+  },
+  {
+    source: "aide",
+    kind: "room",
+    dedupeKey: "dev-co2",
+    body: "部屋のCO2が1200ppmまで上がっています。換気をおすすめします。",
+    priority: "NORMAL",
+    expiresInMinutes: 120,
+  },
+  {
+    source: "dayspan",
+    kind: "habit",
+    dedupeKey: "dev-journal",
+    body: "今日の記録がまだ書かれていません。",
+    priority: "LOW",
+    expiresInMinutes: 600,
+  },
+  {
+    source: "asset-manager",
+    kind: "report",
+    dedupeKey: "dev-monthly",
+    body: "先月の資産レポートが出来上がっています。",
+    priority: "LOW",
+    // すでに秘書が選んで出したもの。もう候補には戻らない。
+    spokenText: "先月の資産レポートが出来上がっていますよ。",
+    spokenUrgent: false,
+    shownMinutesAgo: 12,
+    expiresInMinutes: 1440,
+  },
+];
+
 async function main() {
   const user = await db.user.upsert({
     where: { supabaseUserId: CI_BYPASS_SUPABASE_USER_ID },
@@ -442,6 +489,32 @@ async function main() {
 
     console.log("[aide-bot] 朝の見通しを1件投入しました");
   }
+
+  // お知らせの受け皿（#93）。dedupeKeyで畳まれるので、何度流しても増えない。
+  for (const seed of NOTICE_SEEDS) {
+    const { expiresInMinutes, shownMinutesAgo, ...rest } = seed;
+
+    const data = {
+      ...rest,
+      expiresAt: new Date(now.getTime() + expiresInMinutes * 60 * 1000),
+      shownAt: shownMinutesAgo ? new Date(now.getTime() - shownMinutesAgo * 60 * 1000) : null,
+    };
+
+    await db.notice.upsert({
+      where: {
+        userId_source_kind_dedupeKey: {
+          userId: user.id,
+          source: seed.source,
+          kind: seed.kind,
+          dedupeKey: seed.dedupeKey,
+        },
+      },
+      update: data,
+      create: { userId: user.id, ...data },
+    });
+  }
+
+  console.log(`[aide-bot] お知らせを${NOTICE_SEEDS.length}件投入しました`);
 }
 
 main()

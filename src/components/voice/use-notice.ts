@@ -18,8 +18,19 @@ export type NoticeBubble = {
   shownAt: string;
 };
 
-/** 問い合わせの間隔。生成の間隔（10分）ではなく、急ぎに気付くまでの上限。 */
-const POLL_INTERVAL_MS = 60 * 1000;
+/**
+ * 問い合わせの間隔。生成の間隔（10分）ではなく、急ぎに気付くまでの上限。
+ *
+ * **モデルを叩かない問い合わせでも、ただではない。** `/api/*` はRoute Handlerが自分で認証
+ * するが、middlewareは素通しの判定より前に必ず `auth.getUser()` を通す
+ * （`src/lib/supabase/middleware.ts`）ため、**1回ごとにSupabaseへ1往復増える。**
+ * Supabaseは他アプリと共有のプロジェクトで、レート制限もそちらに効く。
+ *
+ * 1分だと開いている間ずっと60回/時・タブごとになるので、急ぎが出るまでの遅れを3分まで
+ * 許して往復を1/3に落としてある。急ぎ側の床（`NOTICE_URGENT_INTERVAL_MS`）は1分のままなので、
+ * 実際に待つのは「次の問い合わせまで」だけ。
+ */
+const POLL_INTERVAL_MS = 3 * 60 * 1000;
 
 /**
  * 触られないまま問い合わせ続ける上限。

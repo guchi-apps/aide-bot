@@ -28,6 +28,7 @@ model User {
   mcpConnections    McpConnection[]
   pushSubscriptions PushSubscription[]
   notificationLogs  NotificationLog[]
+  notices           Notice[]
 }
 
 // --- チャット ---
@@ -280,4 +281,65 @@ model NotificationLog {
 
   @@unique([userId, kind, dedupeKey])
   @@index([userId, createdAt])
+}
+
+// --- お知らせの受け皿（#93） ---
+// **各アプリが「利用者に知らせたいこと」を積む場所。** 秘書は「話す」画面で待っている間、
+// ここから1件を選んで自分の言葉に直し、頭上の吹き出しに出す。
+//
+// 積むのはHTTP（`POST /api/notices`・共有シークレットのBearer）に限る。他アプリから同じ
+// MariaDBへ直に書かせると、このスキーマが外部の実装に固定されて動かせなくなる。
+//
+// **溜まっただけではモデルを呼ばない。** 未読が0件なら生成そのものを行わないため、
+// 黙っている間のAPI費用は0円になる（#79「知らせることが無ければ黙る」と同じ考え方）。
+
+model Notice {
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  /// 積んだアプリ（`aide`・`dayspan` など）。画面には出さず、追跡と抑制の鍵に使う。
+  source String @db.VarChar(40)
+  /// 積んだ側から見た種類（`schedule`・`laundry` など）。抑制の鍵の一部。
+  kind   String @db.VarChar(40)
+  /// 同じ用件を二重に積まないための鍵。積む側が決める（`2026-08-27-dental` など）。
+  dedupeKey String @db.VarChar(120)
+
+  /// 知らせたいことの中身。秘書が言い直す前の、積んだ側の文面。
+  body String @db.Text
+  /// 押したときに開く先（任意）。いまは記録するだけで画面からは使わない。
+  url  String? @db.VarChar(500)
+
+  /// 急ぎかどうかの申告。`urgent` は10分を待たずに出す引き金になる。
+  /// **最終的に「急ぎ」として出すかはモデルが決める**ので、これは手掛かりでしかない。
+  priority NoticePriority @default(NORMAL)
+
+  /// この時刻より前には出さない。未指定なら積んだ時点から出せる。
+  showAt    DateTime?
+  /// この時刻を過ぎたら出さない。予定の通知が翌日まで居座るのを防ぐ。
+  expiresAt DateTime?
+
+  /// 秘書が選んで書いた一言。**吹き出しに出るのはこちら**で、nullなら未読。
+  spokenText String? @db.Text
+  /// 選んだ時点で「急ぎ」として出したか。
+  spokenUrgent Boolean @default(false)
+  /// 選ばれて吹き出しに出た時刻。入っている＝もう出したので、二度は選ばない。
+  shownAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  // 積む側が二重に投げても1行に畳む。source を含めるのは、別のアプリが同じ kind と
+  // dedupeKey を使っても衝突させないため。
+  @@unique([userId, source, kind, dedupeKey])
+  // 未読の取り出し（未読・出せる時刻・期限）と、直近に出したものの取り出しで引く。
+  @@index([userId, shownAt, createdAt])
+}
+
+/// お知らせの急ぎ具合。積む側が申告する。
+enum NoticePriority {
+  /// 出す価値はあるが急がない。溜まっていても後回しでよい。
+  LOW
+  NORMAL
+  /// 時間を逃すと意味が無くなる。届いた回は10分を待たずに選び直す。
+  URGENT
 }

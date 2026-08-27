@@ -89,6 +89,19 @@ export const DEFAULT_CHAT_MODEL: ChatModelId = "claude-opus-5";
 export const BRIEFING_MODEL: ChatModelId = "claude-haiku-4-5";
 
 /**
+ * 吹き出しに出すお知らせを1件選ぶモデル（#93）。
+ *
+ * **設定の画面からは選べない。** 選ぶ主体が居ない場面（画面を開いている間、10分ごとに
+ * 自動で走る）で使うためCookieを読めない。朝の見通しと同じ理由で軽いモデルにしてある。
+ *
+ * こちらは1日に何度も走るため、単価の差がそのまま効く。渡すのは積まれたお知らせの
+ * 一覧だけで**外部サービスの道具は渡さない**ので、入力もごく短い。
+ *
+ * プロンプトキャッシュは効かない（10分間隔では保持時間の5分を過ぎている）。
+ */
+export const NOTICE_MODEL: ChatModelId = "claude-haiku-4-5";
+
+/**
  * 選んだモデルを置くCookie（`aide-bot-talk-mode` と同じ考え方）。
  *
  * localStorageではなくCookieなのは、**サーバー側でも同じ値を読む必要がある**ため。

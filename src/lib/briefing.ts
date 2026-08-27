@@ -12,6 +12,7 @@ import {
 import { BRIEFING_MODEL } from "@/lib/chat-model";
 import { db } from "@/lib/db";
 import { listConnectedServers, toMcpRequestParts } from "@/lib/mcp/connections";
+import { ingestNotice } from "@/lib/notices";
 import { sendPushToUser, usersWithSubscriptions } from "@/lib/push/subscriptions";
 
 /**
@@ -43,6 +44,14 @@ const BRIEFING_TITLE = "今日の見通し";
  * 朝の見通しは複数の道具を順に叩くので、相談よりも `pause_turn` に当たりやすい。
  */
 const MAX_TURNS = 4;
+
+/**
+ * 朝の見通しを、秘書の吹き出しの候補として残しておく時間（#93）。
+ *
+ * 朝7時に作って6時間なので、昼過ぎまで。**その日のうちでも、夕方に「今日の見通し」が
+ * 吹き出しへ出てくると、いま知らせている内容だと誤解される。**
+ */
+const BRIEFING_NOTICE_LIFETIME_MS = 6 * 60 * 60 * 1000;
 
 /**
  * 日本時間での日付（`2026-08-26`）。抑制の鍵に使う。
@@ -229,6 +238,31 @@ async function runFor(userId: string, now: Date): Promise<BriefingOutcome> {
     url: `/c/${conversation.id}`,
     tag: MORNING_BRIEFING_KIND,
   });
+
+  // 同じ内容を、秘書の吹き出しの受け皿へも積む（#93）。
+  //
+  // **aide-bot自身が最初の「積む側」になる。** 受け皿と投入口だけでは、繋いだアプリが
+  // 積みに来るまで吹き出しは黙ったままになる。ここはすでにAIDEから材料を取れている
+  // 唯一の経路なので、通知を送ったのと同じ一言をそのまま回す。
+  //
+  // **積むのは通知を実際に送った回だけ。** 黙った回（BRIEFING_SKIP_TOKEN）は上で戻って
+  // いるのでここへ来ない。通知の抑制（NotificationLog）が1日1本を守るので、二重には積まれない。
+  //
+  // 期限を切っておくのは、朝の見通しが夕方の吹き出しに出てこないようにするため
+  // （吹き出し側の表示は60分で引っ込むが、候補として選ばれ直すのはこちらで止める）。
+  try {
+    await ingestNotice(userId, {
+      source: "aide-bot",
+      kind: MORNING_BRIEFING_KIND,
+      dedupeKey,
+      body: text,
+      url: `/c/${conversation.id}`,
+      expiresAt: new Date(now.getTime() + BRIEFING_NOTICE_LIFETIME_MS),
+    });
+  } catch (error) {
+    // 積めなくても通知は届いている。#51・#79と同じで、記録の失敗で本筋を止めない。
+    console.error("[aide-bot] 朝の見通しをお知らせの受け皿へ積めなかった", error);
+  }
 
   await db.notificationLog.create({
     data: {

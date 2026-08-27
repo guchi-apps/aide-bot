@@ -22,9 +22,12 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  conversations  Conversation[]
-  apiUsages      ApiUsage[]
-  mcpConnections McpConnection[]
+  conversations     Conversation[]
+  apiUsages         ApiUsage[]
+  toolCalls         ToolCall[]
+  mcpConnections    McpConnection[]
+  pushSubscriptions PushSubscription[]
+  notificationLogs  NotificationLog[]
 }
 
 // --- チャット ---
@@ -48,6 +51,7 @@ model Conversation {
 
   messages  Message[]
   apiUsages ApiUsage[]
+  toolCalls ToolCall[]
 
   // 一覧は「自分のもの・更新が新しい順」でしか引かない。
   @@index([userId, updatedAt])
@@ -162,4 +166,118 @@ model McpConnection {
   @@unique([userId, slug])
   // コールバックはstateだけを手掛かりに引く。
   @@index([pendingState])
+}
+
+// --- 書き込みの道具の記録（#81） ---
+// 秘書が「あとから取り消せない書き込み」を行ったときだけ、その1回を1行として残す（#78）。
+//
+// **Messageとは別のテーブルに置く。** ツールの呼び出しと結果を発言として保存すると、
+// 次の往復で宙に浮いた `tool_use` を履歴へ渡すことになる（#46「保存するのは本文だけ」）。
+// ここはモデルへ渡す履歴の組み立て（route.tsの `toPromptMessages()`）が一切見ない場所なので、
+// 画面に記録を残しても送るリクエストの形は変わらない。
+//
+// **残るのは「書き込みだと把握している道具」だけ。** 名前の正は `MCP_PRESETS` の `writeTools`
+// （src/lib/mcp/presets.ts）で、挙げ漏らした道具は絞り込みと同じく記録にも残らない。
+// 「記録に無い＝書き込んでいない」とは読めない。
+
+model ToolCall {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // どの相談で呼んだか。スレッドを消しても「取り消せない書き込みをした事実」は残したいので、
+  // ApiUsageと同じくCascadeではなくSetNullにする（消えるのは紐付けだけ）。
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  /// 画面に出す接続先の名前。接続を消した後も読めるよう、slugと一緒にここへ写す。
+  serverLabel String @db.VarChar(60)
+  serverSlug  String @db.VarChar(40)
+  /// 道具の名前（`aide_zaim_payment` など）。
+  toolName    String @db.VarChar(120)
+
+  /// モデルが渡した引数のJSON。**「何を登録したのか」はここにしか残らない。**
+  input  String  @db.Text
+  /// 接続先が返した内容。受け取る前に打ち切られた往復ではnullのまま残る。
+  output String? @db.Text
+  /// 接続先が失敗を返した（`mcp_tool_result` の `is_error`）。
+  failed Boolean @default(false)
+
+  // 呼んだ時刻を明示的に入れる（route.ts）。行を作るのは返答を保存した後なので、
+  // 既定のnow()に任せると、相談の画面で秘書の返答より後ろに並ぶ。
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([conversationId, createdAt])
+}
+
+// --- プロアクティブ通知（#79） ---
+// 秘書の方から状況を知らせるための購読先と、送った記録。
+//
+// 配る先はaide-bot自身のWeb Push（#77で決定）。Signalyへ流す案を採らなかったのは、
+// 通知を押したときに戻ってくる先がSignalyのPWAになり、そのまま秘書へ返事ができないため。
+
+/**
+ * Web Pushの購読先。**端末ごとに1行**になる（iPhone・PCで別々に購読する）。
+ *
+ * `endpoint` はブラウザベンダーのURLで、数百文字になることがあるためTEXTで持つ。
+ * MariaDBは長いTEXTへそのまま一意制約を張れないので、SHA-256の64文字を別の列に持ち、
+ * そちらへ張る（guchi-apps/signaly の PushSubscription と同じ手）。
+ */
+model PushSubscription {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  endpoint String @db.Text
+  /// `endpoint` のSHA-256（hex 64文字）。一意制約はこちらに張る。
+  endpointHash String @db.VarChar(64)
+
+  /// 購読の鍵（`PushSubscription.getKey()` をbase64urlにしたもの）。
+  p256dh String @db.VarChar(255)
+  auth   String @db.VarChar(255)
+
+  /// どの端末かを画面で見分けるための覚え書き。User-Agentから機械的に作る。
+  deviceLabel String @db.VarChar(120)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  /// 最後に送信が通った時刻。届かなくなった購読を見分ける手掛かりにする。
+  lastNotifiedAt DateTime?
+
+  @@unique([endpointHash])
+  @@index([userId, createdAt])
+}
+
+/**
+ * 送った通知の記録。**これは履歴ではなく抑制のための錠**（#79）。
+ *
+ * AIDEの `src/worker/notify.ts` が「成功を毎回送ると肝心の失敗が埋もれる」という失敗を
+ * 既にしている。同じ理由（kind）・同じ状態（dedupeKey）の通知は一度しか送らない、を
+ * DBの一意制約で守る。朝の見通しでは dedupeKey が日本時間の日付になるため、cronが
+ * 何度叩かれても1日1本までしか出ない。
+ */
+model NotificationLog {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// 通知の種類。いまは `morning-briefing` だけ。
+  kind String @db.VarChar(40)
+  /// 同じ理由の通知を抑制するための鍵。朝の見通しでは `2026-08-26` の形。
+  dedupeKey String @db.VarChar(120)
+
+  title String @db.VarChar(120)
+  /// 送った本文。空文字は「知らせることが無いと判断して黙った」ことを表す。
+  body  String @db.Text
+
+  /// 通知を押したときに開く相談。黙ったときはnull。
+  conversationId String? @db.VarChar(191)
+  /// 実際に届けられた端末の数。0なら購読が全部落ちていた。
+  deliveredCount Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, kind, dedupeKey])
+  @@index([userId, createdAt])
 }

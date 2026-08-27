@@ -11,6 +11,8 @@
 // 値をこのファイルに直書きしている）。一致していないと、ログインは通るのに
 // getCurrentUser() がnullを返し、画面が /login へ戻り続ける。
 
+import { createHash } from "node:crypto";
+
 import { PrismaClient } from "@prisma/client";
 
 const CI_BYPASS_SUPABASE_USER_ID = "ci-screenshot-bot";
@@ -82,6 +84,45 @@ const CONVERSATION_SEEDS = [
     ],
   },
   {
+    // 書き込みの道具を使った記録（#81）が画面でどう見えるかを確かめるための1本。
+    // 成功した回と失敗した回の両方を、同じ流れの中へ混ぜてある。
+    title: "コンビニの支払いを記録しておく",
+    startedAt: daysAgo(2),
+    messages: [
+      "さっきファミマで1250円使った。家計簿に入れておいて。",
+      "ファミリーマートで1250円、食費として今日の日付で登録しました。",
+      "あと昨日のカフェの680円も。",
+      "登録しようとしましたが、家計簿側で弾かれました。もう一度お試しいただけますか。",
+    ],
+    // 秘書の返答（奇数番目の発言）の直前に置く。実際の並びと同じにするため、
+    // 発言の時刻の1秒前を呼び出しの時刻にしてある。
+    toolCalls: [
+      {
+        afterMessageIndex: 0,
+        serverLabel: "AIDE",
+        serverSlug: "aide",
+        toolName: "aide_zaim_payment",
+        input: JSON.stringify({
+          amount: 1250,
+          place: "ファミリーマート",
+          category: "食費",
+          date: "2026-08-24",
+        }),
+        output: "登録しました（money_id: 98765）",
+        failed: false,
+      },
+      {
+        afterMessageIndex: 2,
+        serverLabel: "AIDE",
+        serverSlug: "aide",
+        toolName: "aide_zaim_payment",
+        input: JSON.stringify({ amount: 680, place: "カフェ", category: "食費", date: "2026-08-23" }),
+        output: "Zaim API error: 401 Unauthorized",
+        failed: true,
+      },
+    ],
+  },
+  {
     // 割り込み（#48）が画面でどう見えるかを確かめるための1本。文字列の代わりに
     // オブジェクトを渡した発言は、途中で遮られた返答として投入する。
     title: "週末の予定を詰める",
@@ -126,6 +167,33 @@ const CONNECTION_SEEDS = [
   },
 ];
 
+// 通知の購読（#79）。設定の画面が「登録済みの端末」を件数で出すため、空だと
+// その表示を確かめられない。
+//
+// **endpointは絶対に解決しないホストにしてある**（`.invalid` は予約済みTLD）。
+// 実在するPushサービスのURLを入れると、開発環境で「試しに送る」を押すたびに
+// 外部へリクエストが飛ぶ。
+//
+// **鍵は「長さの正しい」使い捨ての値にしてある。** web-pushは送信の前に長さを検証し
+// （p256dhは65バイト、authは16バイト）、短いと名前解決より手前で
+// `The subscription p256dh value should be 65 bytes long.` で落ちる。適当な文字列にすると、
+// 開発環境で「試しに送る」を押したときの失敗の理由が本番と変わってしまう。
+const PUSH_SUBSCRIPTION_SEEDS = [
+  { endpoint: "https://push.invalid/dev-dummy-iphone", deviceLabel: "iPhone / Safari" },
+  { endpoint: "https://push.invalid/dev-dummy-desktop", deviceLabel: "Linux / Chrome" },
+];
+const DUMMY_P256DH =
+  "BBqwI5nKDsS6vttGU-N-qzS2IkGqA2l98SgR6YGlPINPwxqJ7zBmTv82tQz2X50h6LoERX2uoPgKf9bv9nfKcsg";
+const DUMMY_AUTH = "iAo59Zn5euzmta2BpuwsSA";
+
+// 朝の見通し（#79）。通知を押したときに開く相談がどう見えるかを確かめるための1本。
+// **1通目はUSER**（実際にモデルへ渡している依頼そのもの）。秘書の返答を1通目にすると、
+// 続きを話しかけたときに /api/chat が先頭を落として渡すため、見通しがモデルから見えなくなる。
+const BRIEFING_REQUEST =
+  "（自動）おはよう。今日の予定・移動・天気と、部屋やシステムに気になることがないかを確かめて、今日の見通しを短くまとめて。";
+const BRIEFING_ANSWER =
+  "今日は10時から歯科の予約が入っています。日中は27度まで上がり、夕方から雨の予報なので折りたたみ傘があると安心です。部屋のCO2が1200ppmまで上がっているので、出かける前に換気をおすすめします。";
+
 async function main() {
   const user = await db.user.upsert({
     where: { supabaseUserId: CI_BYPASS_SUPABASE_USER_ID },
@@ -168,6 +236,22 @@ async function main() {
             createdAt: new Date(seed.startedAt.getTime() + index * 60_000),
             content: typeof message === "string" ? message : message.content,
             interrupted: typeof message === "string" ? false : message.interrupted === true,
+          })),
+        },
+        // 書き込みの道具の記録（#81）。発言とは別のテーブルに持ち、画面が時刻順に混ぜて出す。
+        toolCalls: {
+          create: (seed.toolCalls ?? []).map((call) => ({
+            user: { connect: { id: user.id } },
+            serverLabel: call.serverLabel,
+            serverSlug: call.serverSlug,
+            toolName: call.toolName,
+            input: call.input,
+            output: call.output,
+            failed: call.failed,
+            // 直後の返答より前に並ぶよう、その発言の1秒前にする。
+            createdAt: new Date(
+              seed.startedAt.getTime() + (call.afterMessageIndex + 1) * 60_000 - 1_000,
+            ),
           })),
         },
         // 消費量は返答とは別の行に持つ（#51）。返答1件につきAPIを1回呼んだ形にする。
@@ -248,7 +332,10 @@ async function main() {
   }
 
   const conversationCount = await db.conversation.count({ where: { userId: user.id } });
-  console.log(`[aide-bot] 相談スレッドを投入しました: ${conversationCount}件`);
+  const toolCallCount = await db.toolCall.count({ where: { userId: user.id } });
+  console.log(
+    `[aide-bot] 相談スレッドを投入しました: ${conversationCount}件（書き込みの記録 ${toolCallCount}件）`,
+  );
 
   // 外部サービスとの接続（#46）。slugは利用者の中で一意なのでupsertできる。
   for (const seed of CONNECTION_SEEDS) {
@@ -261,6 +348,100 @@ async function main() {
 
   const connectionCount = await db.mcpConnection.count({ where: { userId: user.id } });
   console.log(`[aide-bot] 外部サービスとの接続を投入しました: ${connectionCount}件`);
+
+  // 通知の購読（#79）。一意制約は endpointHash（endpointのSHA-256）に張ってある。
+  // MariaDBは長いTEXTへそのまま一意制約を張れないため（src/lib/push/subscriptions.ts）。
+  for (const seed of PUSH_SUBSCRIPTION_SEEDS) {
+    const endpointHash = createHash("sha256").update(seed.endpoint).digest("hex");
+    const data = {
+      userId: user.id,
+      endpoint: seed.endpoint,
+      endpointHash,
+      p256dh: DUMMY_P256DH,
+      auth: DUMMY_AUTH,
+      deviceLabel: seed.deviceLabel,
+    };
+
+    await db.pushSubscription.upsert({ where: { endpointHash }, update: {}, create: data });
+  }
+
+  const subscriptionCount = await db.pushSubscription.count({ where: { userId: user.id } });
+  console.log(`[aide-bot] 通知の購読を投入しました: ${subscriptionCount}件`);
+
+  // 朝の見通し（#79）。抑制の記録（NotificationLog）も対で入れる。**日付の鍵は日本時間**で
+  // 作る（src/lib/briefing.ts の jstDateKey と同じ）。ずれると、シード投入した日に
+  // 実際の朝の見通しがもう1本届いてしまう。
+  const dedupeKey = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+
+  const briefingExists = await db.notificationLog.findUnique({
+    where: { userId_kind_dedupeKey: { userId: user.id, kind: "morning-briefing", dedupeKey } },
+    select: { id: true },
+  });
+
+  if (!briefingExists) {
+    const briefedAt = new Date(now.getTime());
+    briefedAt.setHours(7, 0, 0, 0);
+
+    const conversation = await db.conversation.create({
+      data: {
+        userId: user.id,
+        title: `${new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", month: "long", day: "numeric" }).format(now)}の見通し`,
+        createdAt: briefedAt,
+        updatedAt: briefedAt,
+        messages: {
+          create: [
+            {
+              role: "USER",
+              content: BRIEFING_REQUEST,
+              createdAt: briefedAt,
+              interrupted: false,
+            },
+            {
+              role: "ASSISTANT",
+              content: BRIEFING_ANSWER,
+              createdAt: new Date(briefedAt.getTime() + 1000),
+              interrupted: false,
+            },
+          ],
+        },
+        // 見通しの生成もMessages APIの呼び出し1回ぶんとして数える（#51）。
+        apiUsages: {
+          create: [
+            {
+              user: { connect: { id: user.id } },
+              model: "claude-haiku-4-5",
+              inputTokens: 4200,
+              outputTokens: 210,
+              cacheWriteTokens: 0,
+              cacheReadTokens: 0,
+              createdAt: new Date(briefedAt.getTime() + 1000),
+            },
+          ],
+        },
+      },
+      select: { id: true },
+    });
+
+    await db.notificationLog.create({
+      data: {
+        userId: user.id,
+        kind: "morning-briefing",
+        dedupeKey,
+        title: "今日の見通し",
+        body: BRIEFING_ANSWER,
+        conversationId: conversation.id,
+        deliveredCount: PUSH_SUBSCRIPTION_SEEDS.length,
+        createdAt: new Date(briefedAt.getTime() + 2000),
+      },
+    });
+
+    console.log("[aide-bot] 朝の見通しを1件投入しました");
+  }
 }
 
 main()

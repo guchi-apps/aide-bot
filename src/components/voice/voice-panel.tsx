@@ -4,7 +4,8 @@ import { Keyboard, Mic, Play, Repeat, Settings2, Square, Volume2, VolumeX, X } f
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useTalkMode } from "@/components/chat/talk-mode-context";
-import type { ChatMessage } from "@/components/chat/types";
+import { ToolCallNote } from "@/components/chat/tool-call-note";
+import type { ChatEntry, ChatToolCall } from "@/components/chat/types";
 import { useChatStream } from "@/components/chat/use-chat-stream";
 import {
   isSpeechRecognitionSupported,
@@ -43,7 +44,8 @@ import { Robot, type RobotState } from "./robot";
 type Props = {
   /** 既存スレッドならそのID。新しい相談ならnull。 */
   conversationId: string | null;
-  initialMessages: ChatMessage[];
+  /** 発言と、書き込みの道具を使った記録（#81）を時刻順に混ぜたもの。 */
+  initialEntries: ChatEntry[];
 };
 
 /**
@@ -96,11 +98,11 @@ const STATUS_LABEL: Record<RobotState, string> = {
  * 読み上げを止めて生成を打ち切り、thinking / speaking → listening へ飛ぶ。マイクを開くのは
  * 黙らせた後なので、自分の声を拾わないという前提はそのまま保たれる。
  */
-export function VoicePanel({ conversationId, initialMessages }: Props) {
+export function VoicePanel({ conversationId, initialEntries }: Props) {
   const { setMode } = useTalkMode();
   const { send: sendMessage, abort, flushNavigation } = useChatStream(conversationId);
 
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const [entries, setEntries] = useState<ChatEntry[]>(initialEntries);
   const [status, setStatus] = useState<RobotState>("idle");
   const [heard, setHeard] = useState("");
   const [lastUser, setLastUser] = useState<string | null>(null);
@@ -197,9 +199,9 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
       setReply("");
       setActivity(null);
       setStatus("thinking");
-      setMessages((previous) => [
+      setEntries((previous) => [
         ...previous,
-        { id: `local-user-${previous.length}`, role: "USER", content: text },
+        { kind: "message", id: `local-user-${previous.length}`, role: "USER", content: text },
       ]);
 
       // 内蔵の声なら、届いた端から文の切れ目で読み上げる。全部揃うまで待つと、字幕が
@@ -239,13 +241,16 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
           reader?.push(delta);
         },
         onTool: setActivity,
+        // 声だけでは「何を登録したのか」がその場で流れて消える。右の記録欄へ残す（#81）。
+        onRecord: (call: ChatToolCall) => setEntries((previous) => [...previous, call]),
         onError: setError,
       });
 
       if (result.answer.trim() !== "") {
-        setMessages((previous) => [
+        setEntries((previous) => [
           ...previous,
           {
+            kind: "message",
             id: `local-assistant-${previous.length}`,
             role: "ASSISTANT",
             content: result.answer,
@@ -701,7 +706,7 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
                     <span className="text-muted">
                       {activity ? `${activity.server}を調べています…` : "返事を考えています…"}
                     </span>
-                  ) : messages.length === 0 ? (
+                  ) : entries.length === 0 ? (
                     <span className="text-muted">
                       下のマイクを押して、そのまま話しかけてください。
                     </span>
@@ -830,30 +835,34 @@ export function VoicePanel({ conversationId, initialMessages }: Props) {
           この相談の記録
         </h2>
         <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-3.5">
-          {messages.length === 0 ? (
+          {entries.length === 0 ? (
             <p className="text-xs leading-relaxed text-muted">
               話しかけると、ここにやり取りが残ります。
             </p>
           ) : (
-            messages.map((message) => (
-              <div key={message.id} className="flex flex-col gap-1">
-                <span className="text-[0.625rem] font-bold tracking-[0.08em] text-muted">
-                  {message.role === "USER" ? "わたし" : "秘書"}
-                </span>
-                <p
-                  className={cn(
-                    "whitespace-pre-wrap break-words text-xs leading-relaxed",
-                    message.role === "USER" &&
-                      "rounded-[10px_10px_10px_3px] bg-accent-surface px-2.5 py-1.5",
+            entries.map((entry) =>
+              entry.kind === "tool" ? (
+                <ToolCallNote key={entry.id} call={entry} compact />
+              ) : (
+                <div key={entry.id} className="flex flex-col gap-1">
+                  <span className="text-[0.625rem] font-bold tracking-[0.08em] text-muted">
+                    {entry.role === "USER" ? "わたし" : "秘書"}
+                  </span>
+                  <p
+                    className={cn(
+                      "whitespace-pre-wrap break-words text-xs leading-relaxed",
+                      entry.role === "USER" &&
+                        "rounded-[10px_10px_10px_3px] bg-accent-surface px-2.5 py-1.5",
+                    )}
+                  >
+                    {entry.content}
+                  </p>
+                  {entry.interrupted && (
+                    <p className="text-[0.625rem] text-muted">— ここで割り込みました</p>
                   )}
-                >
-                  {message.content}
-                </p>
-                {message.interrupted && (
-                  <p className="text-[0.625rem] text-muted">— ここで割り込みました</p>
-                )}
-              </div>
-            ))
+                </div>
+              ),
+            )
           )}
         </div>
         <p className="flex items-center gap-1.5 border-t border-border px-4 py-2.5 text-[0.6875rem] text-muted">

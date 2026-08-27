@@ -121,10 +121,13 @@ export function SpeechBubble({ state, notice, activity }: Props) {
 
   return (
     // 高さを先に取っておく。文言の長さで背が変わっても、下の絵と字幕が上下しない。
-    <div className="flex min-h-[74px] w-full items-end justify-center">
+    //
+    // **`aria-live` は外側の、作り直されない要素に置く。** 中の吹き出しは `key` を変えて
+    // わざと作り直しているが、読み上げ領域そのものを作り直すと、支援技術からは「中身が
+    // 変わった」ではなく「新しい領域が現れた」に見え、読み上げられないことがある。
+    <div className="flex min-h-[74px] w-full items-end justify-center" aria-live="polite">
       <span
         key={text}
-        aria-live="polite"
         className={cn(
           "relative inline-flex max-w-[min(23rem,100%)] items-center gap-[9px] rounded-[20px] border px-[17px] py-2.5 text-left text-[0.90625rem] leading-relaxed shadow-[0_12px_26px_-16px_rgba(15,23,42,0.35)]",
           motion,

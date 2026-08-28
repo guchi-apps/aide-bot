@@ -244,6 +244,53 @@ export function briefingSystemPrompt(connectedLabels: string[]): string {
   return `${intro}\n\n${rules.map((rule) => `- ${rule}`).join("\n")}`;
 }
 
+/**
+ * 吹き出しに出すお知らせを選ばせるときの上限（#93）。
+ *
+ * 返させるのは「選んだお知らせの番号」と「40文字前後の一言」だけ。長い出力に意味が無く、
+ * 1日に何度も走る経路なので、朝の見通しよりさらに詰めてある。
+ */
+export const NOTICE_MAX_OUTPUT_TOKENS = 300;
+
+/**
+ * 「いま出すほどのものは無い」と判断したときに返させる合図（#93）。
+ *
+ * 積まれていても、いま伝える価値が無いものしかない回はある（期限切れ間近でもない・
+ * 夜中にどうでもいい報せ）。**黙れることが、溜まったものを機械的に垂れ流さないための唯一の
+ * 手立て**で、#79の `NO_BRIEFING` と同じ役割を担う。
+ */
+export const NOTICE_SKIP_TOKEN = "NO_NOTICE";
+
+/** 「急ぎとして出す」と判断したときに、1行目へ付けさせる印（#93）。 */
+export const NOTICE_URGENT_MARK = "URGENT";
+
+/**
+ * 積まれたお知らせから1件を選ばせるシステムプロンプト（#93）。
+ *
+ * **道具は渡さない。** 材料はすべて積まれた本文の中にあり、外部サービスを見に行く必要が無い。
+ * 渡すと1回あたりの費用と待ち時間がそのぶん増える（この経路は1日に何度も走る）。
+ *
+ * 返させる形を1行目・2行目に固定してあるのは、JSONを求めると前置きや```で包む揺れが出て、
+ * そのたびに吹き出しが黙るため。**知らない形で返ってきた回は黙る**側へ倒してある。
+ */
+export function noticeSystemPrompt(): string {
+  const rules = [
+    "渡された候補の中から、いま利用者へ伝える価値がいちばん高いものを1つだけ選ぶ",
+    "選ぶ基準は「逃すと困るか」。時間で意味が変わるもの・締め切りが近いものを、いつ言っても同じものより優先する",
+    `いま伝える価値のあるものが1つも無ければ ${NOTICE_SKIP_TOKEN} とだけ返す。候補があるからといって無理に選ばない`,
+    "候補に無いことを足さない。日時・数量・名前は候補の本文にあるものをそのまま使う",
+    "1行目は「選んだ候補の番号」だけを書く。時間を逃すと意味が無くなるものを選んだときは、" +
+      `番号の後ろに半角スペースを空けて ${NOTICE_URGENT_MARK} と書く`,
+    "2行目に、画面の吹き出しへ出す文をそのまま書く。40文字前後・長くても2文",
+    "見出し・箇条書き・記号の装飾・URL・絵文字は使わない。画面の狭い吹き出しに1〜2行で収まる文にする",
+    "3行目以降は書かない。前置きも説明も付けない",
+  ];
+
+  const intro = `${SECRETARY_INTRO}\n\n利用者は「話す」画面を開いて待っています。各アプリから届いた「知らせたいこと」の候補をこれから渡すので、その中から1つ選び、あなたの言葉で短く伝えてください。`;
+
+  return `${intro}\n\n${rules.map((rule) => `- ${rule}`).join("\n")}`;
+}
+
 export function maxOutputTokens(style: ReplyStyle, hasTools = false): number {
   const base = style === "voice" ? VOICE_MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS;
   return hasTools ? base + MCP_TOKEN_ALLOWANCE : base;

@@ -40,6 +40,8 @@ import {
 import { cn } from "@/lib/utils";
 
 import { Robot, type RobotState } from "./robot";
+import { SpeechBubble } from "./speech-bubble";
+import { useNotice } from "./use-notice";
 
 type Props = {
   /** 既存スレッドならそのID。新しい相談ならnull。 */
@@ -75,14 +77,6 @@ const RESTART_DELAY_MS = 300;
  */
 const NAVIGATION_DELAY_MS = 600;
 
-const STATUS_LABEL: Record<RobotState, string> = {
-  idle: "待っています",
-  listening: "聞いています",
-  thinking: "考えています",
-  preparing: "声を用意しています",
-  speaking: "話しています",
-};
-
 /**
  * 音声で秘書と対話する画面（#27）。
  *
@@ -113,6 +107,10 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
   const [reacting, setReacting] = useState(false);
   // 外部サービスを見に行っている間の表示（#46）。声だけだと無言の数秒が長く感じる。
   const [activity, setActivity] = useState<{ server: string; tool: string } | null>(null);
+
+  // 各アプリが積んだお知らせから、秘書が選んだ一言（#93）。待っている間だけ吹き出しに出る。
+  // 変数名を `notice` にしないのは、上の `notice`（VOICEVOXが使えなかった等の案内）と別物のため。
+  const bubbleNotice = useNotice();
 
   const settings = useVoiceSettings();
   const supported = useRecognitionSupported();
@@ -664,24 +662,16 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
           </div>
         )}
 
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 px-6 py-6 text-center">
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-6 py-6 text-center">
+          {/* 待っている間は積まれたお知らせを、往復中はいまの状態を、同じ吹き出しで出す
+              （#93）。外部サービスを見に行っている間に理由を出す扱い（#46）もここへ移した。 */}
+          <SpeechBubble state={status} notice={bubbleNotice} activity={activity} />
+
           <Robot
             state={status}
             reacting={reacting}
             className="size-[168px] md:size-[184px] lg:size-[200px]"
           />
-
-          <p className="inline-flex items-center gap-2 rounded-full bg-accent-surface px-3.5 py-1 text-xs font-bold text-accent">
-            <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
-            {/* 外部サービスを見に行っている間は、待たせている理由を出す（#46）。
-                「考えています」のままだと、#52で潰した「返事が来ていないように見える」が
-                そのぶんだけ戻ってしまう。ロボットの動きは考えているときのまま。 */}
-            <span aria-live="polite">
-              {status === "thinking" && activity
-                ? `${activity.server}を調べています`
-                : STATUS_LABEL[status]}
-            </span>
-          </p>
 
           <div className="flex w-full max-w-[36rem] flex-col gap-3">
             {status === "listening" ? (

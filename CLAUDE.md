@@ -673,6 +673,23 @@ chrome-headless-shell --headless --disable-gpu --no-sandbox --window-size=1060,3
 足してもCSSアニメーションは進まない。見たい時点があるなら、確認用のHTML側で
 `animation-delay: -0.5s` のように負の値を当てて、その姿で止めてから撮る。
 
+### ホバーで出る要素を確かめる（#102）
+
+**ヘッドレスChromeは既定で `hover: none` を返し、`Emulation.setEmulatedMedia` では変えられない。**
+`features: [{ name: "hover", value: "hover" }]` を渡しても `matchMedia("(hover: hover)").matches` は
+`false` のままで、**PCでの見え方を一度も再現できない**（`prefers-color-scheme` などは効くので、
+効いていないことに気付きにくい）。PC側を確かめるときは起動フラグで固定する。
+
+```bash
+chrome-headless-shell --headless --disable-gpu --no-sandbox --remote-debugging-port=9333 \
+  --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 \
+  about:blank
+```
+
+ホバー中の見た目はCDPの `CSS.forcePseudoState`（`forcedPseudoClasses: ["hover"]`）で作る。
+`Input.dispatchMouseEvent` で座標へ動かすより確実。**ホバーの無い端末（iPad・スマホ）は
+既定のまま起こせばよい**ので、この2つを起こし分ければ「乗せたときだけ出る」を両側から確かめられる。
+
 **検証用に一時的なページを足して消したら、`rm -rf .next` してから型チェックする。**
 `next dev` が生成する `.next/dev/types/validator.ts` は消したルートを参照したまま残り、
 `pnpm typecheck` と `pnpm build:ci` が `TS2307: Cannot find module '../../../src/app/<消した名前>/page.js'`

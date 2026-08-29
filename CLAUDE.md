@@ -98,6 +98,14 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 - **消えるのは発言（`Message`）だけ。** 使用量（`ApiUsage`）と書き込みの記録（`ToolCall`）は
   スキーマ側でSetNullにしてあり、相談との紐付けだけが外れて行は残る（#51・#81。消した相談ぶんの
   費用や、取り消せない書き込みをした事実まで消さないため）。**`/usage` の金額は減らない**
+- **ただし `ToolCall` は行として残るだけで、画面からは辿れなくなる。** これを読んでいるのは相談の
+  詳細（`src/app/(chat)/c/[id]/page.tsx`）だけで、`conversationId` がnullになった行を出す導線は
+  どこにも無い。「Zaimに何を登録したか」を後から見る必要が出たら、まずこの一覧を作ること
+- **消した相談のURL（`/c/<ID>`）へ着地したら `/` へ送る。** 相談を消せるようになったことで、
+  この形のURLは初めて「実在しなくなるURL」になった。朝の見通し（#79）のWeb Pushは端末側の
+  ペイロードにこのURLを持っており（`NotificationLog.conversationId` はFKの無いただの列なので、
+  消した後も古い通知は同じURLを開く）、`not-found.tsx` の無いこのリポジトリでは**既定の404に
+  着地して左メニューごと消え、アプリへ戻る導線が無くなる**
 - **他人の相談をIDだけで消せないよう、`deleteMany` で `userId` ごと絞る。** 該当が0件なら404を
   返すので、存在しない場合と他人のものだった場合を区別せずに済む
 - **バツを隠すかどうかは幅ではなくホバーの有無で決める**（`[@media(hover:hover)]:opacity-0`）。
@@ -692,6 +700,23 @@ chrome-headless-shell --headless --disable-gpu --no-sandbox --window-size=1060,3
 **撮った瞬間はアニメーションの0秒地点なので、途中の姿は写らない。** `--virtual-time-budget` を
 足してもCSSアニメーションは進まない。見たい時点があるなら、確認用のHTML側で
 `animation-delay: -0.5s` のように負の値を当てて、その姿で止めてから撮る。
+
+### ホバーで出る要素を確かめる（#102）
+
+**ヘッドレスChromeは既定で `hover: none` を返し、`Emulation.setEmulatedMedia` では変えられない。**
+`features: [{ name: "hover", value: "hover" }]` を渡しても `matchMedia("(hover: hover)").matches` は
+`false` のままで、**PCでの見え方を一度も再現できない**（`prefers-color-scheme` などは効くので、
+効いていないことに気付きにくい）。PC側を確かめるときは起動フラグで固定する。
+
+```bash
+chrome-headless-shell --headless --disable-gpu --no-sandbox --remote-debugging-port=9333 \
+  --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 \
+  about:blank
+```
+
+ホバー中の見た目はCDPの `CSS.forcePseudoState`（`forcedPseudoClasses: ["hover"]`）で作る。
+`Input.dispatchMouseEvent` で座標へ動かすより確実。**ホバーの無い端末（iPad・スマホ）は
+既定のまま起こせばよい**ので、この2つを起こし分ければ「乗せたときだけ出る」を両側から確かめられる。
 
 **検証用に一時的なページを足して消したら、`rm -rf .next` してから型チェックする。**
 `next dev` が生成する `.next/dev/types/validator.ts` は消したルートを参照したまま残り、

@@ -34,13 +34,13 @@ on:
 
 jobs:
   review:
-    uses: guchi-apps/issue-deck/.github/workflows/reusable-claude-review-develop.yml@workflows/v28
+    uses: guchi-apps/issue-deck/.github/workflows/reusable-claude-review-develop.yml@workflows/v29
     with:
       lock-files: "pnpm-lock.yaml"
       risk-paths: |
         ^src/(proxy\.ts$|lib/(supabase/|allowed-users\.ts$)) :: 認証・セッション・許可ユーザー判定の変更 (src/proxy.ts, src/lib/supabase/**, src/lib/allowed-users.ts)
         ^deploy/|^\.github/secrets-manifest\.tsv$ :: 本番環境設定の変更 (deploy/**, .github/secrets-manifest.tsv)
-      prompts-ref: workflows/v28
+      prompts-ref: workflows/v29
     secrets: inherit
     permissions:
       contents: write

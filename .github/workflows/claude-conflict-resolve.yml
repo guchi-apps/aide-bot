@@ -42,7 +42,7 @@ on:
 
 jobs:
   conflict-resolve:
-    uses: guchi-apps/issue-deck/.github/workflows/reusable-claude-conflict-resolve.yml@workflows/v28
+    uses: guchi-apps/issue-deck/.github/workflows/reusable-claude-conflict-resolve.yml@workflows/v29
     with:
       runtime-setup: node-db
       package-manager: pnpm
@@ -57,7 +57,7 @@ jobs:
         DATABASE_URL=mysql://placeholder:placeholder@127.0.0.1:3306/app_aide_bot
         NEXT_PUBLIC_SUPABASE_URL=https://ci-placeholder.supabase.co
         NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=ci-placeholder
-      prompts-ref: workflows/v28
+      prompts-ref: workflows/v29
     secrets: inherit
     permissions:
       contents: write

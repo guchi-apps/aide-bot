@@ -3,14 +3,14 @@
 import { cn } from "@/lib/utils";
 
 import type { RobotState } from "./robot";
-import type { NoticeBubble } from "./use-notice";
+import type { BubbleLine } from "./use-notice";
 
 /**
  * 秘書の頭上に出る吹き出し（#93）。
  *
  * 2つの役目を1つの吹き出しで担う。
  *
- * - **待っている間**は、各アプリが積んだお知らせから秘書が選んだ一言（`notice`）
+ * - **待っている間**は、`line`——お知らせ（#93）・ひとりごと（#101）・呼びかけを順に回したもの
  * - **往復の最中**は、いまの状態（聞いています・考えています…）
  *
  * 分けずに1つにしてあるのは、置ける場所が絵の真上の1か所しかないため。2つ並べると
@@ -26,8 +26,8 @@ import type { NoticeBubble } from "./use-notice";
 
 type Props = {
   state: RobotState;
-  /** 待機中に出すお知らせ。無ければ既定の呼びかけを出す。 */
-  notice: NoticeBubble | null;
+  /** 待機中に出す1枠（`use-notice.ts` が一定の間隔で送ってくる）。無ければ既定の呼びかけ。 */
+  line: BubbleLine | null;
   /** 外部サービスを見に行っている間の表示（#46）。 */
   activity: { server: string; tool: string } | null;
 };
@@ -97,19 +97,31 @@ function Indicator({ state }: { state: RobotState }) {
   return <span className="ind-pulse size-[7px] shrink-0 rounded-full bg-current" aria-hidden="true" />;
 }
 
-export function SpeechBubble({ state, notice, activity }: Props) {
-  // 待っている間だけお知らせを出す。往復中は状態に譲る。
-  const showing = state === "idle" ? notice : null;
+export function SpeechBubble({ state, line, activity }: Props) {
+  // 待っている間だけ輪の中身を出す。往復中は状態に譲る。
+  const showing = state === "idle" ? line : null;
+  const notice = showing?.kind === "notice" ? showing.notice : null;
 
-  const text = showing
-    ? showing.text
-    : state === "thinking" && activity
-      ? // 外部サービスを見に行っている間は、待たせている理由を出す（#46）。
-        `${activity.server}を調べています`
-      : STATUS_LABEL[state];
+  const text =
+    showing?.kind === "notice"
+      ? showing.notice.text
+      : showing?.kind === "chatter"
+        ? showing.text
+        : state === "thinking" && activity
+          ? // 外部サービスを見に行っている間は、待たせている理由を出す（#46）。
+            `${activity.server}を調べています`
+          : STATUS_LABEL[state];
 
-  const urgent = showing?.urgent ?? false;
-  const stamp = showing ? stampOf(showing.shownAt) : "";
+  const urgent = notice?.urgent ?? false;
+  const stamp = notice ? stampOf(notice.shownAt) : "";
+
+  /**
+   * 読み上げソフトへ知らせるかどうか（#101）。
+   *
+   * **ひとりごとが替わっただけの回は知らせない。** 25秒ごとに読み上げが割り込むと、
+   * 画面のほかの操作が追えなくなる。お知らせと状態の変化は今までどおり知らせる。
+   */
+  const announce = showing?.kind !== "chatter";
 
   const motion = urgent
     ? "bubble-alert"
@@ -125,7 +137,10 @@ export function SpeechBubble({ state, notice, activity }: Props) {
     // **`aria-live` は外側の、作り直されない要素に置く。** 中の吹き出しは `key` を変えて
     // わざと作り直しているが、読み上げ領域そのものを作り直すと、支援技術からは「中身が
     // 変わった」ではなく「新しい領域が現れた」に見え、読み上げられないことがある。
-    <div className="flex min-h-[74px] w-full items-end justify-center" aria-live="polite">
+    <div
+      className="flex min-h-[74px] w-full items-end justify-center"
+      aria-live={announce ? "polite" : "off"}
+    >
       <span
         key={text}
         className={cn(
@@ -133,7 +148,8 @@ export function SpeechBubble({ state, notice, activity }: Props) {
           motion,
           urgent
             ? "border-accent/40 bg-accent-surface font-bold text-accent"
-            : showing
+            : // 呼びかけと状態の文言だけ太字にする。ひとりごととお知らせは地の文として置く。
+              showing?.kind === "notice" || showing?.kind === "chatter"
               ? "border-border bg-surface font-medium text-foreground"
               : "border-border bg-surface font-bold text-foreground",
         )}

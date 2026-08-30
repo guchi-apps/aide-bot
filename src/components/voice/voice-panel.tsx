@@ -41,7 +41,7 @@ import { cn } from "@/lib/utils";
 
 import { Robot, type RobotState } from "./robot";
 import { SpeechBubble } from "./speech-bubble";
-import { useNotice } from "./use-notice";
+import { useBubbleLine } from "./use-notice";
 
 type Props = {
   /** 既存スレッドならそのID。新しい相談ならnull。 */
@@ -108,9 +108,9 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
   // 外部サービスを見に行っている間の表示（#46）。声だけだと無言の数秒が長く感じる。
   const [activity, setActivity] = useState<{ server: string; tool: string } | null>(null);
 
-  // 各アプリが積んだお知らせから、秘書が選んだ一言（#93）。待っている間だけ吹き出しに出る。
+  // 待っている間、吹き出しに出す1枠（#93・#101）。お知らせ・ひとりごと・呼びかけを順に回す。
   // 変数名を `notice` にしないのは、上の `notice`（VOICEVOXが使えなかった等の案内）と別物のため。
-  const bubbleNotice = useNotice();
+  const bubbleLine = useBubbleLine();
 
   const settings = useVoiceSettings();
   const supported = useRecognitionSupported();
@@ -665,7 +665,7 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-6 py-6 text-center">
           {/* 待っている間は積まれたお知らせを、往復中はいまの状態を、同じ吹き出しで出す
               （#93）。外部サービスを見に行っている間に理由を出す扱い（#46）もここへ移した。 */}
-          <SpeechBubble state={status} notice={bubbleNotice} activity={activity} />
+          <SpeechBubble state={status} line={bubbleLine} activity={activity} />
 
           <Robot
             state={status}

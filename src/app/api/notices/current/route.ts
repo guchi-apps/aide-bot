@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth-user";
+import { resolveChatter } from "@/lib/chatter";
 import { resolveNotice } from "@/lib/notices";
 
 /**
@@ -14,6 +15,10 @@ import { resolveNotice } from "@/lib/notices";
  *
  * 未ログインでも200で `notice: null` を返す。画面が開いた直後に走る問い合わせで、
  * 401をエラーとして扱うと、ログインの切れ目に吹き出しへ関係のない文言が出る。
+ *
+ * **待機中に回すひとりごと（#101）も同じ応答に載せる。** 取得口を分けると、問い合わせ1回ごとに
+ * middlewareの `auth.getUser()` がもう1往復増える（`src/lib/supabase/middleware.ts`）。
+ * ひとりごとはモデルを呼ばず、組み立て済みのものが `resolveChatter()` の中で使い回される。
  */
 
 export const dynamic = "force-dynamic";
@@ -23,9 +28,9 @@ export const maxDuration = 60;
 
 export async function GET() {
   const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ notice: null });
+  if (!user) return NextResponse.json({ notice: null, chatter: [] });
 
-  const notice = await resolveNotice(user.id);
+  const [notice, chatter] = await Promise.all([resolveNotice(user.id), resolveChatter(user.id)]);
 
-  return NextResponse.json({ notice });
+  return NextResponse.json({ notice, chatter });
 }

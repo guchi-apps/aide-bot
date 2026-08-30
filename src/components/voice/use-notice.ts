@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 /**
- * 吹き出しに出すお知らせを取り続ける（#93）。
+ * 吹き出しに出すものを取り続け、待っている間は一定の間隔で入れ替える（#93・#101）。
  *
  * サーバー側（`resolveNotice()`）が「10分に1回まで」「未読が0件なら叩かない」を守るので、
  * ここは短い間隔で問い合わせてよい。**問い合わせの多くはDBを引くだけで戻る。**
  * 短い間隔にしてあるのは、急ぎが積まれた回にその場で選び直しが走るようにするため。
+ *
+ * 同じ応答に、待機中に回す「ひとりごと」（`resolveChatter()`）も乗ってくる。**取得口を
+ * 分けないのは、問い合わせ1回ごとにmiddlewareの `auth.getUser()` がもう1往復増えるため。**
  */
 
 export type NoticeBubble = {
@@ -17,6 +20,17 @@ export type NoticeBubble = {
   /** 選ばれた時刻（ISO）。吹き出しの末尾に「いつ時点か」を出す。 */
   shownAt: string;
 };
+
+/**
+ * 待っている間に吹き出しへ出す1枠。お知らせ・ひとりごと・呼びかけが同じ輪に並ぶ。
+ *
+ * `call` は既定の「どうぞ、話しかけてください」。**輪の中に必ず1つ入れる**——初めて開いた人に
+ * 「マイクを押せば始まる」ことを伝える枠で、ひとりごとが1件も取れなかった回にはこれだけが残る。
+ */
+export type BubbleLine =
+  | { kind: "notice"; notice: NoticeBubble }
+  | { kind: "chatter"; text: string }
+  | { kind: "call" };
 
 /**
  * 問い合わせの間隔。生成の間隔（10分）ではなく、急ぎに気付くまでの上限。
@@ -33,6 +47,23 @@ export type NoticeBubble = {
 const POLL_INTERVAL_MS = 3 * 60 * 1000;
 
 /**
+ * ひとりごとを次の1件へ送るまでの時間（#101）。
+ *
+ * **入れ替わりは問い合わせと関係なく画面の中だけで進む。** 手元にある数件を順に回すだけなので、
+ * ここを短くしても通信もモデルの呼び出しも増えない。短すぎると視界の端でちらつき、長すぎると
+ * 「止まっている」ように見えるので、読み終えて少し置ける長さにしてある。
+ */
+const CHATTER_ROTATE_MS = 25 * 1000;
+
+/**
+ * お知らせを出しておく時間。ひとりごとより長く置く。
+ *
+ * お知らせは「一度だけ選ばれた、いま伝えたいこと」なので、ひとりごとと同じ速さで流すと
+ * 読み終える前に消える。**急ぎ（`urgent`）のときは回転そのものを止める**（下記）。
+ */
+const NOTICE_HOLD_MS = 60 * 1000;
+
+/**
  * 触られないまま問い合わせ続ける上限。
  *
  * **開きっぱなしのタブを1日中叩かせないための錠。** 見えている間だけ動かすだけでは、
@@ -41,8 +72,28 @@ const POLL_INTERVAL_MS = 3 * 60 * 1000;
  */
 const IDLE_LIMIT_MS = 60 * 60 * 1000;
 
-export function useNotice(): NoticeBubble | null {
-  const [notice, setNotice] = useState<NoticeBubble | null>(null);
+type Payload = { notice: NoticeBubble | null; chatter: string[] };
+
+/**
+ * 前回と同じ中身か。
+ *
+ * 3分ごとの問い合わせは**ほとんどの回で同じものを返す。** そのたびに新しいオブジェクトを
+ * 入れると輪が作り直され、いま出している一言の残り時間が毎回25秒に戻る（＝入れ替わりが
+ * 止まって見える回ができる）。
+ */
+function samePayload(a: Payload, b: Payload): boolean {
+  return (
+    a.notice?.id === b.notice?.id &&
+    a.notice?.text === b.notice?.text &&
+    a.notice?.shownAt === b.notice?.shownAt &&
+    a.chatter.length === b.chatter.length &&
+    a.chatter.every((line, index) => line === b.chatter[index])
+  );
+}
+
+export function useBubbleLine(): BubbleLine | null {
+  const [payload, setPayload] = useState<Payload>({ notice: null, chatter: [] });
+  const [step, setStep] = useState(0);
   // 描画のたびに読むと値が揺れる（`react-hooks/purity`）。最後に触られた時刻は
   // 効果の中で入れ、それまでは0＝「まだ触られていない」として扱う。
   const lastActivityRef = useRef(0);
@@ -71,8 +122,11 @@ export function useNotice(): NoticeBubble | null {
         try {
           const response = await fetch("/api/notices/current", { cache: "no-store" });
           if (response.ok) {
-            const data = (await response.json()) as { notice: NoticeBubble | null };
-            if (!cancelled) setNotice(data.notice);
+            const data = (await response.json()) as Partial<Payload>;
+            if (!cancelled) {
+              const next: Payload = { notice: data.notice ?? null, chatter: data.chatter ?? [] };
+              setPayload((prev) => (samePayload(prev, next) ? prev : next));
+            }
           }
         } catch {
           // 取れなかった回は黙って見送る。吹き出しは状況を知らせる場所で、
@@ -108,5 +162,33 @@ export function useNotice(): NoticeBubble | null {
     };
   }, []);
 
-  return notice;
+  /**
+   * 回す輪。お知らせは先頭に置き、ひとりごとと同じ輪の中で繰り返し出す。
+   *
+   * 出したきりにしないのは、お知らせが選ばれた回だけ吹き出しが1時間固まって、
+   * 「常に何か話している」が止まってしまうため（#93の表示の上限はサーバー側に残る）。
+   */
+  const ring = useMemo<BubbleLine[]>(() => {
+    const lines: BubbleLine[] = payload.chatter.map((text) => ({ kind: "chatter", text }));
+    // 呼びかけは2枠目に置く。先頭にすると、開いた瞬間はいつも同じ文言になる。
+    lines.splice(Math.min(1, lines.length), 0, { kind: "call" });
+    if (payload.notice) lines.unshift({ kind: "notice", notice: payload.notice });
+    return lines;
+  }, [payload]);
+
+  const current = ring.length === 0 ? null : ring[step % ring.length];
+
+  useEffect(() => {
+    if (!current || ring.length <= 1) return;
+    // 急ぎのお知らせは流さない。読み終える前に次のひとりごとへ移ると、
+    // いちばん伝えたいものだけが見逃される。
+    if (current.kind === "notice" && current.notice.urgent) return;
+
+    const delay = current.kind === "notice" ? NOTICE_HOLD_MS : CHATTER_ROTATE_MS;
+    const timer = setTimeout(() => setStep((value) => value + 1), delay);
+
+    return () => clearTimeout(timer);
+  }, [current, ring.length]);
+
+  return current;
 }

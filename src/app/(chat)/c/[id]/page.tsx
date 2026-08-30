@@ -1,4 +1,4 @@
-import { notFound, redirect } from "next/navigation";
+import { redirect } from "next/navigation";
 
 import { ConversationView } from "@/components/chat/conversation-view";
 import type { ChatEntry } from "@/components/chat/types";
@@ -90,8 +90,13 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
     },
   });
 
+  // 消した相談のURLへ着地したときは、既定の404ではなく新しい相談へ送る（#102）。
+  // 相談を消せるようになったことで `/c/<ID>` は初めて「実在しなくなるURL」になり、
+  // 朝の見通し（#79）のWeb Pushは端末側のペイロードにこの形のURLを持っている
+  // （`NotificationLog.conversationId` はFKの無いただの列なので、消した後も同じURLを開く）。
+  // このリポジトリには `not-found.tsx` が無く、404では左メニューごと消えてアプリへ戻れない。
   if (!conversation) {
-    notFound();
+    redirect("/");
   }
 
   return (

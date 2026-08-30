@@ -76,6 +76,7 @@ export type NoticeInput = {
   source: string;
   kind: string;
   dedupeKey: string;
+  title?: string;
   body: string;
   url?: string | null;
   priority?: NoticePriority;
@@ -101,6 +102,7 @@ export type CurrentNotice = {
  */
 export async function ingestNotice(userId: string, input: NoticeInput): Promise<Notice> {
   const data = {
+    title: input.title ?? input.body.split("\n", 1)[0].slice(0, 120),
     body: input.body,
     url: input.url ?? null,
     priority: input.priority ?? NoticePriority.NORMAL,

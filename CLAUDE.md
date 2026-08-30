@@ -291,8 +291,9 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
 1件選んで頭上の吹き出しに出す。** 選ぶのも文面を書くのもモデル（`src/lib/notices.ts`）。
 朝の見通し（#79）と違い、材料を外部サービスへ取りに行かない——もう積まれている。
 
-- **積む口はHTTPだけ**（`POST /api/notices`・共有シークレットのBearer。
-  **`NOTICE_INGEST_TOKEN` 未設定なら経路ごと401**）。他アプリは同じMariaDBに同居しているので
+- **積む口はHTTPまたはMCP**（`POST /api/notices` / `POST /api/mcp`・共有シークレットのBearer。
+  **`NOTICE_INGEST_TOKEN` 未設定なら経路ごと401**）。ChatGPTのスケジュールはMCPの3ツールから登録し、
+  既存のHTTP入口と同じ `ingestNotice()`・重複排除を通す。他アプリは同じMariaDBに同居しているので
   直接INSERTさせることもできるが、それをやると**このスキーマが外部の実装に固定され**、
   列を1つ足すたびに全アプリを直すことになる。宛先は `email`（`User.email` は一意）
 - **未読が0件ならモデルを呼ばない。黙っている間の費用は0円。** これが「10分ごとに走る」を

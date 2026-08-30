@@ -78,6 +78,7 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:30
 | `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase Auth（他アプリと共有のプロジェクト） |
 | `ALLOWED_GOOGLE_EMAILS` | 利用を許可するGoogleアカウント（カンマ区切り）。**未設定だと全員ログイン不可** |
 | `ANTHROPIC_API_KEY` | チャットの返答生成に使うClaude APIのキー。**未設定だと送信が503で弾かれる**（画面は開く） |
+| `NOTICE_INGEST_TOKEN` | ChatGPTのスケジュールなどから `/api/mcp`・`/api/notices` へ登録するときのBearerシークレット |
 | `SIGNALY_WEBHOOK_URL` | CI／デプロイ結果の通知先 |
 | `CI_LOGIN_BYPASS_SECRET` | 開発用ログイン（Cookieバイパス）のシークレット。**本番には設定しない** |
 
@@ -95,6 +96,8 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:30
 チャットの返答は `POST /api/chat` がServer-Sent Eventsで逐次返す。相談は話題ごとの
 スレッド（`Conversation`）に分かれるが、**対話相手は常に同じ「秘書」1人**で、相手を
 選ぶ・切り替える導線は無い。
+
+ChatGPTのスケジュールから情報を登録する方法は [docs/chatgpt-mcp.md](docs/chatgpt-mcp.md) を参照。
 
 ### 話す / 書く
 

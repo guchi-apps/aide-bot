@@ -331,6 +331,43 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
   期限が切れた」（`expiresInMinutes` が負）のダミーも入れてある**（#114）。この2つは
   吹き出しには一生出ないので、一覧（`/notices`）でしか見えない
 
+### 急ぎ（`URGENT`）のお知らせをその場でPushする（#115）
+
+**`URGENT` は受け付けているのに、届くのは「話す」画面を開いている端末の吹き出しだけだった。**
+画面を閉じていればその用件は誰にも届かないまま `expiresAt` を過ぎる。`ingestNotice()`
+（`src/lib/notices.ts`）が `priority === URGENT` を積んだ回にかぎり、その場でWeb Pushを
+1本送るようにしてある。
+
+- **文面はモデルに書かせない。** 積む側の `body` をそのまま出す。生成を挟むと#93の
+  「黙っている間の費用は0円」が崩れる（吹き出し用の選定・言い直しとは別経路）
+- **抑制は `NotificationLog` の一意制約 `(userId, kind, dedupeKey)` に任せる。**
+  `dedupeKey` には `Notice.id` をそのまま使う。`ingestNotice()` は同じ `(source, kind,
+  dedupeKey)` を上書き（「あと30分」→「あと8分」）する設計だが、upsertでも `Notice.id` は
+  変わらないため、同じ用件が積み直されても2回目以降は一意制約に触れてPushが飛ばない。
+  Issue本文の提案どおり `<source>:<kind>:<dedupeKey>` を連結する形だと、`Notice` 側の入力上限
+  （source/kind各40文字・dedupeKey120文字）をそのまま繋いだ場合に
+  `NotificationLog.dedupeKey`（`@db.VarChar(120)`）を超過しうるため採らなかった
+- **押した先は専用の相談（`Conversation`）。** 1通目はUSERの固定文言（`toPromptMessages()`
+  が履歴の先頭をUSERでないと落とすため。#79の制約と同じ）、2通目はASSISTANTとして
+  `body` をそのまま置く。**朝の見通し（#79）と違い、ASSISTANT側もモデルの生成物ではなく
+  積んだ側の文面そのもの**——モデルを呼ばない設計なので「USER=実際にモデルへ渡した依頼」
+  という朝の見通しの体裁は取れない
+- **重い処理（Conversation作成・Push送信）の前に一意制約の有無を確かめる。** 先に
+  `NotificationLog.create()` してから重い処理へ進む順にしなかったのは、同じ用件が短時間に
+  何度も届く運用ではないため。ごく短い時間差での多重POSTでは二重送信のTOCTOUが残るが、
+  許容している
+- **1日あたりの上限は設けていない。** 同じ用件（`Notice.id`）の二重送信だけを防ぐ。
+  「読まれなくなる通知」を避ける仕組み（#79）とは別枠——URGENTは元々「時間を逃すと意味が
+  無くなる」用件に限られる前提のため
+- **`showAt` / `expiresAt` は吹き出し側（`pendingNotices()`）と同じ条件で絞る。**
+  積んだ時点では**まだ早い**（`showAt` が先）・**もう意味が無い**（`expiresAt` を過ぎた）
+  URGENTも、絞らなければそのままPushしてしまう。**`showAt` の到来だけを拾って後から送る
+  仕組みは無い。** まだ早い分は積んだ回に見送られ、次に同じ用件が積み直されて
+  `ingestNotice()` が呼ばれ直したときに改めて判定する
+- **開発DBのシード（`scripts/seed-ci-db.mjs`）はこの経路を通らない。** `NOTICE_SEEDS` は
+  `ingestNotice()` ではなく `db.notice.upsert()` を直接呼んでおり、`pnpm db:seed:dev` の
+  たびにPushが飛ぶことはない
+
 ### 積まれたお知らせの一覧（#114）
 
 **吹き出しに出るのは1件だけなので、控えているものを見る場所を別に置く。** 左メニューの

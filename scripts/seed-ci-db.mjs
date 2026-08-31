@@ -242,6 +242,29 @@ const NOTICE_SEEDS = [
     shownMinutesAgo: 12,
     expiresInMinutes: 1440,
   },
+  // まだ出せないもの（#114の一覧で「21:00から出せます」の欄を確かめるため）。
+  // `showAt` が先なので候補には入らず、吹き出しには出ない。
+  {
+    source: "aide",
+    kind: "schedule",
+    dedupeKey: "dev-recycle",
+    title: "資源ごみ",
+    body: "明日は資源ごみの日です。玄関に出しておくと安心です。",
+    priority: "NORMAL",
+    showAtInMinutes: 180,
+    expiresInMinutes: 900,
+  },
+  // 出さないまま期限が切れたもの（#114）。**読まれずに消えた**ことが分かる唯一の欄で、
+  // ここが空だと実装が効いているのか材料が無いだけなのかを画面から切り分けられない。
+  {
+    source: "aide",
+    kind: "delivery",
+    dedupeKey: "dev-redelivery",
+    title: "宅配の再配達",
+    body: "18時〜20時の再配達を受け付けています。",
+    priority: "NORMAL",
+    expiresInMinutes: -180,
+  },
 ];
 
 async function main() {
@@ -495,11 +518,16 @@ async function main() {
 
   // お知らせの受け皿（#93）。dedupeKeyで畳まれるので、何度流しても増えない。
   for (const seed of NOTICE_SEEDS) {
-    const { expiresInMinutes, shownMinutesAgo, ...rest } = seed;
+    const { expiresInMinutes, shownMinutesAgo, showAtInMinutes, ...rest } = seed;
 
     const data = {
       ...rest,
+      // `title` は後から足した列で、Prismaのスキーマでは必須（DB側の既定 '' はPrismaを
+      // 通らない）。積む側は省略できるので、`ingestNotice()` と同じく本文の1行目で埋める。
+      title: seed.title ?? seed.body.split("\n", 1)[0].slice(0, 120),
+      // 負の値を渡すと「すでに期限が切れたもの」になる（#114の一覧で確かめる）。
       expiresAt: new Date(now.getTime() + expiresInMinutes * 60 * 1000),
+      showAt: showAtInMinutes ? new Date(now.getTime() + showAtInMinutes * 60 * 1000) : null,
       shownAt: shownMinutesAgo ? new Date(now.getTime() - shownMinutesAgo * 60 * 1000) : null,
     };
 

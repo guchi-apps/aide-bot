@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, Plus, Settings, X } from "lucide-react";
+import { BarChart3, Bell, Plus, Settings, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
@@ -17,6 +17,10 @@ type Props = {
   isUsageActive: boolean;
   /** 設定の画面を開いているか。使用量と同じく、相談は選ばれていない状態になる（#46）。 */
   isSettingsActive: boolean;
+  /** お知らせの画面を開いているか（#114）。 */
+  isNoticesActive: boolean;
+  /** まだ秘書が出していないお知らせの件数（#114）。0のときは数字を出さない。 */
+  pendingNoticeCount: number;
   /** 今月の概算費用（`$1.23` の形）。集計はサーバー側で済ませて文字列で受け取る。 */
   monthlyCostLabel: string;
   userLabel: string;
@@ -33,6 +37,8 @@ export function ConversationRail({
   activeId,
   isUsageActive,
   isSettingsActive,
+  isNoticesActive,
+  pendingNoticeCount,
   monthlyCostLabel,
   userLabel,
   userEmail,
@@ -197,6 +203,26 @@ export function ConversationRail({
       </nav>
 
       <div className="border-t border-border">
+        {/* 積まれたお知らせ（#114）。相談ではないので、使用量・設定と同じく下部に置く。
+            未読は「秘書がまだ話していない件数」で、chatter.ts が数えているものと同じ。 */}
+        <Link
+          href="/notices"
+          onClick={onNavigate}
+          aria-current={isNoticesActive ? "page" : undefined}
+          className={cn(
+            "mx-2.5 mt-2 flex items-center justify-between gap-2 rounded-[9px] px-2.5 py-2 text-[0.8125rem] transition-colors hover:bg-rail-active focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            isNoticesActive && "bg-rail-active shadow-[inset_2px_0_0_var(--accent)]",
+          )}
+        >
+          <span className="flex items-center gap-1.5">
+            <Bell className="size-3.5 text-muted" aria-hidden="true" />
+            お知らせ
+          </span>
+          {pendingNoticeCount > 0 && (
+            <span className="tabular-nums font-bold text-accent">未読 {pendingNoticeCount}</span>
+          )}
+        </Link>
+
         {/* 返答のモデル（#71）と外部サービスとの接続（#46）。相談ではないので、一覧ではなく下部に置く。 */}
         <Link
           href="/settings"

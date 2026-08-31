@@ -831,6 +831,19 @@ pnpm exec prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.p
 VPS上で `pnpm exec prisma migrate resolve --rolled-back <マイグレーション名>` を実行してから
 デプロイし直す。
 
+### 必須の列を後から足すときは、書き込み側を全部洗う（#114）
+
+**DB側の `DEFAULT ''` はPrisma Clientの必須判定には効かない。** 既存行が埋まるのと、
+`create` / `upsert` で省略できるのは別の話で、スキーマに `@default` を書かない限り
+**その列を渡していない書き込みは実行時に `Argument \`title\` is missing.` で落ちる。**
+
+`Notice.title`（`20260830160000_add_notice_title`）がこの形で、`scripts/seed-ci-db.mjs` の
+`NOTICE_SEEDS` に1件だけ `title` を持たない行があり、**その時点から `pnpm db:seed:dev` が
+失敗していた。** ローカルDBを作り直す機会が無く、#114 まで気付かれていない。
+**`pnpm lint` も `pnpm typecheck` も `pnpm build:ci` もこれを検知しない**（型の上では
+必須になっており、落ちるのは実際に書き込んだときだけ）。列を足したら、新しいDBへ
+`pnpm db:migrate:deploy` → `pnpm db:seed:dev` を通して確かめること。
+
 ---
 
 # Issueごとの複数Claude Codeエージェント運用

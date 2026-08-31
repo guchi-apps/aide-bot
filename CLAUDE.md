@@ -78,10 +78,13 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 - 相談は話題ごとの `Conversation` に分ける。**対話相手は常に同じ「秘書」1人**で、
   相手を選ぶ・切り替える導線は作らない。スレッドは相手の分け目ではなく話題の分け目（#24）
 - 返答の生成は `POST /api/chat`。使うモデルは設定の画面から選べる（後述「返答のモデル」）。
-  Messages APIのストリーミングで叩き、Server-Sent Eventsで逐次返す
-- **`ANTHROPIC_API_KEY` はモジュールの読み込み時に検証しない。** ビルド時にはこの値が無く
-  （CIもActions上のビルドも持たない）、importの時点で投げると `next build` が落ちる。
-  `getAnthropicClient()` の中で見る
+  **#128でCodex CLI（ChatGPTサブスク経由）へ移った。** `codex exec --json` をサブプロセス
+  起動し、Server-Sent Eventsで返す（詳細は下記「返答の生成をCodex CLI経由にした（#128）」）
+- **`ANTHROPIC_API_KEY` はチャットではもう使わない。** 朝の見通し・お知らせ選定
+  （`briefingSystemPrompt`・`noticeSystemPrompt`）は#128の対象外で今もClaudeを使うため、
+  そちらでは引き続き必要（`getAnthropicClient()`）。モジュールの読み込み時に検証しないのも
+  変えていない——ビルド時にはこの値が無く（CIもActions上のビルドも持たない）、importの時点で
+  投げると `next build` が落ちる
 - 履歴は毎回まるごと送り直すため、`HISTORY_LIMIT`（直近30発言）で頭を切る。上限を外すと
   長いスレッドほど1往復の入力トークンが際限なく伸びる。**ちょうど30発言で切るわけではない**
   （#56。理由は「プロンプトキャッシュ」を参照）
@@ -89,6 +92,34 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   ので、発言を保存するときは同じトランザクションで `conversation.update` も呼ぶ
 - 入力欄のEnter送信は `event.nativeEvent.isComposing` で必ず弾く。日本語入力の変換確定の
   Enterがそのまま送信になる
+
+### 返答の生成をCodex CLI経由にした（#128）
+
+チャット（書く・話す）の返答生成元をAnthropic ClaudeからOpenAI Codex CLI（ChatGPTのサブスク枠で
+動く）へ移した。**朝の見通し（#79）・お知らせ選定（#93）・MCP接続によるデータ取得・使用量
+（`/usage`）の記録は対象外**で、引き続きClaudeを使う段階移行（Issue #128の計画を参照）。
+
+- **`codex exec --json` はトークン単位でストリーミングしない。** 実機確認では、応答全体が
+  1つの `item.completed`（`item.type === "agent_message"`）イベントとして届いた。
+  Anthropicの `content_block_delta` のような細切れの配信はできないため、`/api/chat` は
+  応答が完結してから `delta` イベントを1回だけ送る（`src/lib/codex.ts`）。**割り込み（#48）
+  ても、そこまでの本文は保存できなくなった**——本文は完了時にしか届かないため
+- **サンドボックス設定で秘書チャット用途に絞る。** Codexはコーディングエージェントの性質上
+  シェル実行・ファイル改変のツールを持つため、`--sandbox read-only` ・`--ephemeral`
+  （セッションを永続化しない）・`--ignore-user-config`（利用者の`~/.codex/config.toml`の
+  MCP設定等を持ち込ませない）・`--skip-git-repo-check` を付け、作業ディレクトリ（`-C`）も
+  プロジェクトのルートではなく `os.tmpdir()` に切り離す
+- **標準入力は`ignore`にする。** プロンプトを引数で渡していても標準入力がパイプされていると
+  「Reading additional input from stdin...」という案内とともにその内容がプロンプトへ
+  追記される仕様があるため（stderrに出る。stdoutのJSONLには混ざらない）
+- **利用可能なモデル名を確認できるCLIコマンドは無い。** `~/.codex/models_cache.json` の
+  `models[].slug` から拾う（2026-08-31時点: `gpt-5.6-sol` / `gpt-5.6-terra` /
+  `gpt-5.6-luna` 等）。Sol＝旗艦（いちばん賢い）、Terra＝GPT-5.5相当の中位、Luna＝いちばん
+  速く安いモデル（出典: https://openai.com/index/gpt-5-6/）
+- **Next.jsのビルド時、`child_process.spawn` に動的な文字列（環境変数由来のコマンド名）を
+  渡すと警告が出る。** 「ファイルパスかもしれない」とみなされ、静的トレースがプロジェクト
+  全体をデプロイ成果物へ含めようとする。ファイルパスではなくPATH解決するコマンド名なら
+  `/* turbopackIgnore: true */` を呼び出し直前に付けて対象から外す（`src/lib/codex.ts`）
 
 ### 相談を消す（#102）
 
@@ -174,39 +205,34 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   前半に毎回変わる値が混じっている。**手元にAPIキーが無い環境では確かめられない**ので、
   スタブ（`ANTHROPIC_BASE_URL`）で確かめられるのは「送っているリクエストの形」までと割り切る
 
-## 返答のモデル（#71）
+## 返答のモデル（#71・#128）
 
 返答の生成に使うモデルは、設定の画面（`/settings`）から**「話す」と「書く」で別々に**選ぶ。
-選べるのは `claude-opus-5`・`claude-sonnet-5`・`claude-haiku-4-5` で、既定は両方 `claude-opus-5`。
-単価そのものを下げられる唯一の手立てなので、消さないこと（入力トークンを減らす手当ては
-プロンプトキャッシュ #56 と履歴の窓が担っている）。
+選べるのは `gpt-5.6-sol`・`gpt-5.6-terra`・`gpt-5.6-luna`（Codex CLIが提供するGPT-5.6系。
+賢い順にSol＝旗艦・Terra＝中位・Luna＝いちばん速く安い）で、既定は両方 `gpt-5.6-sol`。
 
-- **モデルの定義の正は `src/lib/chat-model.ts`。** 選べるモデル・既定値・単価表・Cookie名を
-  ここへ閉じてある。**このモジュールはクライアントコンポーネントからimportする**ので、
-  PrismaやAnthropic SDKに触れるものを持ち込まないこと。Cookieの読み出しは
+**#128でAnthropic ClaudeからCodex CLI（ChatGPTサブスク経由）へ移った。** サブスクの定額制で
+動くため、以前のような「単価そのものを下げる」意味でのモデル選択ではなくなった——賢さと
+サブスクの利用枠（5時間ローリング＋週次）の消費速度のトレードオフで選ぶものになっている。
+
+- **モデルの定義の正は `src/lib/chat-model.ts`。** 選べるモデル・既定値・Cookie名をここへ
+  閉じてある。**このモジュールはクライアントコンポーネントからimportする**ので、Prismaや
+  `node:child_process` に触れるものを持ち込まないこと。Cookieの読み出しは
   `src/lib/chat-model-server.ts`（`next/headers` はサーバー専用で、importした時点で
   クライアント側のビルドが落ちる）
 - **選んだ値はCookieに置く**（`aide-bot-chat-model-text` / `aide-bot-chat-model-voice`）。
   localStorageにしないのは、**サーバー側でも同じ値を読む必要がある**ため——返答を作るのは
-  `/api/chat`（Route Handler）で、`/usage` の単価の注記もサーバー側で組み立てている
+  `/api/chat`（Route Handler）
 - **Cookieの値は必ず `normalizeChatModel()` を通す。** 利用者が書き換えられるので、そのまま
-  APIへ渡すと存在しないモデル名で400になり、相談そのものが通らなくなる。知らない値は既定へ落とす
-- **「話す」と「書く」で分けてもプロンプトキャッシュの効きは落ちない**（#56）。体裁の指示が
-  システムプロンプトに入っており、2つのモードのプレフィックスは**もともと別々**。
-  逆に、これ以上細かい単位（スレッドごと等）で切り替えられるようにすると、そのぶん
-  プレフィックスが分かれてキャッシュが効かなくなる
-- **音声モードを軽いモデルに寄せるのが費用と体感の釣り合いがよい。** 「話す」の返答は
-  「3文以内・200文字以内」の指示と `VOICE_MAX_OUTPUT_TOKENS`（1200）で短く保たれており、
-  いちばん高いモデルを充てても差が出にくい一方、費用はそのまま乗る
-- **単価だけを見て選ばせない。** キャッシュが効き始める長さはモデルごとに違い、`claude-haiku-4-5`
-  は4,096トークンから（`claude-opus-5` は512）。短い相談を何度も始める使い方では、単価の
-  下げ幅ほど安くならない。設定の画面はこれを注意書きとして出している（`ModelPicker`）
-- **モデルを増やすときは `CHAT_MODELS` と `MODEL_PRICING` の両方に足す。** 単価の行が無いモデルは
-  使用量の画面で既定のモデルの単価で概算されてしまい、金額が黙って狂う。
-  `cacheMinimumTokens` は世代順に単調ではないので、推測せず単価と一緒に調べ直すこと
-- **`/usage` の注記に出るのは「これから使うモデル」**で、上の集計は呼び出した時点のモデルの
-  単価で足し上げてある。切り替えた前後が混ざった記録は開発DBにも入れてある
-  （`scripts/seed-ci-db.mjs` の `USAGE_MODELS`）
+  `codex exec -m` へ渡すと存在しないモデル名で失敗し、相談そのものが通らなくなる。
+  知らない値は既定へ落とす
+- **`MODEL_PRICING`（Claudeの単価表）・`BRIEFING_MODEL`・`NOTICE_MODEL` は `chat-model.ts` に
+  残っている。** チャットのモデル選択（`CHAT_MODELS`・`ChatModelId`）とは別物——朝の見通し・
+  お知らせ選定は#128の対象外で引き続きClaudeを使うため、その単価・モデル名の置き場として
+  同じファイルを共有している。チャット用の型を変えても壊さないよう、型は分けてある
+- **`/usage` の単価注記（`pricingNote()`。`src/components/chat/usage-view.tsx`）は、単価表に
+  無いモデル（＝Codex）を「Codexは定額制のため費用に含まない」という文言に読み替える。**
+  チャット分の `ApiUsage` 記録自体、#128以降は増えない（Codex呼び出しは記録していない）
 
 ## プロアクティブ通知（#79）
 
@@ -475,6 +501,11 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
 Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として残し、`/usage` の画面で
 日・月・累計に足し上げて出す。左メニューの下部に今月の概算費用も出る。
 
+**#128でチャット（書く・話す）の返答生成はCodex CLIへ移り、このテーブルには積まれなくなった。**
+Codexはサブスク定額制でトークン単価の概念に合わないため、`/api/chat` は `ApiUsage` への記録を
+やめている。朝の見通し（#79）・お知らせ選定（#93）は引き続きClaudeを呼ぶため、そのぶんは
+今までどおり記録される。
+
 - **数える単位は「API呼び出し1回」で、秘書の返答（`Message`）には持たせない。** 返答は
   `answer.trim() !== ""` のときしか保存されず、1文字も出ないうちに割り込まれた往復・生成に
   失敗した往復では行そのものが作られない。履歴を毎回まるごと送り直す設計上、**入力ぶんは
@@ -607,6 +638,13 @@ Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として
 実装していない。** Messages APIのMCPコネクタがAnthropic側でリモートMCPサーバーへ繋ぎ、
 ツールも向こうで実行する。aide-botが持つのは「どこへ・どの資格情報で繋ぐか」だけ
 （`src/lib/mcp/`・`prisma` の `McpConnection`）。
+
+**#128でチャット（書く・話す）の返答生成をCodex CLIへ移してから、この節の仕組みはチャットの
+中では使われていない。** 接続の設定画面（`ConnectionList`・`WriteToolPicker`）とDB
+（`McpConnection`）はそのまま残っており、認可・書き込みの絞り込みロジックも壊していないが、
+`/api/chat` は接続を読み出さず、道具を一切渡さない。Codex CLI自身のMCP対応
+（`~/.codex/config.toml`）は仕組みが異なり、この節の設計を単純に載せ替えられないため、
+対応は別Issueで検討する（Issue #128の計画を参照）。
 
 - **繋ぎ先は「公式のリモートMCPサーバーがあるものは直接、無いものはAIDE経由」で分ける。**
   Googleカレンダー・GmailはClaudeアプリ側のコネクタで、APIから叩ける公開URLが存在しない。

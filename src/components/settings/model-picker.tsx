@@ -7,8 +7,6 @@ import {
   CHAT_MODELS,
   CHAT_MODEL_COOKIE,
   CHAT_MODEL_MAX_AGE,
-  MODEL_PRICING,
-  chatModelCostTag,
   type ChatModelId,
   type ChatModelOption,
   type ReplyStyle,
@@ -16,17 +14,17 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * 返答に使うモデルを選ぶ（#71）。
+ * 返答に使うモデルを選ぶ（#71・#128）。
  *
- * **「話す」と「書く」で別々に持つ。** 音声モードの返答は「3文以内・200文字以内」の指示と
- * `VOICE_MAX_OUTPUT_TOKENS`（1200）で短く保たれているため、いちばん高いモデルを充てても
- * 差が出にくい一方、費用はそのまま乗る。読み返す「書く」だけ据え置ける形にしてある。
- *
- * **分けてもプロンプトキャッシュ（#56）の効きは変わらない。** 体裁の指示がシステム
- * プロンプトに入っており、2つのモードのプレフィックスはもともと別々に分かれている。
+ * **「話す」と「書く」で別々に持つ。** 音声モードの返答は「3文以内・200文字以内」の指示で
+ * 短く保たれているため、いちばん賢いモデルを充てても差が出にくい。読み返す「書く」だけ
+ * 据え置ける形にしてある。
  *
  * 選んだ値はCookieに置く。相談の内容ではなく端末ごとの好みなのでDBへは持たず、それでいて
- * サーバー側（`/api/chat` と使用量の画面）から読める必要があるため、localStorageは使わない。
+ * サーバー側（`/api/chat`）から読める必要があるため、localStorageは使わない。
+ *
+ * **#128でCodex（ChatGPTサブスク経由）へ移り、単価バッジ・プロンプトキャッシュの注意書きは
+ * 削った。** サブスクの定額制で動くため、トークン単価の概念に合わない。
  */
 
 type Props = {
@@ -57,21 +55,11 @@ export function ModelPicker({ initial }: Props) {
   const choose = useCallback(
     (style: ReplyStyle, id: ChatModelId) => {
       setSelected((current) => ({ ...current, [style]: id }));
-      // 次の相談から効かせる。サーバー側（`/api/chat` と使用量の画面）がこれを読む。
+      // 次の相談から効かせる。サーバー側（`/api/chat`）がこれを読む。
       document.cookie = `${CHAT_MODEL_COOKIE[style]}=${id}; path=/; max-age=${CHAT_MODEL_MAX_AGE}; samesite=lax`;
-      // 使用量の画面の注記など、サーバー側で組み立てている表示を作り直させる。
       router.refresh();
     },
     [router],
-  );
-
-  // 選んだモデルのうち、いちばんキャッシュが効きにくいもの。注意書きの要否をこれで決める。
-  const strictest = CHAT_MODELS.filter((model) =>
-    Object.values(selected).includes(model.id),
-  ).reduce<ChatModelOption | null>(
-    (worst, model) =>
-      !worst || model.cacheMinimumTokens > worst.cacheMinimumTokens ? model : worst,
-    null,
   );
 
   return (
@@ -79,9 +67,8 @@ export function ModelPicker({ initial }: Props) {
       <header>
         <h3 className="text-sm font-medium">返答のモデル</h3>
         <p className="mt-1.5 text-[0.8125rem] leading-relaxed text-muted">
-          費用は使うモデルで決まります。安いモデルにすると1往復あたりの金額は下がりますが、
-          込み入った相談ほど答えは浅くなります。選んだ内容はこの端末にだけ保存されます。
-          金額は100万トークンあたりのUSDです。
+          込み入った相談ほど、賢いモデルの方が答えが深くなります。選んだ内容はこの端末にだけ
+          保存されます。
         </p>
       </header>
 
@@ -110,23 +97,8 @@ export function ModelPicker({ initial }: Props) {
         ))}
       </div>
 
-      {/* キャッシュが効き始める長さはモデルごとに違い、世代順に単調ではない（#56）。
-          単価だけを見て選ぶと、短い相談ばかりの使い方で下げ幅ほど安くならない。 */}
-      {strictest && strictest.cacheMinimumTokens > CHAT_MODELS[0].cacheMinimumTokens && (
-        <p className="rounded-xl border border-border bg-surface px-4 py-3 text-xs leading-relaxed text-muted">
-          <b className="font-medium text-foreground">
-            {strictest.label} は、始めたばかりの相談ではキャッシュが効きません。
-          </b>{" "}
-          効き始めるのが{strictest.cacheMinimumTokens.toLocaleString("ja-JP")}
-          トークンからで、{CHAT_MODELS[0].label}（
-          {CHAT_MODELS[0].cacheMinimumTokens.toLocaleString("ja-JP")}）より遅いためです。
-          短い相談を何度も始める使い方だと、単価の下げ幅ほどは安くなりません。
-        </p>
-      )}
-
       <p className="text-xs leading-relaxed text-muted">
-        切り替えても、いまの相談はそのまま続けられます。使用量の画面は呼び出した時点のモデルの
-        単価で集計します。
+        切り替えても、いまの相談はそのまま続けられます。
       </p>
     </section>
   );
@@ -143,10 +115,6 @@ function ModelOption({
   checked: boolean;
   onSelect: () => void;
 }) {
-  const pricing = MODEL_PRICING[model.id];
-  // 既定より安いものだけ、バッジをアクセント色にして目に留まるようにする。
-  const tag = chatModelCostTag(model.id);
-
   return (
     <label
       className={cn(
@@ -177,23 +145,10 @@ function ModelOption({
       <span className="flex min-w-0 flex-col gap-0.5">
         <span className="flex flex-wrap items-center gap-1.5 text-[0.8125rem] font-semibold">
           {model.label}
-          <span
-            className={cn(
-              "rounded-full border px-1.5 py-px text-[0.625rem] font-bold",
-              tag.cheaper
-                ? "border-accent text-accent"
-                : "border-border bg-background text-muted",
-            )}
-          >
-            {tag.text}
+          <span className="rounded-full border border-border bg-background px-1.5 py-px text-[0.625rem] font-bold text-muted">
+            {model.hint}
           </span>
         </span>
-
-        {pricing && (
-          <span className="text-[0.6875rem] leading-relaxed tabular-nums text-muted">
-            入力 ${pricing.input} ／ 出力 ${pricing.output} ／ キャッシュ読み ${pricing.cacheRead}
-          </span>
-        )}
       </span>
     </label>
   );

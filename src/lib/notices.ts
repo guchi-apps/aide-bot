@@ -10,6 +10,7 @@ import {
 } from "@/lib/anthropic";
 import { NOTICE_MODEL } from "@/lib/chat-model";
 import { db } from "@/lib/db";
+import { sendPushToUser } from "@/lib/push/subscriptions";
 
 /**
  * お知らせの受け皿と、そこから1件を選んで吹き出しへ出す仕組み（#93）。**サーバー専用。**
@@ -51,6 +52,20 @@ export const NOTICE_DISPLAY_TTL_MS = 60 * 60 * 1000;
 
 /** 1回の生成でモデルへ渡す候補の数。多すぎると選ぶ精度も入力の短さも失う。 */
 const MAX_CANDIDATES = 12;
+
+/** 急ぎのお知らせをPushで届けたときの `NotificationLog.kind`。 */
+const URGENT_NOTICE_KIND = "urgent-notice";
+
+/**
+ * 通知を押して開いた相談の1通目（USER）に置く固定の文言。
+ *
+ * `POST /api/chat` の `toPromptMessages()`（#79）は履歴の先頭がUSERであることを前提にしており、
+ * ASSISTANTから始まる履歴は先頭を落として渡す。ここはモデルを呼ばずに積む側の文面をそのまま
+ * 出す設計（#93「黙っている間の費用は0円」）なので、朝の見通し（`MORNING_BRIEFING_REQUEST`）
+ * のような「実際にモデルへ渡した依頼」ではなく、続けて話しかけたときにモデルが読む文脈として
+ * 置くだけの短い定型文にしてある。
+ */
+const URGENT_NOTICE_REQUEST = "（自動）急ぎのお知らせを教えて。";
 
 /**
  * 直近の生成の記録。**プロセス内にだけ持つ。**
@@ -110,7 +125,7 @@ export async function ingestNotice(userId: string, input: NoticeInput): Promise<
     expiresAt: input.expiresAt ?? null,
   };
 
-  return db.notice.upsert({
+  const notice = await db.notice.upsert({
     where: {
       userId_source_kind_dedupeKey: {
         userId,
@@ -121,6 +136,92 @@ export async function ingestNotice(userId: string, input: NoticeInput): Promise<
     },
     create: { userId, source: input.source, kind: input.kind, dedupeKey: input.dedupeKey, ...data },
     update: data,
+  });
+
+  // 急ぎ（#115）。「話す」画面を開いている端末にしか届かない吹き出しとは別に、その場でPushを
+  // 送る。失敗しても積んだこと自体は成立させたいので、独立したtry/catchに包む
+  // （#51・#79と同じ「記録・通知の失敗で本筋を止めない」方針）。
+  if (notice.priority === NoticePriority.URGENT) {
+    try {
+      await notifyUrgentNotice(userId, notice);
+    } catch (error) {
+      console.error("[aide-bot] 急ぎのお知らせのPush送信に失敗した", error);
+    }
+  }
+
+  return notice;
+}
+
+/**
+ * 急ぎ（`URGENT`）のお知らせをその場でPushする（#115）。
+ *
+ * `URGENT` が効くのはこれまで「選び直しの間隔を10分から1分へ詰める」ところまでで、
+ * `/api/notices/current` を叩くのは「話す」画面を開いている端末だけだった。画面を閉じていれば
+ * 届かないまま `expiresAt` を過ぎるため、ここでは経路を分けてWeb Pushを直接送る。
+ *
+ * - **文面はモデルに書かせない。** 積む側の `body` をそのまま出す。生成を挟むと#93の
+ *   「黙っている間の費用は0円」が崩れる
+ * - **抑制は `NotificationLog` の一意制約に任せる。** `dedupeKey` に `Notice.id` を使うと、
+ *   `ingestNotice()` が同じ用件を上書き（例: 「あと30分」→「あと8分」）した回も同じidのまま
+ *   なので、2回目以降は一意制約に触れて弾かれる——**Push・Conversationの多重生成を避けるため、
+ *   先に一意制約の有無を確かめてから重い処理へ進む**（TOCTOUは残るが、同じ用件が短時間に
+ *   何度も届く運用ではないため許容している）
+ * - **押した先は専用の相談。** 1通目はUSER（`toPromptMessages()` の制約を満たす固定文言）、
+ *   2通目はASSISTANTとして `body` をそのまま置く。モデルを呼ばずに「秘書からのお知らせ」として
+ *   自然に見せるための構成で、朝の見通し（#79）の「USER=依頼・ASSISTANT=生成物」とは違い、
+ *   ASSISTANT側も積んだ側の文面そのもの
+ * - **1日あたりの上限は設けない。** 同じ用件の二重送信だけを防ぐ
+ * - **`showAt` / `expiresAt` は吹き出し側（`pendingNotices()`）と同じ条件で絞る。** ここを
+ *   見ないと、まだ早い用件が積まれた瞬間に飛んだり、届く前に意味を失った用件までPushして
+ *   しまう。**まだ早い分は、その時刻が来ても改めては送らない**——`showAt` の到来だけを
+ *   拾う仕組みは無く、次に同じ用件が積み直された（`ingestNotice()` が呼ばれ直した）ときに
+ *   初めて判定し直す
+ */
+async function notifyUrgentNotice(userId: string, notice: Notice): Promise<void> {
+  const now = new Date();
+
+  if (notice.showAt && notice.showAt > now) return;
+  if (notice.expiresAt && notice.expiresAt <= now) return;
+
+  const existing = await db.notificationLog.findUnique({
+    where: {
+      userId_kind_dedupeKey: { userId, kind: URGENT_NOTICE_KIND, dedupeKey: notice.id },
+    },
+  });
+  if (existing) return;
+
+  const conversation = await db.conversation.create({
+    data: {
+      userId,
+      title: notice.title,
+      messages: {
+        create: [
+          { role: "USER", content: URGENT_NOTICE_REQUEST },
+          // 同じ時刻だと並び順が不定になる。1秒ずらして返答を後ろに固定する（#79と同じ手当て）。
+          { role: "ASSISTANT", content: notice.body, createdAt: new Date(now.getTime() + 1000) },
+        ],
+      },
+    },
+    select: { id: true },
+  });
+
+  const delivered = await sendPushToUser(userId, {
+    title: notice.title,
+    body: notice.body,
+    url: `/c/${conversation.id}`,
+    tag: URGENT_NOTICE_KIND,
+  });
+
+  await db.notificationLog.create({
+    data: {
+      userId,
+      kind: URGENT_NOTICE_KIND,
+      dedupeKey: notice.id,
+      title: notice.title,
+      body: notice.body,
+      conversationId: conversation.id,
+      deliveredCount: delivered,
+    },
   });
 }
 

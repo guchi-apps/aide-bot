@@ -263,9 +263,10 @@ model NotificationLog {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  /// 通知の種類。いまは `morning-briefing` だけ。
+  /// 通知の種類。`morning-briefing`（#79）・`urgent-notice`（#115）。
   kind String @db.VarChar(40)
-  /// 同じ理由の通知を抑制するための鍵。朝の見通しでは `2026-08-26` の形。
+  /// 同じ理由の通知を抑制するための鍵。朝の見通しでは `2026-08-26` の形、
+  /// 急ぎのお知らせ（#115）では `Notice.id` をそのまま使う。
   dedupeKey String @db.VarChar(120)
 
   title String @db.VarChar(120)

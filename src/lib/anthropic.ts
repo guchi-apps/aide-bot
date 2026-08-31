@@ -44,17 +44,6 @@ export function historyWindowSkip(totalMessages: number): number {
   return Math.floor((totalMessages - HISTORY_LIMIT) / HISTORY_WINDOW_STEP) * HISTORY_WINDOW_STEP;
 }
 
-/** 返答1回あたりの上限トークン。思考ぶんもここから消費される。 */
-export const MAX_OUTPUT_TOKENS = 16000;
-
-/**
- * 音声モードの上限トークン。
- *
- * 読み上げは黙って聞くしかなく、長い返答は飛ばし読みができない。文字のときと同じ上限に
- * しておくと、指示を無視して長く書いた回だけ数分の独白になる。ここで頭を止める。
- */
-export const VOICE_MAX_OUTPUT_TOKENS = 1200;
-
 /**
  * リモートMCPサーバーへ繋ぐためのベータ指定（#46）。
  *
@@ -312,11 +301,6 @@ export function noticeSystemPrompt(): string {
   const intro = `${SECRETARY_INTRO}\n\n利用者は「話す」画面を開いて待っています。各アプリから届いた「知らせたいこと」の候補をこれから渡すので、その中から1つ選び、あなたの言葉で短く伝えてください。`;
 
   return `${intro}\n\n${rules.map((rule) => `- ${rule}`).join("\n")}`;
-}
-
-export function maxOutputTokens(style: ReplyStyle, hasTools = false): number {
-  const base = style === "voice" ? VOICE_MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS;
-  return hasTools ? base + MCP_TOKEN_ALLOWANCE : base;
 }
 
 let client: Anthropic | undefined;

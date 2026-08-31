@@ -151,25 +151,37 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
 }
 
 /**
- * 単価の注記（#71）。
+ * 単価の注記（#71・#128）。
  *
  * 「話す」と「書く」で同じモデルを選んでいるときは、モードの名前を出さず1つにまとめる。
  * 既定のまま使っている人にとって、分かれている事実はここでは要らない情報になる。
+ *
+ * **チャット（書く・話す）はCodex（ChatGPTサブスク経由）へ移り、単価表（`MODEL_PRICING`）に
+ * 無いモデル名になった。** 集計そのもの（下の金額）は朝の見通し・お知らせ選定のぶんだけを
+ * 引き続き表しており、チャット分は積み上がらない。単価が引けないモデルは、単価を書かず
+ * その旨を注記する。
  */
 function pricingNote(chatModels: { label: string; model: string }[]): string {
-  const unique = Array.from(new Set(chatModels.map((entry) => entry.model)));
+  const priced = chatModels.filter((entry) => MODEL_PRICING[entry.model]);
+  const uniquePricedModels = Array.from(new Set(priced.map((entry) => entry.model)));
 
   const describe = (model: string) => {
-    const pricing = MODEL_PRICING[model];
-    if (!pricing) return model;
+    const pricing = MODEL_PRICING[model]!;
     return `${model}（入力 $${pricing.input} / 出力 $${pricing.output} / キャッシュ読み $${pricing.cacheRead} per 1M tokens）`;
   };
 
-  if (unique.length <= 1) {
-    return unique.length === 0 ? "" : `単価は ${describe(unique[0])}。`;
-  }
+  const pricedNote =
+    uniquePricedModels.length === 0
+      ? ""
+      : uniquePricedModels.length === 1
+        ? `単価は ${describe(uniquePricedModels[0])}。`
+        : `単価は${priced.map((entry) => `${entry.label}が ${describe(entry.model)}`).join("、")}。`;
 
-  return `単価は${chatModels.map((entry) => `${entry.label}が ${describe(entry.model)}`).join("、")}。`;
+  const hasUnpriced = priced.length < chatModels.length;
+
+  return hasUnpriced
+    ? `${pricedNote}Codex（ChatGPTサブスク経由）のモデルは定額制のため、チャットぶんの費用はここに含みません。`
+    : pricedNote;
 }
 
 function SummaryCard({

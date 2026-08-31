@@ -194,7 +194,7 @@ export const BRIEFING_SKIP_TOKEN = "NO_BRIEFING";
  * 画面に出しても嘘にならない。
  */
 export const MORNING_BRIEFING_REQUEST =
-  "（自動）おはよう。今日の予定・移動・天気と、部屋やシステムに気になることがないかを確かめて、今日の見通しを短くまとめて。";
+  "（自動）おはよう。今日の予定・移動・天気と、部屋やシステム・支払い予定・放置しているセッション・確認待ちに気になることがないかを確かめて、今日の見通しを短くまとめて。";
 
 /**
  * 朝の見通しで、繋いでいる外部サービスについて添える指示（#79）。
@@ -224,6 +224,29 @@ const BRIEFING_FORMAT_RULES = [
 ];
 
 /**
+ * 朝の見通しで扱う材料と、本文へ触れる条件（#116）。
+ *
+ * 200文字の上限がある以上、道具が増えても全部を毎日書けるわけではない。**「毎日必ず書く」と
+ * 「条件を満たした日だけ触れる」を分ける。** しきい値をここ（システムプロンプト）に置くのは、
+ * `MORNING_BRIEFING_REQUEST` は相談の1通目としてそのまま画面に出るため、数値のような
+ * 技術的な詳細を持ち込みたくないため。
+ *
+ * 道具そのものは条件を満たすかどうかに関わらず毎日呼ぶ（呼ばないと条件を満たすかどうか
+ * 判断できない）。触れるかどうかだけが条件で変わる。
+ */
+const BRIEFING_MATERIAL_RULES = [
+  "予定・天気（aide_daily_briefing）、部屋（aide_room_status）、システム（aide_ops_status）、" +
+    "支払予定（aide_money_summary の fixedCosts）、放置しているセッション（aide_claude_sessions）、" +
+    "確認待ちの滞留（aide_dev_status の attention のうち 00.check-user）は、毎日すべて道具で確かめる",
+  "予定・天気は毎日必ず本文に書く。それ以外は次の条件を満たしたときだけ本文で触れ、満たさなければ" +
+    "道具で確かめていても本文では一切触れない",
+  "部屋・システムは problems に何か入っているときだけ",
+  "支払予定は明日までに引き落とされるものがあるときだけ",
+  "放置しているセッションは status が waiting かつ statusForMinutes が30分以上のものがあるときだけ",
+  "確認待ちの滞留は1件以上あるときだけ",
+];
+
+/**
  * 朝の見通しのシステムプロンプト（#79）。
  *
  * **道具を必ず使わせる。** 手元には何の材料も無く、繋いでいる外部サービス（AIDE）から
@@ -232,7 +255,7 @@ const BRIEFING_FORMAT_RULES = [
  */
 export function briefingSystemPrompt(connectedLabels: string[]): string {
   const rules = [
-    "手元には材料が無い。予定・天気・部屋やシステムの状態は、必ず道具で調べてから書く",
+    ...BRIEFING_MATERIAL_RULES,
     "道具で取れなかった項目は書かない。それらしい数字や予定を作らない",
     `知らせる価値があることが1つも無ければ、本文を書かずに ${BRIEFING_SKIP_TOKEN} とだけ返す。無理に何か書かない`,
     ...briefingServiceRules(connectedLabels),

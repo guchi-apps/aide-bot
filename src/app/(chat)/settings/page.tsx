@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
+import { BriefingTimePicker } from "@/components/settings/briefing-time-picker";
 import { ConnectionList } from "@/components/settings/connection-list";
 import { ModelPicker } from "@/components/settings/model-picker";
 import { NotificationSettings } from "@/components/settings/notification-settings";
@@ -58,6 +59,8 @@ export default async function SettingsPage({ searchParams }: Props) {
             バンドルへ焼き込まれ、鍵を差し替えるたびに再ビルドが要る。理由の詳細は
             `@/lib/push/config` のコメント。 */}
         <NotificationSettings publicKey={pushPublicKey()} initialDeviceCount={deviceCount} />
+
+        <BriefingTimePicker initial={{ hour: user.briefingHour, minute: user.briefingMinute }} />
 
         <ModelPicker initial={models} />
 

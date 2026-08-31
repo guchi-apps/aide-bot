@@ -68,6 +68,26 @@ export function jstDateKey(now: Date): string {
   }).format(now);
 }
 
+/**
+ * 日本時間での「その日の何分目か」（0〜1439）。#121で時刻を設定できるようにするために追加。
+ *
+ * サーバーのタイムゾーンに頼らない（`jstDateKey()` と同じ理由）。
+ */
+function jstMinuteOfDay(now: Date): number {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tokyo",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value ?? "0");
+
+  // `hour` は24時制で深夜に "24" を返すことがある環境差があるため丸めておく（`jstParts()` と同じ）。
+  return (value("hour") % 24) * 60 + value("minute");
+}
+
 /** 相談のタイトル。「8月26日の見通し」の形。 */
 function briefingConversationTitle(now: Date): string {
   const formatted = new Intl.DateTimeFormat("ja-JP", {
@@ -171,13 +191,21 @@ async function generateBriefing(userId: string): Promise<string> {
   return answer;
 }
 
+type BriefingUser = { id: string; briefingHour: number; briefingMinute: number };
+
 /**
  * 1人ぶんの朝の見通しを作って届ける。
  *
- * 抑制は**生成の前**に見る。すでに今日ぶんの記録があれば、APIを1回も叩かずに戻る
- * （cronが二重に登録されていても費用が二重に掛からない）。
+ * 抑制は**生成の前**に見る。まず設定時刻を過ぎているか（軽い・DBを引かない判定）を見て、
+ * 次にすでに今日ぶんの記録があるか（#121で追加する前からの判定）を見る。どちらも
+ * APIを1回も叩かずに戻れるため、cronが同じ日に何度叩かれても費用は掛からない。
  */
-async function runFor(userId: string, now: Date): Promise<BriefingOutcome> {
+async function runFor({ id: userId, briefingHour, briefingMinute }: BriefingUser, now: Date): Promise<BriefingOutcome> {
+  const targetMinute = briefingHour * 60 + briefingMinute;
+  if (jstMinuteOfDay(now) < targetMinute) {
+    return { userId, status: "skipped", delivered: 0, detail: "設定時刻前" };
+  }
+
   const dedupeKey = jstDateKey(now);
 
   const already = await db.notificationLog.findUnique({
@@ -287,16 +315,20 @@ async function runFor(userId: string, now: Date): Promise<BriefingOutcome> {
  */
 export async function runMorningBriefing(now = new Date()): Promise<BriefingOutcome[]> {
   const userIds = await usersWithSubscriptions();
+  const users = await db.user.findMany({
+    where: { id: { in: userIds } },
+    select: { id: true, briefingHour: true, briefingMinute: true },
+  });
 
   const outcomes: BriefingOutcome[] = [];
 
-  for (const userId of userIds) {
+  for (const user of users) {
     try {
-      outcomes.push(await runFor(userId, now));
+      outcomes.push(await runFor(user, now));
     } catch (error) {
-      console.error(`[aide-bot] 朝の見通しの処理に失敗した: ${userId}`, error);
+      console.error(`[aide-bot] 朝の見通しの処理に失敗した: ${user.id}`, error);
       outcomes.push({
-        userId,
+        userId: user.id,
         status: "failed",
         delivered: 0,
         detail: error instanceof Error ? error.message : "不明なエラー",

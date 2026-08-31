@@ -285,6 +285,23 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
   以降の読み上げが無音になり（「音声対話」参照）、通知のタップがその許可として使えるかは
   端末依存。**落としどころは「押すと該当の相談が開き、マイクを押せば続けられる」まで**にしてある
 
+### 届く時刻を変える（#121）
+
+**既定は7:00だが、設定の画面（`briefingHour`/`briefingMinute`。`User`テーブル）から
+30分刻みで変えられる。** Cookieにしないのは他の設定（返答のモデル・書き込みの道具）と同じ
+理由——読むのがcronから叩かれる利用者のいない経路で、そこにはCookieが届かない。
+
+- **判定は「設定時刻を過ぎた最初の起動で送る」方式。** cronの起動頻度そのものを利用者ごとに
+  変えることはできないため、`runFor()`（`src/lib/briefing.ts`）の先頭で
+  `jstMinuteOfDay(now) < briefingHour*60+briefingMinute` を見て、過ぎていなければAPIを
+  1回も叩かずに戻る。既存の「今日ぶんもう送ったか」（`NotificationLog`）より**先に**見る
+  ——DBを引かない分こちらの方が軽い
+- **30分刻みにしか対応しない。** cronの起動頻度（vps側`cron/crontab.txt`。#168で追加）と
+  釣り合わせた粒度で、それより細かく選べても実際に届く時刻の精度は上がらない。頻度を
+  変えるときは両方（画面の選択肢とcrontabの`*/N`）を一緒に見直すこと
+- **「起きた時間に合わせたい」は今回のスコープ外。** 固定時刻の中で選べるようにしただけで、
+  起床検知の仕組みは持たない
+
 ## お知らせの受け皿と、秘書の吹き出し（#93）
 
 **各アプリが「利用者に知らせたいこと」を `Notice` へ積み、秘書が「話す」画面で待っている間に
@@ -880,6 +897,28 @@ VPS上で `pnpm exec prisma migrate resolve --rolled-back <マイグレーショ
 **`pnpm lint` も `pnpm typecheck` も `pnpm build:ci` もこれを検知しない**（型の上では
 必須になっており、落ちるのは実際に書き込んだときだけ）。列を足したら、新しいDBへ
 `pnpm db:migrate:deploy` → `pnpm db:seed:dev` を通して確かめること。
+
+**上と同じ理由（`Notice.title` にDB側だけ `DEFAULT ''` が残り、`schema.prisma` には
+`@default` が無い）で、`prisma migrate dev` で他の列を足すたびに無関係な
+`ALTER TABLE Notice ALTER COLUMN title DROP DEFAULT` が生成物へ混ざる**（#121で実際に
+踏んだ）。Prismaは「スキーマとDBの差分」全体を1つのマイグレーションにまとめて出すため、
+狙った変更（例: 別テーブルへの列追加）だけを切り出してはくれない。**生成されたSQLは必ず
+目を通し、今回の変更と無関係な行が混ざっていたら手で取り除く。** 残したままコミットすると、
+関係の無いPRで本番の`Notice`テーブルの挙動が変わる
+
+### 新しいworktreeで開発サーバーを動かすには（#121）
+
+**新しく作ったworktreeに`.env.local`が無いことがある**（本体チェックアウトからコピーされる
+想定だが、実際には空のことがあった）。`pnpm env:init`で`.env.local.example`からコピーした
+だけでは、`NEXT_PUBLIC_SUPABASE_URL`・`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`が空文字のままで、
+**`next dev`を起動しただけでmiddleware（`src/lib/supabase/middleware.ts`）が
+`Your project's URL and Key are required` で全リクエスト500になる**——開発用ログイン
+バイパス（`isCiBypassRequest`）はこのSupabaseクライアント生成より前で判定しているが、
+バイパスが効くのはCookieを持ったリクエストだけで、`POST /api/dev/login`自体もmiddlewareを
+通るため道連れで落ちる。CIのビルド（`.github/workflows/ci.yml`）と同じダミー値
+（`https://ci-placeholder.supabase.co` / `ci-placeholder`）を入れれば、実際のSupabase
+プロジェクトが無くても開発用ログインの経路までは動く。あわせて`PORT`（worktree用に
+割り当てられた値）も`.env.local`に無ければ追記が要る（`scripts/dev.sh`が読む）。
 
 ---
 

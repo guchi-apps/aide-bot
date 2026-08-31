@@ -1,4 +1,4 @@
-import { DEFAULT_CHAT_MODEL, MODEL_PRICING, type ModelPricing } from "@/lib/chat-model";
+import { MODEL_PRICING, type ModelPricing } from "@/lib/chat-model";
 import { db } from "@/lib/db";
 
 /**
@@ -6,6 +6,9 @@ import { db } from "@/lib/db";
  *
  * **単価表（`MODEL_PRICING`）は `@/lib/chat-model` へ移した**（#71）。モデルを選ぶ画面が
  * クライアントコンポーネントで、単価をバッジに出すため。
+ *
+ * **#128でチャット（書く・話す）の返答生成はCodexへ移り、この記録には積まれなくなった。**
+ * 朝の見通し・お知らせ選定は引き続きClaudeを呼ぶため、そのぶんの記録・単価表はそのまま残す。
  *
  * **このモジュールはサーバー専用。** `@/lib/db` 経由でPrismaを引き込むため、クライアント
  * コンポーネントからimportしないこと（`src/lib/app-version.ts` と同じ理由で、バンドルへ
@@ -71,9 +74,7 @@ export function promptTokens(row: UsageSummary): number {
  * 0円として捨てると「使っていない」と読めてしまうため、近い値を出して概算だと断る方を採る。
  */
 function pricingFor(model: string | null): ModelPricing {
-  return (
-    MODEL_PRICING[model ?? ""] ?? MODEL_PRICING[DEFAULT_CHAT_MODEL] ?? MODEL_PRICING["claude-opus-5"]
-  );
+  return MODEL_PRICING[model ?? ""] ?? MODEL_PRICING["claude-opus-5"];
 }
 
 /** 1件ぶんの概算費用（USD）。 */

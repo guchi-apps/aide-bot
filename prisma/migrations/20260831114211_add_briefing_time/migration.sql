@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE `User` ADD COLUMN `briefingHour` INTEGER NOT NULL DEFAULT 7,
+    ADD COLUMN `briefingMinute` INTEGER NOT NULL DEFAULT 0;

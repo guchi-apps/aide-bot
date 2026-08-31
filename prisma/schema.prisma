@@ -19,6 +19,11 @@ model User {
   name           String?
   image          String?
 
+  // 朝の見通し（#79）を届ける時刻（日本時間）。#121で画面から変更できるようにした。
+  // 30分刻みでしか選べない（cronの起動頻度と釣り合わせているため）。
+  briefingHour   Int @default(7)
+  briefingMinute Int @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

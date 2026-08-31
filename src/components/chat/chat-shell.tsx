@@ -14,6 +14,8 @@ type Props = {
   conversations: ConversationSummary[];
   /** 今月の概算費用（`$1.23` の形）。一覧の下に出す（#51）。 */
   monthlyCostLabel: string;
+  /** まだ秘書が出していないお知らせの件数（#114）。一覧の下のバッジに出す。 */
+  pendingNoticeCount: number;
   userLabel: string;
   userEmail: string | null;
   appVersion: string;
@@ -30,6 +32,7 @@ type Props = {
 export function ChatShell({
   conversations,
   monthlyCostLabel,
+  pendingNoticeCount,
   userLabel,
   userEmail,
   appVersion,
@@ -41,10 +44,17 @@ export function ChatShell({
   const isUsage = pathname === "/usage";
   const activeId = pathname.startsWith("/c/") ? pathname.slice("/c/".length) : null;
   const isSettings = pathname === "/settings";
+  const isNotices = pathname === "/notices";
   const activeTitle = conversations.find((c) => c.id === activeId)?.title ?? "新しい相談";
-  // 使用量（#51）と設定（#46・#71）は相談ではないので、見出しも「話す / 書く」の切り替えも
-  // これらの画面には出さない。
-  const heading = isUsage ? "使用量" : isSettings ? "設定" : activeTitle;
+  // 使用量（#51）・設定（#46・#71）・お知らせ（#114）は相談ではないので、見出しも
+  // 「話す / 書く」の切り替えもこれらの画面には出さない。
+  const heading = isUsage
+    ? "使用量"
+    : isSettings
+      ? "設定"
+      : isNotices
+        ? "お知らせ"
+        : activeTitle;
 
   // 開いたドロワーは、閉じるボタン・スクリム・中のリンク（onNavigate）で閉じる。
   // pathnameの変化をuseEffectで見て閉じる形にはしない——描画のたびにsetStateが走る。
@@ -67,6 +77,8 @@ export function ChatShell({
           activeId={activeId}
           isUsageActive={isUsage}
           isSettingsActive={isSettings}
+          isNoticesActive={isNotices}
+          pendingNoticeCount={pendingNoticeCount}
           monthlyCostLabel={monthlyCostLabel}
           userLabel={userLabel}
           userEmail={userEmail}
@@ -94,6 +106,8 @@ export function ChatShell({
               activeId={activeId}
               isUsageActive={isUsage}
               isSettingsActive={isSettings}
+              isNoticesActive={isNotices}
+              pendingNoticeCount={pendingNoticeCount}
               monthlyCostLabel={monthlyCostLabel}
               userLabel={userLabel}
               userEmail={userEmail}
@@ -127,7 +141,7 @@ export function ChatShell({
             {heading}
           </h1>
 
-          {!isUsage && !isSettings && <TalkModeSwitch />}
+          {!isUsage && !isSettings && !isNotices && <TalkModeSwitch />}
         </header>
 
         {children}

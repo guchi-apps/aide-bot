@@ -327,7 +327,70 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
   続ける。状況を知らせる場所が小言で埋まると読まれなくなる（#79と同じ理由）
 - 開発DBにはダミーのお知らせを入れてある（`scripts/seed-ci-db.mjs` の `NOTICE_SEEDS`）。
   **未読が0件だと吹き出しは正しく黙る**ので、空のままでは実装が効いているのか材料が無いだけ
-  なのかを画面から切り分けられない
+  なのかを画面から切り分けられない。**「まだ出せない」（`showAt` が先）と「出さないまま
+  期限が切れた」（`expiresInMinutes` が負）のダミーも入れてある**（#114）。この2つは
+  吹き出しには一生出ないので、一覧（`/notices`）でしか見えない
+
+### 急ぎ（`URGENT`）のお知らせをその場でPushする（#115）
+
+**`URGENT` は受け付けているのに、届くのは「話す」画面を開いている端末の吹き出しだけだった。**
+画面を閉じていればその用件は誰にも届かないまま `expiresAt` を過ぎる。`ingestNotice()`
+（`src/lib/notices.ts`）が `priority === URGENT` を積んだ回にかぎり、その場でWeb Pushを
+1本送るようにしてある。
+
+- **文面はモデルに書かせない。** 積む側の `body` をそのまま出す。生成を挟むと#93の
+  「黙っている間の費用は0円」が崩れる（吹き出し用の選定・言い直しとは別経路）
+- **抑制は `NotificationLog` の一意制約 `(userId, kind, dedupeKey)` に任せる。**
+  `dedupeKey` には `Notice.id` をそのまま使う。`ingestNotice()` は同じ `(source, kind,
+  dedupeKey)` を上書き（「あと30分」→「あと8分」）する設計だが、upsertでも `Notice.id` は
+  変わらないため、同じ用件が積み直されても2回目以降は一意制約に触れてPushが飛ばない。
+  Issue本文の提案どおり `<source>:<kind>:<dedupeKey>` を連結する形だと、`Notice` 側の入力上限
+  （source/kind各40文字・dedupeKey120文字）をそのまま繋いだ場合に
+  `NotificationLog.dedupeKey`（`@db.VarChar(120)`）を超過しうるため採らなかった
+- **押した先は専用の相談（`Conversation`）。** 1通目はUSERの固定文言（`toPromptMessages()`
+  が履歴の先頭をUSERでないと落とすため。#79の制約と同じ）、2通目はASSISTANTとして
+  `body` をそのまま置く。**朝の見通し（#79）と違い、ASSISTANT側もモデルの生成物ではなく
+  積んだ側の文面そのもの**——モデルを呼ばない設計なので「USER=実際にモデルへ渡した依頼」
+  という朝の見通しの体裁は取れない
+- **重い処理（Conversation作成・Push送信）の前に一意制約の有無を確かめる。** 先に
+  `NotificationLog.create()` してから重い処理へ進む順にしなかったのは、同じ用件が短時間に
+  何度も届く運用ではないため。ごく短い時間差での多重POSTでは二重送信のTOCTOUが残るが、
+  許容している
+- **1日あたりの上限は設けていない。** 同じ用件（`Notice.id`）の二重送信だけを防ぐ。
+  「読まれなくなる通知」を避ける仕組み（#79）とは別枠——URGENTは元々「時間を逃すと意味が
+  無くなる」用件に限られる前提のため
+- **`showAt` / `expiresAt` は吹き出し側（`pendingNotices()`）と同じ条件で絞る。**
+  積んだ時点では**まだ早い**（`showAt` が先）・**もう意味が無い**（`expiresAt` を過ぎた）
+  URGENTも、絞らなければそのままPushしてしまう。**`showAt` の到来だけを拾って後から送る
+  仕組みは無い。** まだ早い分は積んだ回に見送られ、次に同じ用件が積み直されて
+  `ingestNotice()` が呼ばれ直したときに改めて判定する
+- **開発DBのシード（`scripts/seed-ci-db.mjs`）はこの経路を通らない。** `NOTICE_SEEDS` は
+  `ingestNotice()` ではなく `db.notice.upsert()` を直接呼んでおり、`pnpm db:seed:dev` の
+  たびにPushが飛ぶことはない
+
+### 積まれたお知らせの一覧（#114）
+
+**吹き出しに出るのは1件だけなので、控えているものを見る場所を別に置く。** 左メニューの
+「お知らせ」（`/notices`）に、いま出している一言・待っている候補・出したもの・出さないまま
+期限が切れたものを並べる。**見るだけの画面で、操作は置いていない。**
+
+- **この画面は取り出すだけで、選定には一切関わらない**（`src/lib/notice-list.ts`）。
+  モデルを呼ばず、`shownAt` も書かない。**書くのは `resolveNotice()` の1か所のまま**——
+  一覧を開いただけで候補が消費されると、吹き出しに出るはずだったお知らせが画面を見た人にだけ
+  届いて終わる
+- **取り出しの条件は `notices.ts` の `pendingNotices()` / `currentNotice()` と揃える。**
+  ずらすと「一覧には出ているのに候補に入らない」お知らせができ、原因が画面側かモデル側かを
+  切り分けられなくなる。左メニューの未読の件数も同じ条件で数える（`chatter.ts` が
+  「まだお伝えしていないお知らせがN件あります」で使っている数と食い違わせない）
+- **`showAt` がまだ来ていないものは候補から外れるが、一覧には出す。** 出さないと
+  「積んだはずなのに何も出ない」を画面から切り分けられない。期限切れも同じ理由で別の欄に置く
+  ——**読まれずに消えたことが分かるのはここだけ**
+- **`Notice.title` は後から足した列で、既定は空文字。** 積む側が省略したぶんは
+  `ingestNotice()` が本文の1行目で埋めるが、列を足す前に積まれた行は空文字のまま残っている。
+  画面側でも同じ埋め方をする（`toRow()`）
+- **未読の件数は `(chat)/layout.tsx` で引く**ので、相談の画面でも毎回1本増える。`count` 1本
+  なので今月の使用量と同じ `Promise.all` に混ぜて待ち時間は足さない
+- 日付・時刻は**日本時間で作る**（#79の `jstDateKey()`・#101の `jstParts()` と同じ理由）
 
 ### 待っている間のひとりごと（#101）
 
@@ -804,6 +867,19 @@ pnpm exec prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.p
 `_prisma_migrations` に失敗として記録が残り、以後の `migrate deploy` はP3009で止まる。
 VPS上で `pnpm exec prisma migrate resolve --rolled-back <マイグレーション名>` を実行してから
 デプロイし直す。
+
+### 必須の列を後から足すときは、書き込み側を全部洗う（#114）
+
+**DB側の `DEFAULT ''` はPrisma Clientの必須判定には効かない。** 既存行が埋まるのと、
+`create` / `upsert` で省略できるのは別の話で、スキーマに `@default` を書かない限り
+**その列を渡していない書き込みは実行時に `Argument \`title\` is missing.` で落ちる。**
+
+`Notice.title`（`20260830160000_add_notice_title`）がこの形で、`scripts/seed-ci-db.mjs` の
+`NOTICE_SEEDS` に1件だけ `title` を持たない行があり、**その時点から `pnpm db:seed:dev` が
+失敗していた。** ローカルDBを作り直す機会が無く、#114 まで気付かれていない。
+**`pnpm lint` も `pnpm typecheck` も `pnpm build:ci` もこれを検知しない**（型の上では
+必須になっており、落ちるのは実際に書き込んだときだけ）。列を足したら、新しいDBへ
+`pnpm db:migrate:deploy` → `pnpm db:seed:dev` を通して確かめること。
 
 ---
 

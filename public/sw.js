@@ -45,8 +45,17 @@ function safeTarget(value) {
   if (trimmed === "") return FALLBACK.url;
 
   // `//example.com` はプロトコル相対URLとして外部サイトへ出る。Chromeはバックスラッシュを
-  // スラッシュとして読むため `/\example.com` も同じ扱いにする。
-  if (trimmed.startsWith("/")) return /^\/[/\\]/.test(trimmed) ? FALLBACK.url : trimmed;
+  // スラッシュとして読むため `/\example.com` も同じ扱いにする。タブ・改行・復帰はURLの解釈で
+  // 取り除かれ、`/\n/example.com` が `//example.com` になるので、混ざっていたら受け付けない
+  // （#140。`src/lib/safe-path.ts` の `isInternalPath()` と同じ判定）。
+  if (trimmed.startsWith("/")) {
+    if (/^\/[/\\]/.test(trimmed)) return FALLBACK.url;
+    for (let i = 0; i < trimmed.length; i += 1) {
+      const code = trimmed.charCodeAt(i);
+      if (code <= 0x20 || code === 0x7f) return FALLBACK.url;
+    }
+    return trimmed;
+  }
 
   // 絶対URLは http / https だけ。`javascript:` などを開かない。
   let parsed;

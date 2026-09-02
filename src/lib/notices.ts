@@ -6,6 +6,7 @@ import { runCodexExec } from "@/lib/codex";
 import { db } from "@/lib/db";
 import { safeNoticeUrl } from "@/lib/notice-url";
 import { sendPushToUser } from "@/lib/push/subscriptions";
+import { recordApiUsage } from "@/lib/usage";
 
 /**
  * お知らせの受け皿と、そこから1件を選んで吹き出しへ出す仕組み（#93）。**サーバー専用。**
@@ -377,20 +378,27 @@ function buildNoticePrompt(pending: Notice[], now: Date): string {
  * 候補を渡して1件選ばせる。道具は渡さない（材料はもう候補の中にある）。
  *
  * **#132でAnthropic ClaudeからCodex CLIへ移した。** サブスクの定額制で動くためトークン単価の
- * 概念に合わず、`ApiUsage` への記録もやめている（#128でチャットに対して行ったのと同じ判断）。
- * `/usage` の金額に、ここのぶんはもう積まれない。
+ * 概念に合わないが、**#133で使ったトークン量そのものは `ApiUsage` へ残すようにした**——
+ * `/usage` の「相談・お知らせ」の節に量として出る。`conversationId` は付かない（選定は
+ * 相談の外で走る）。金額には積まれない（`billingKind()` が単価表を引かせない）。
  *
  * **失敗した回は投げる。** 呼び出し元は例外を捕まえて `lastRuns` を更新せずに戻るため、
  * 次の問い合わせでやり直せる（#93「生成に失敗した回は何も消費しない」）。**逆に、読めない形で
  * 返ってきた回は「黙った」ものとして `null` を返す**——モデルは実際に答えており、同じ候補で
  * すぐ叩き直しても結果は変わらないため。
  */
-async function chooseNotice(pending: Notice[], now: Date): Promise<Choice | null> {
+async function chooseNotice(userId: string, pending: Notice[], now: Date): Promise<Choice | null> {
   const result = await runCodexExec({
     model: NOTICE_MODEL,
     prompt: buildNoticePrompt(pending, now),
     signal: AbortSignal.timeout(CODEX_TIMEOUT_MS),
   });
+
+  // 使った量は、読める形で返ってきたかに関わらず残す。**上限に掛かった回は`usage`がnullで
+  // 行が作られない**——`turn.completed` が届いていないので、そこまでの消費量が分からない。
+  if (result.usage) {
+    await recordApiUsage({ userId, conversationId: null, model: NOTICE_MODEL, usage: result.usage });
+  }
 
   // 打ち切りは上限に掛かったときにしか起きない（この経路に利用者からの割り込みは無い）。
   if (result.interrupted) {
@@ -419,7 +427,7 @@ export async function resolveNotice(userId: string, now = new Date()): Promise<C
 
   let choice: Choice | null;
   try {
-    choice = await chooseNotice(pending, now);
+    choice = await chooseNotice(userId, pending, now);
   } catch (error) {
     // 吹き出しにエラーを出さない。出しても利用者にできることが無く、状況を知らせる場所が
     // 小言で埋まるだけになる。ログにだけ残し、いま出しているものをそのまま続ける。

@@ -10,6 +10,8 @@
  * Prismaや `next/headers` に触れるものを持ち込まないこと（`chat-model.ts` と同じ分け方）。
  */
 
+import { isInternalPath } from "@/lib/safe-path";
+
 /** 同じ判定を素のJSでも使う（`public/sw.js`）。直したら向こうも揃える。 */
 export function safeNoticeUrl(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
@@ -18,9 +20,9 @@ export function safeNoticeUrl(value: string | null | undefined): string | null {
   if (trimmed === "") return null;
 
   if (trimmed.startsWith("/")) {
-    // `//example.com` はプロトコル相対URLとして外部サイトへ出る（`safe-path.ts` と同じ理由）。
-    // **`/\example.com` も同じ**——Chromeはバックスラッシュをスラッシュとして読む。
-    return /^\/[/\\]/.test(trimmed) ? null : trimmed;
+    // 判定はログイン後の戻り先（`safe-path.ts`）と1か所で持つ。#137でこちらだけに入れた
+    // `/\example.com` の対策が、#140まで `safeInternalPath()` へ入っていなかったため。
+    return isInternalPath(trimmed) ? trimmed : null;
   }
 
   // 絶対URLは http / https だけ。`javascript:` や `data:` を `href` へ入れない。

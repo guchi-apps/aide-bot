@@ -131,7 +131,14 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   プロジェクトのルートではなく `os.tmpdir()` に切り離す
 - **標準入力は`ignore`にする。** プロンプトを引数で渡していても標準入力がパイプされていると
   「Reading additional input from stdin...」という案内とともにその内容がプロンプトへ
-  追記される仕様があるため（stderrに出る。stdoutのJSONLには混ざらない）
+  追記される仕様があるため（stderrに出る。stdoutのJSONLには混ざらない）。
+  **端末やスクリプトから手で叩いて確かめるときは `< /dev/null` を付ける**——付け忘れると
+  JSONLが1行も出ないまま待ち続け、「Codexが固まった」に見える（#132で実測。同じプロンプトが
+  切り離せば3.5秒、切り離さなければ3分で打ち切りになった）
+- **`codex exec --search` でウェブ検索させられる**（`Enable live web search. When enabled,
+  the native Responses web_search tool is available`）。**まだ使っていない**が、外部情報を
+  取らせたくなったとき、検索用のサービスを新たに契約する前にこちらを検討すること——
+  同じサブスク枠で動くので、APIキーも依存パッケージも増えない（#144で検討中）
 - **利用可能なモデル名を確認できるCLIコマンドは無い。** `~/.codex/models_cache.json` の
   `models[].slug` から拾う（2026-08-31時点: `gpt-5.6-sol` / `gpt-5.6-terra` /
   `gpt-5.6-luna` 等）。Sol＝旗艦（いちばん賢い）、Terra＝GPT-5.5相当の中位、Luna＝いちばん

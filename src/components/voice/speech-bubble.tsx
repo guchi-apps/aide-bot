@@ -153,27 +153,32 @@ export function SpeechBubble({ state, line, activity }: Props) {
   // 待っている間だけ輪の中身を出す。往復中は状態に譲る。
   const showing = state === "idle" ? line : null;
   const notice = showing?.kind === "notice" ? showing.notice : null;
+  // 仕入れた話題（#144）。吹き出しに出るのは仕入れたときに書かせた「秘書の一言」。
+  const topic = showing?.kind === "topic" ? showing.topic : null;
 
   const text =
     showing?.kind === "notice"
       ? showing.notice.text
       : showing?.kind === "chatter"
         ? showing.text
-        : state === "thinking" && activity
-          ? // 外部サービスを見に行っている間は、待たせている理由を出す（#46）。
-            `${activity.server}を調べています`
-          : STATUS_LABEL[state];
+        : showing?.kind === "topic"
+          ? showing.topic.lead
+          : state === "thinking" && activity
+            ? // 外部サービスを見に行っている間は、待たせている理由を出す（#46）。
+              `${activity.server}を調べています`
+            : STATUS_LABEL[state];
 
   const urgent = notice?.urgent ?? false;
+  // 時刻はお知らせにだけ出す。話題に「いつ時点か」の印を付けると用件に見える。
   const stamp = notice ? stampOf(notice.shownAt) : "";
 
   /**
    * 読み上げソフトへ知らせるかどうか（#101）。
    *
-   * **ひとりごとが替わっただけの回は知らせない。** 25秒ごとに読み上げが割り込むと、
+   * **ひとりごと・話題が替わっただけの回は知らせない。** 25秒ごとに読み上げが割り込むと、
    * 画面のほかの操作が追えなくなる。お知らせと状態の変化は今までどおり知らせる。
    */
-  const announce = showing?.kind !== "chatter";
+  const announce = showing?.kind !== "chatter" && showing?.kind !== "topic";
 
   const motion = urgent
     ? "bubble-alert"
@@ -200,8 +205,8 @@ export function SpeechBubble({ state, line, activity }: Props) {
           motion,
           urgent
             ? "border-accent/40 bg-accent-surface font-bold text-accent"
-            : // 呼びかけと状態の文言だけ太字にする。ひとりごととお知らせは地の文として置く。
-              showing?.kind === "notice" || showing?.kind === "chatter"
+            : // 呼びかけと状態の文言だけ太字にする。ひとりごと・お知らせ・話題は地の文として置く。
+              showing?.kind === "notice" || showing?.kind === "chatter" || showing?.kind === "topic"
               ? "border-border bg-surface font-medium text-foreground"
               : "border-border bg-surface font-bold text-foreground",
         )}
@@ -216,9 +221,17 @@ export function SpeechBubble({ state, line, activity }: Props) {
           </span>
         )}
 
+        {/* 話題（#144）の印。用件（accent）とは別の落ち着いた色にして、ニュースが用件に見えないようにする。 */}
+        {topic && (
+          <span className="shrink-0 rounded-full bg-topic-surface px-2 py-0.5 text-[0.625rem] font-bold tracking-wider text-topic">
+            話題
+          </span>
+        )}
+
         <span className="text-pretty">{text}</span>
 
         {notice?.url && <OpenLink url={notice.url} />}
+        {topic?.url && <OpenLink url={topic.url} />}
 
         {stamp !== "" && (
           <span

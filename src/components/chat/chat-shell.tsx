@@ -16,6 +16,8 @@ type Props = {
   monthlyUsageLabel: string;
   /** まだ秘書が出していないお知らせの件数（#114）。一覧の下のバッジに出す。 */
   pendingNoticeCount: number;
+  /** 溜まっている話題の件数（#144）。一覧の下に出す。 */
+  topicCount: number;
   userLabel: string;
   userEmail: string | null;
   appVersion: string;
@@ -33,6 +35,7 @@ export function ChatShell({
   conversations,
   monthlyUsageLabel,
   pendingNoticeCount,
+  topicCount,
   userLabel,
   userEmail,
   appVersion,
@@ -45,8 +48,9 @@ export function ChatShell({
   const activeId = pathname.startsWith("/c/") ? pathname.slice("/c/".length) : null;
   const isSettings = pathname === "/settings";
   const isNotices = pathname === "/notices";
+  const isTopics = pathname === "/topics";
   const activeTitle = conversations.find((c) => c.id === activeId)?.title ?? "新しい相談";
-  // 使用量（#51）・設定（#46・#71）・お知らせ（#114）は相談ではないので、見出しも
+  // 使用量（#51）・設定（#46・#71）・お知らせ（#114）・話題（#144）は相談ではないので、見出しも
   // 「話す / 書く」の切り替えもこれらの画面には出さない。
   const heading = isUsage
     ? "使用量"
@@ -54,7 +58,9 @@ export function ChatShell({
       ? "設定"
       : isNotices
         ? "お知らせ"
-        : activeTitle;
+        : isTopics
+          ? "話題"
+          : activeTitle;
 
   // 開いたドロワーは、閉じるボタン・スクリム・中のリンク（onNavigate）で閉じる。
   // pathnameの変化をuseEffectで見て閉じる形にはしない——描画のたびにsetStateが走る。
@@ -78,7 +84,9 @@ export function ChatShell({
           isUsageActive={isUsage}
           isSettingsActive={isSettings}
           isNoticesActive={isNotices}
+          isTopicsActive={isTopics}
           pendingNoticeCount={pendingNoticeCount}
+          topicCount={topicCount}
           monthlyUsageLabel={monthlyUsageLabel}
           userLabel={userLabel}
           userEmail={userEmail}
@@ -107,7 +115,9 @@ export function ChatShell({
               isUsageActive={isUsage}
               isSettingsActive={isSettings}
               isNoticesActive={isNotices}
+              isTopicsActive={isTopics}
               pendingNoticeCount={pendingNoticeCount}
+              topicCount={topicCount}
               monthlyUsageLabel={monthlyUsageLabel}
               userLabel={userLabel}
               userEmail={userEmail}
@@ -141,7 +151,7 @@ export function ChatShell({
             {heading}
           </h1>
 
-          {!isUsage && !isSettings && !isNotices && <TalkModeSwitch />}
+          {!isUsage && !isSettings && !isNotices && !isTopics && <TalkModeSwitch />}
         </header>
 
         {children}

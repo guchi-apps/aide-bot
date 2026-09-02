@@ -43,8 +43,16 @@ export type CodexUsage = {
 };
 
 export type CodexResult = {
-  /** 受け取れた返答の全文。中断・失敗のときは空文字。 */
+  /** 受け取れた返答の全文（`agent_message` を届いた順に連結したもの）。中断・失敗のときは空文字。 */
   text: string;
+  /**
+   * 届いた `agent_message` を1件ずつ持ったもの（#144）。
+   *
+   * **`--search` を付けると、検索の前に「調べます」の一言が別の `agent_message` として先に
+   * 届く**（実測。サブPC・`codex-cli 0.152.1`・2026-09-02）。`text` はそれも連結してしまうので、
+   * 返答の形を決めて読み取る経路（話題の仕入れ）は最後の1件だけを読む。
+   */
+  messages: string[];
   /** 呼び出し側が渡した`signal`が中断されて終わった。 */
   interrupted: boolean;
   /** 利用者へ出す文言。中断のときは`null`。 */
@@ -85,13 +93,17 @@ type CodexEvent = {
  * - プロンプトは引数で渡し、標準入力は`ignore`にする。標準入力をパイプすると
  *   「Reading additional input from stdin...」という案内とともにその内容がプロンプトへ
  *   追記される仕様があるため
+ * - `search` を立てると `--search`（ウェブ検索）を付ける（#144）。**このフラグは `exec` の
+ *   サブコマンドではなく `codex` 本体の引数**なので、`exec` より前に置く（`codex exec --help`
+ *   には出ず、`codex --help` にだけ出る）。読み取り専用のサンドボックスと両立する（実測）
  */
 export async function runCodexExec(params: {
   model: string;
   prompt: string;
   signal: AbortSignal;
+  search?: boolean;
 }): Promise<CodexResult> {
-  const { model, prompt, signal } = params;
+  const { model, prompt, signal, search = false } = params;
 
   return new Promise((resolve) => {
     // `CODEX_BIN` は動的な文字列（環境変数）で、ファイルパスではなくPATH解決されるコマンド名。
@@ -100,6 +112,7 @@ export async function runCodexExec(params: {
     const child = spawn(
       /* turbopackIgnore: true */ CODEX_BIN,
       [
+        ...(search ? ["--search"] : []),
         "exec",
         "--json",
         "-m",
@@ -117,6 +130,7 @@ export async function runCodexExec(params: {
     );
 
     let text = "";
+    const messages: string[] = [];
     let errorMessage: string | null = null;
     let interrupted = false;
     let settled = false;
@@ -156,6 +170,7 @@ export async function runCodexExec(params: {
 
         if (event.type === "item.completed" && event.item?.type === "agent_message") {
           text += event.item.text ?? "";
+          messages.push(event.item.text ?? "");
         } else if (event.type === "turn.completed" && event.usage) {
           usage = addUsage(usage, event.usage);
         } else if (event.type === "turn.failed" || event.type === "error") {
@@ -174,6 +189,7 @@ export async function runCodexExec(params: {
       console.error("[aide-bot] codex exec の起動に失敗した", error);
       finish({
         text: "",
+        messages: [],
         interrupted: false,
         errorMessage: "返答の生成に必要な設定がサーバー側にありません。管理者に連絡してください。",
         usage: null,
@@ -182,7 +198,7 @@ export async function runCodexExec(params: {
 
     child.on("close", (code) => {
       if (interrupted) {
-        finish({ text: "", interrupted: true, errorMessage: null, usage: null });
+        finish({ text: "", messages: [], interrupted: true, errorMessage: null, usage: null });
         return;
       }
 
@@ -191,7 +207,7 @@ export async function runCodexExec(params: {
         errorMessage = "返答の生成に失敗しました。少し待ってからもう一度お試しください。";
       }
 
-      finish({ text, interrupted: false, errorMessage, usage });
+      finish({ text, messages, interrupted: false, errorMessage, usage });
     });
   });
 }

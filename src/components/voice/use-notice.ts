@@ -27,7 +27,20 @@ export type NoticeBubble = {
 };
 
 /**
- * 待っている間に吹き出しへ出す1枠。お知らせ・ひとりごと・呼びかけが同じ輪に並ぶ。
+ * 仕入れた話題（#144）の1件。サーバー側（`topicsForBubble()`）が返す形をそのまま持つ。
+ */
+export type TopicBubble = {
+  id: string;
+  /** 秘書が話題として振る一言。吹き出しに出るのはこれ。 */
+  lead: string;
+  title: string;
+  /** 出典の記事。サーバー側で `safeNoticeUrl()` を通した値だけが載る。 */
+  url: string | null;
+  category: string;
+};
+
+/**
+ * 待っている間に吹き出しへ出す1枠。お知らせ・ひとりごと・呼びかけ・話題が同じ輪に並ぶ。
  *
  * `call` は既定の「どうぞ、話しかけてください」。**輪の中に必ず1つ入れる**——初めて開いた人に
  * 「マイクを押せば始まる」ことを伝える枠で、ひとりごとが1件も取れなかった回にはこれだけが残る。
@@ -35,6 +48,7 @@ export type NoticeBubble = {
 export type BubbleLine =
   | { kind: "notice"; notice: NoticeBubble }
   | { kind: "chatter"; text: string }
+  | { kind: "topic"; topic: TopicBubble }
   | { kind: "call" };
 
 /**
@@ -69,6 +83,18 @@ const CHATTER_ROTATE_MS = 25 * 1000;
 const NOTICE_HOLD_MS = 60 * 1000;
 
 /**
+ * 話題（#144）を出しておく時間。ひとりごとより少し長く、お知らせより短い。
+ *
+ * 話題の一言は「〜だそうです。〜ですか」と2文になりがちで、25秒では読み終える前に流れる。
+ * お知らせと同じ60秒にはしない——ニュースは用件ではなく、長く居座ると用件の方が薄まる。
+ */
+const TOPIC_HOLD_MS = 35 * 1000;
+
+/** 輪の中で話題を差し込み始める位置と、話題どうしの間隔（ひとりごとを1枠はさむ）。 */
+const TOPIC_RING_START = 3;
+const TOPIC_RING_STEP = 2;
+
+/**
  * 触られないまま問い合わせ続ける上限。
  *
  * **開きっぱなしのタブを1日中叩かせないための錠。** 見えている間だけ動かすだけでは、
@@ -77,7 +103,7 @@ const NOTICE_HOLD_MS = 60 * 1000;
  */
 const IDLE_LIMIT_MS = 60 * 60 * 1000;
 
-type Payload = { notice: NoticeBubble | null; chatter: string[] };
+type Payload = { notice: NoticeBubble | null; chatter: string[]; topics: TopicBubble[] };
 
 /**
  * 前回と同じ中身か。
@@ -93,12 +119,14 @@ function samePayload(a: Payload, b: Payload): boolean {
     a.notice?.shownAt === b.notice?.shownAt &&
     a.notice?.url === b.notice?.url &&
     a.chatter.length === b.chatter.length &&
-    a.chatter.every((line, index) => line === b.chatter[index])
+    a.chatter.every((line, index) => line === b.chatter[index]) &&
+    a.topics.length === b.topics.length &&
+    a.topics.every((topic, index) => topic.id === b.topics[index]?.id && topic.lead === b.topics[index]?.lead)
   );
 }
 
 export function useBubbleLine(): BubbleLine | null {
-  const [payload, setPayload] = useState<Payload>({ notice: null, chatter: [] });
+  const [payload, setPayload] = useState<Payload>({ notice: null, chatter: [], topics: [] });
   const [step, setStep] = useState(0);
   // 描画のたびに読むと値が揺れる（`react-hooks/purity`）。最後に触られた時刻は
   // 効果の中で入れ、それまでは0＝「まだ触られていない」として扱う。
@@ -130,7 +158,11 @@ export function useBubbleLine(): BubbleLine | null {
           if (response.ok) {
             const data = (await response.json()) as Partial<Payload>;
             if (!cancelled) {
-              const next: Payload = { notice: data.notice ?? null, chatter: data.chatter ?? [] };
+              const next: Payload = {
+                notice: data.notice ?? null,
+                chatter: data.chatter ?? [],
+                topics: data.topics ?? [],
+              };
               setPayload((prev) => (samePayload(prev, next) ? prev : next));
             }
           }
@@ -178,6 +210,13 @@ export function useBubbleLine(): BubbleLine | null {
     const lines: BubbleLine[] = payload.chatter.map((text) => ({ kind: "chatter", text }));
     // 呼びかけは2枠目に置く。先頭にすると、開いた瞬間はいつも同じ文言になる。
     lines.splice(Math.min(1, lines.length), 0, { kind: "call" });
+    // 話題（#144）は輪の後ろの方に、ひとりごとを1枠はさんで差し込む。先頭側に置かないのは、
+    // 開いた瞬間に出るのはお知らせか呼びかけであるべきで、ニュースが用件より前に出ると
+    // 「用件と雑談を同じ場所で交互に出す」ことの悪い側（用件が埋もれる）が先に立つため。
+    payload.topics.forEach((topic, index) => {
+      const at = Math.min(lines.length, TOPIC_RING_START + index * TOPIC_RING_STEP);
+      lines.splice(at, 0, { kind: "topic", topic });
+    });
     if (payload.notice) lines.unshift({ kind: "notice", notice: payload.notice });
     return lines;
   }, [payload]);
@@ -190,7 +229,8 @@ export function useBubbleLine(): BubbleLine | null {
     // いちばん伝えたいものだけが見逃される。
     if (current.kind === "notice" && current.notice.urgent) return;
 
-    const delay = current.kind === "notice" ? NOTICE_HOLD_MS : CHATTER_ROTATE_MS;
+    const delay =
+      current.kind === "notice" ? NOTICE_HOLD_MS : current.kind === "topic" ? TOPIC_HOLD_MS : CHATTER_ROTATE_MS;
     const timer = setTimeout(() => setStep((value) => value + 1), delay);
 
     return () => clearTimeout(timer);

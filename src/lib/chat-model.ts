@@ -36,6 +36,16 @@ export const BRIEFING_MODEL = "claude-haiku-4-5";
 export const NOTICE_MODEL = "gpt-5.6-luna";
 
 /**
+ * 話題（#144）を仕入れるモデル。`codex --search exec` でウェブ検索させる。
+ *
+ * `NOTICE_MODEL` と同じく設定の画面からは選べない（仕入れは応答後のバックグラウンドで走り、
+ * 選ぶ主体が居ない）。Lunaにしてあるのは、やらせているのが「検索結果から数件を選んで
+ * 短く要約する」だけで、1回あたり27秒前後・入力6万トークン超（実測）と重い経路のため、
+ * これより重いモデルにするとサブスクの利用枠の減りが早くなる。
+ */
+export const TOPIC_MODEL = "gpt-5.6-luna";
+
+/**
  * `/usage` 画面の単価表。**Anthropic（Claude）の単価だけを載せる。**
  *
  * チャット（#128）とお知らせ選定（#132）はCodexへ移り、ChatGPTのサブスク定額制で動くため

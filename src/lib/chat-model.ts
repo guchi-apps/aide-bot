@@ -14,25 +14,32 @@
 export type ReplyStyle = "text" | "voice";
 
 /**
- * 朝の見通し（#79）を書くモデル。**Anthropic（Claude）のまま。**
+ * 朝の見通し（#79）を書くモデル。**ここだけAnthropic（Claude）のまま残っている。**
  *
- * #128でチャット（書く・話す）の返答生成はCodexへ移したが、朝の見通し・お知らせ選定
- * （`NOTICE_MODEL`）は対象外としてClaudeのまま残してある（段階移行。詳細はIssueの計画を参照）。
+ * #128でチャット（書く・話す）を、#132でお知らせ選定（`NOTICE_MODEL`）をCodexへ移したが、
+ * 朝の見通しは移せない——本文の材料をすべてAIDEのMCP接続から取る設計で、Codex側のMCPの
+ * 扱いが決まる#131より先に移すと、届く通知が空になる。#131の完了後にあらためて移す。
+ *
  * 設定の画面からは選べない——選ぶ主体が居ない場面（cronから叩かれる）で使うため、
  * Cookieを読めない。
  */
 export const BRIEFING_MODEL = "claude-haiku-4-5";
 
 /**
- * 吹き出しに出すお知らせを1件選ぶモデル（#93）。**Anthropic（Claude）のまま**（`BRIEFING_MODEL`と同じ理由）。
+ * 吹き出しに出すお知らせを1件選ぶモデル（#93）。**#132でCodexへ移した。**
+ *
+ * `ChatModelId` と同じCodexのモデル名だが、型は分けてある——こちらは設定の画面から選べず、
+ * 選ぶ主体が居ない場面（10分ごとの問い合わせ）で使うため。**いちばん速く安いLunaにしてある。**
+ * やらせているのは「12件の候補から1件選んで40字前後に言い直す」だけで、賢さより往復の速さが効く
+ * （`/api/notices/current` の応答がそのぶん待たされる）。
  */
-export const NOTICE_MODEL = "claude-haiku-4-5";
+export const NOTICE_MODEL = "gpt-5.6-luna";
 
 /**
  * `/usage` 画面の単価表。**Anthropic（Claude）の単価のまま。**
  *
- * チャット（書く・話す）はCodexへ移り、ChatGPTのサブスク定額制で動くためトークン単価の
- * 概念に合わない（#128でチャット分の `ApiUsage` 記録自体をやめた）。朝の見通し・お知らせ選定は
+ * チャット（#128）とお知らせ選定（#132）はCodexへ移り、ChatGPTのサブスク定額制で動くため
+ * トークン単価の概念に合わない（どちらも `ApiUsage` への記録自体をやめた）。朝の見通しだけは
  * 引き続きClaudeを呼ぶため、この表はそのまま残す。
  *
  * 出典: https://claude.com/pricing#api（2026-08-25 時点）

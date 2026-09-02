@@ -157,9 +157,14 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
  * 既定のまま使っている人にとって、分かれている事実はここでは要らない情報になる。
  *
  * **チャット（書く・話す）はCodex（ChatGPTサブスク経由）へ移り、単価表（`MODEL_PRICING`）に
- * 無いモデル名になった。** 集計そのもの（下の金額）は朝の見通し・お知らせ選定のぶんだけを
- * 引き続き表しており、チャット分は積み上がらない。単価が引けないモデルは、単価を書かず
- * その旨を注記する。
+ * 無いモデル名になった。** #132でお知らせ選定も同じくCodexへ移ったため、集計そのもの（下の金額）が
+ * 表しているのは**朝の見通しのぶんだけ**（1日1回）になっている。単価が引けないモデルは、
+ * 単価を書かずその旨を注記する。
+ *
+ * **ここが見ているのは設定の画面で選んだチャットのモデルだけ**（`chatModels`）で、お知らせ選定の
+ * `NOTICE_MODEL` は渡ってこない。それでも注記は成り立つ——チャットが1つでもCodexなら
+ * `hasUnpriced` が立ち、お知らせ選定も同じCodexだから。チャットだけをClaudeへ戻すような
+ * 変更をするときは、この文言も一緒に見直すこと。
  */
 function pricingNote(chatModels: { label: string; model: string }[]): string {
   const priced = chatModels.filter((entry) => MODEL_PRICING[entry.model]);
@@ -180,7 +185,7 @@ function pricingNote(chatModels: { label: string; model: string }[]): string {
   const hasUnpriced = priced.length < chatModels.length;
 
   return hasUnpriced
-    ? `${pricedNote}Codex（ChatGPTサブスク経由）のモデルは定額制のため、チャットぶんの費用はここに含みません。`
+    ? `${pricedNote}Codex（ChatGPTサブスク経由）のモデルは定額制のため、チャットとお知らせ選定のぶんの費用はここに含みません。`
     : pricedNote;
 }
 

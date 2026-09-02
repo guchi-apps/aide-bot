@@ -406,7 +406,9 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
   Issue本文の提案どおり `<source>:<kind>:<dedupeKey>` を連結する形だと、`Notice` 側の入力上限
   （source/kind各40文字・dedupeKey120文字）をそのまま繋いだ場合に
   `NotificationLog.dedupeKey`（`@db.VarChar(120)`）を超過しうるため採らなかった
-- **押した先は専用の相談（`Conversation`）。** 1通目はUSERの固定文言（`toPromptMessages()`
+- **押した先は、`Notice.url` があればそのページ（#137）。** 無い用件だけ、専用の
+  `Conversation` を開く。**リンクの有無によらず相談は作る**ので、押した先が外のアプリでも
+  届いた文面は左メニューから辿れる。相談の中身は1通目がUSERの固定文言（`toPromptMessages()`
   が履歴の先頭をUSERでないと落とすため。#79の制約と同じ）、2通目はASSISTANTとして
   `body` をそのまま置く。**朝の見通し（#79）と違い、ASSISTANT側もモデルの生成物ではなく
   積んだ側の文面そのもの**——モデルを呼ばない設計なので「USER=実際にモデルへ渡した依頼」
@@ -450,6 +452,39 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
 - **未読の件数は `(chat)/layout.tsx` で引く**ので、相談の画面でも毎回1本増える。`count` 1本
   なので今月の使用量と同じ `Promise.all` に混ぜて待ち時間は足さない
 - 日付・時刻は**日本時間で作る**（#79の `jstDateKey()`・#101の `jstParts()` と同じ理由）
+
+### 押した先へ移る（#137）
+
+**`Notice.url`（積む側が付ける元データへのリンク）を遷移先として使う。** 列もMCPの入力も#93から
+あったが、`prisma/schema.prisma` のコメントどおり「記録するだけで画面からは使わない」まま
+だった。使うのは3か所——急ぎのお知らせのPush（#115）・秘書の頭上の吹き出し・一覧（`/notices`）。
+
+- **判定は `safeNoticeUrl()`（`src/lib/notice-url.ts`）に閉じ、受け取るときと出すときの
+  両方で通す。** 受け付けるのは `http(s)://` の絶対URLと `/` で始まるパスだけで、
+  `javascript:` や `//evil.example.com`（プロトコル相対）は落とす。**`/\evil.example.com` も
+  同じ扱いにする**——Chromeはバックスラッシュをスラッシュとして読む。積む口
+  （`parseNoticeInput()`）だけで弾かないのは、列を足す前・判定を足す前に積まれた行が
+  DBに残っているため。このモジュールはクライアントコンポーネントからimportするので、
+  Prismaや `next/headers` に触れるものを持ち込まない
+- **`public/sw.js` に同じ判定を二重に持っている**（`safeTarget()`）。ビルドを通らない素のJSで
+  importできないため。**片方だけ直さないこと**
+- **`WindowClient.navigate()` は同一オリジンのURLしか受け付けない。** 別オリジンを渡すと
+  拒否されて**何も起きない**（通知を押しても画面が変わらない）。`notificationclick` では
+  `new URL(target, self.location.origin).origin` で見て、別オリジンなら開いているタブを
+  探さずに `openWindow()` する。したがって `PushPayload.url` は**同一オリジンの相対パスとは
+  限らなくなった**（`src/lib/push/subscriptions.ts` のコメント）
+- **外部のリンクは新しいタブ、アプリ内のパスは `next/link` で同じタブ**（`isExternalNoticeUrl()`)。
+  絶対URLは同じオリジンを指していても「外」として扱う——サーバー・Service Worker・ブラウザで
+  「自分のオリジン」の見え方が揃わない（本番・localhost・tailnetのホスト名）
+- **吹き出しは丸ごとリンクにしない。** 待機中の吹き出しは25秒ごとに入れ替わる（#101）ため、
+  面全体が押せると読んでいる途中の誤タップになる。押せるのは末尾の「開く」だけ
+- **一覧では見出しと「開く」を1つのリンクにまとめる**（`notices-view.tsx` の `Title`）。
+  2つに割ると、読み上げソフトには同じ行き先のリンクが2つ並んで聞こえる
+- **開発DBのシードには、リンク有り（外部・アプリ内）とリンク無しの両方を入れてある**
+  （`scripts/seed-ci-db.mjs`）。**リンク無しの行を残すのが要点**——全部にリンクがあると、
+  出し分けているのか全件に出しているのかを画面から切り分けられない。アプリ内を指すぶんは
+  相談のIDが流すたびに変わるので、`fromMorningBriefing` の印から `NotificationLog` を引いて
+  `/c/<ID>` に組み立てる（**相談のタイトルで引かない**——「9月2日の見通し」のように日付で変わる）
 
 ### 待っている間のひとりごと（#101）
 
@@ -812,9 +847,14 @@ Messages APIのSSE（`message_start` → `content_block_delta`×n → `message_s
 **`window.SpeechRecognition` を差し替えれば、マイクの無いサブPCでも「話す」の往復を丸ごと
 動かせる**（#67）。ヘッドレスChromeを `--remote-debugging-port` 付きで起こし、CDPの
 `Page.addScriptToEvaluateOnNewDocument` で偽の `SpeechRecognition`（`start()` の回数を数え、
-`no-speech` → `end` を返すだけ）を仕込んでから開く。開発用ログインのCookieは
-`Network.setCookie` で渡せる。声の設定はlocalStorage（`aide-bot-voice-settings`）に
-先に書いておけば効く。
+`no-speech` → `end` を返すだけ）を仕込んでから開く。声の設定はlocalStorage
+（`aide-bot-voice-settings`）に先に書いておけば効く。
+
+**開発用ログインは、Cookieを差し込むよりログイン画面のフォームを押す方が確実**（#137で実測）。
+`Network.setCookie` に `domain: "localhost"` でも `url: "http://localhost:<ポート>/"` でも
+`/login` へ戻され続けた（原因は詰めていない）。`/login` を開いてから
+`document.querySelector('form[action*="/api/dev/login"]').submit()` を
+`Runtime.evaluate` で流せば、そのまま `/` に着地する。
 
 `[aria-live="polite"]`（秘書の頭上の吹き出し。#93）の文言と `start()` の回数を一定間隔で
 読むだけで、**開き直しているか・どこで畳まれたかが分かる。** 待機中は

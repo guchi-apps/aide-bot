@@ -210,6 +210,9 @@ const NOTICE_SEEDS = [
     title: "歯科の予約",
     body: "13時から歯科の予約があります。自宅からは電車で25分かかります。",
     priority: "URGENT",
+    // 押したときに開く先（#137）。**別のオリジンなので新しいタブで開く**——同じタブで移る
+    // アプリ内のパス（下の `dev-briefing`）と見え方が違うので、両方を入れてある。
+    url: "https://aide.gucchii.com/schedule",
     expiresInMinutes: 180,
   },
   {
@@ -219,6 +222,9 @@ const NOTICE_SEEDS = [
     title: "部屋の換気",
     body: "部屋のCO2が1200ppmまで上がっています。換気をおすすめします。",
     priority: "NORMAL",
+    // **リンクを持たない行をわざと残してある**（#137）。ここが今までどおりの見た目で、
+    // 「開く」が出ないことを確かめられないと、リンクの有無で出し分けているのか
+    // すべてに出ているのかを画面から切り分けられない。
     expiresInMinutes: 120,
   },
   {
@@ -228,6 +234,7 @@ const NOTICE_SEEDS = [
     title: "今日の記録",
     body: "今日の記録がまだ書かれていません。",
     priority: "LOW",
+    url: "https://dayspan.gucchii.com/",
     expiresInMinutes: 600,
   },
   {
@@ -236,6 +243,8 @@ const NOTICE_SEEDS = [
     dedupeKey: "dev-monthly",
     body: "先月の資産レポートが出来上がっています。",
     priority: "LOW",
+    // いま出している1件（#137の「いま出しています」の開くボタンと、吹き出しの「開く」）。
+    url: "https://asset-manager.gucchii.com/reports",
     // すでに秘書が選んで出したもの。もう候補には戻らない。
     spokenText: "先月の資産レポートが出来上がっていますよ。",
     spokenUrgent: false,
@@ -253,6 +262,19 @@ const NOTICE_SEEDS = [
     priority: "NORMAL",
     showAtInMinutes: 180,
     expiresInMinutes: 900,
+  },
+  // アプリの中のページを指すお知らせ（#137）。朝の見通し（#79）が自分で積むのと同じ形で、
+  // **同じタブのまま移る**（外部のリンクは新しいタブ）。`fromMorningBriefing` を書いておくと、
+  // 下の投入で朝の見通しの相談IDを引いて `/c/<ID>` に組み立てる（IDは流すたび変わるため）。
+  {
+    source: "aide-bot",
+    kind: "morning-briefing",
+    dedupeKey: "dev-briefing",
+    title: "今日の見通し",
+    body: "今日の見通しをお伝えしています。",
+    priority: "NORMAL",
+    fromMorningBriefing: true,
+    expiresInMinutes: 480,
   },
   // 出さないまま期限が切れたもの（#114）。**読まれずに消えた**ことが分かる唯一の欄で、
   // ここが空だと実装が効いているのか材料が無いだけなのかを画面から切り分けられない。
@@ -518,10 +540,24 @@ async function main() {
 
   // お知らせの受け皿（#93）。dedupeKeyで畳まれるので、何度流しても増えない。
   for (const seed of NOTICE_SEEDS) {
-    const { expiresInMinutes, shownMinutesAgo, showAtInMinutes, ...rest } = seed;
+    const { expiresInMinutes, shownMinutesAgo, showAtInMinutes, fromMorningBriefing, ...rest } = seed;
+
+    // アプリの中の相談を指すぶん（#137）。相談のIDは流すたびに変わるので、朝の見通しの
+    // 記録（NotificationLog）から引き直す。**相談のタイトルで引かない**——タイトルは
+    // 「9月2日の見通し」のように日付で変わる。見つからなければリンク無しで積む。
+    let url = rest.url ?? null;
+    if (fromMorningBriefing) {
+      const log = await db.notificationLog.findFirst({
+        where: { userId: user.id, kind: "morning-briefing", conversationId: { not: null } },
+        orderBy: { createdAt: "desc" },
+        select: { conversationId: true },
+      });
+      url = log?.conversationId ? `/c/${log.conversationId}` : null;
+    }
 
     const data = {
       ...rest,
+      url,
       // `title` は後から足した列で、Prismaのスキーマでは必須（DB側の既定 '' はPrismaを
       // 通らない）。積む側は省略できるので、`ingestNotice()` と同じく本文の1行目で埋める。
       title: seed.title ?? seed.body.split("\n", 1)[0].slice(0, 120),

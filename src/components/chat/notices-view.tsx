@@ -1,7 +1,9 @@
 import { NoticePriority } from "@prisma/client";
+import Link from "next/link";
 
 import { AppIcon } from "@/components/brand/app-icon";
 import type { NoticeBoard, NoticeRow } from "@/lib/notice-list";
+import { isExternalNoticeUrl } from "@/lib/notice-url";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -68,14 +70,17 @@ export function NoticesView({ board, now, displayTtlMs }: Props) {
             </div>
 
             {/* 秘書が実際に話した言葉。積んだ側の文面より、こちらを大きく出す。 */}
-            <div className="flex items-start gap-2.5 rounded-xl bg-accent-surface px-3.5 py-3">
+            <div className="flex flex-wrap items-start gap-2.5 rounded-xl bg-accent-surface px-3.5 py-3">
               <AppIcon className="mt-0.5 size-6 shrink-0" />
-              <p className="text-[0.9375rem] font-medium leading-relaxed">
+              <p className="min-w-[10rem] flex-1 text-[0.9375rem] font-medium leading-relaxed">
                 {current.spokenText}
                 <span className="mt-1 block text-[0.6875rem] font-normal leading-relaxed text-muted">
                   元のお知らせ:「{current.body}」（{current.source} ・ {current.kind}）
                 </span>
               </p>
+              {/* 吹き出しの「開く」と同じ遷移先（#137）。この画面を見ている人が、頭上の
+                  吹き出しを押しに戻らなくて済むようにする。 */}
+              {current.url && <OpenLink url={current.url} label="元のページを開く" button />}
             </div>
           </section>
         )}
@@ -243,9 +248,7 @@ function PendingRow({
           ) : (
             <PriorityChip priority={notice.priority} />
           )}
-          <span className={cn("text-sm font-semibold", waiting && "text-muted")}>
-            {notice.title}
-          </span>
+          <Title notice={notice} dim={waiting} />
         </>
       }
       when={
@@ -268,7 +271,7 @@ function ShownRow({ notice, now }: { notice: NoticeRow; now: Date }) {
       head={
         <>
           {notice.spokenUrgent && <Chip tone="urgent">急ぎとして</Chip>}
-          <span className="text-sm font-semibold">{notice.title}</span>
+          <Title notice={notice} />
         </>
       }
       when={notice.shownAt ? stampLabel(notice.shownAt, now) : ""}
@@ -284,12 +287,102 @@ function ExpiredRow({ notice, now }: { notice: NoticeRow; now: Date }) {
   return (
     <Row
       dim
-      head={<span className="text-sm font-semibold text-muted">{notice.title}</span>}
+      head={<Title notice={notice} dim />}
       when={notice.expiresAt ? `${stampLabel(notice.expiresAt, now)}に期限切れ` : ""}
       meta={[notice.source, notice.kind]}
     >
       {notice.body}
     </Row>
+  );
+}
+
+/**
+ * 1件の見出し（#137）。**リンクを持つお知らせだけ、押して元のページへ移れる。**
+ *
+ * 見出しそのものをリンクにしたうえで、押せることが分かるように「開く」も並べる。
+ * 見出しだけを下線付きにすると、隣の行と見分けは付いても押せることが伝わらない。
+ */
+function Title({ notice, dim = false }: { notice: NoticeRow; dim?: boolean }) {
+  if (!notice.url) {
+    return <span className={cn("text-sm font-semibold", dim && "text-muted")}>{notice.title}</span>;
+  }
+
+  // 見出しと「開く」を1つのリンクにまとめる。2つに割ると、読み上げソフトには同じ行き先の
+  // リンクが2つ並んで聞こえる。
+  return (
+    <OpenLink url={notice.url} label={`${notice.title}の元のページを開く`}>
+      <span
+        className={cn(
+          "text-sm font-semibold underline decoration-accent/55 underline-offset-4",
+          dim && "text-muted",
+        )}
+      >
+        {notice.title}
+      </span>
+      <OpenMark />
+    </OpenLink>
+  );
+}
+
+/** 「開く」の印。リンクの中にだけ置く（単体では押せる場所にならない）。 */
+function OpenMark() {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 text-[0.6875rem] font-bold text-accent">
+      開く
+      <svg
+        viewBox="0 0 24 24"
+        className="size-2.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M7 17 17 7" />
+        <path d="M9 7h8v8" />
+      </svg>
+    </span>
+  );
+}
+
+/**
+ * 元のページへの導線（#137）。
+ *
+ * **別のアプリのページは新しいタブ**（`target="_blank"`）。この一覧はほかの候補も見る場所で、
+ * 同じタブで出ていくと戻ってくる操作が増える。アプリの中のパス（朝の見通しの相談など）は
+ * `next/link` で同じタブのまま移る。
+ */
+function OpenLink({
+  url,
+  label,
+  button = false,
+  children,
+}: {
+  url: string;
+  label: string;
+  button?: boolean;
+  children?: React.ReactNode;
+}) {
+  const className = cn(
+    "inline-flex items-center gap-2 no-underline",
+    button && "shrink-0 self-center rounded-full border border-accent/45 bg-surface px-3 py-1",
+  );
+
+  const inner = children ?? <OpenMark />;
+
+  if (isExternalNoticeUrl(url)) {
+    return (
+      <a href={url} target="_blank" rel="noopener noreferrer" aria-label={label} className={className}>
+        {inner}
+      </a>
+    );
+  }
+
+  return (
+    <Link href={url} aria-label={label} className={className}>
+      {inner}
+    </Link>
   );
 }
 

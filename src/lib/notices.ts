@@ -10,6 +10,7 @@ import {
 } from "@/lib/anthropic";
 import { NOTICE_MODEL } from "@/lib/chat-model";
 import { db } from "@/lib/db";
+import { safeNoticeUrl } from "@/lib/notice-url";
 import { sendPushToUser } from "@/lib/push/subscriptions";
 
 /**
@@ -106,6 +107,11 @@ export type CurrentNotice = {
   urgent: boolean;
   /** 選んだ時刻（ISO）。吹き出しの末尾に「いつ時点か」を出すために使う。 */
   shownAt: string;
+  /**
+   * 押したときに開く先（#137）。積む側が付けた元データへのリンクで、無ければnull。
+   * **必ず `safeNoticeUrl()` を通してから渡す**——`href` へそのまま入る値のため。
+   */
+  url: string | null;
 };
 
 /**
@@ -119,7 +125,9 @@ export async function ingestNotice(userId: string, input: NoticeInput): Promise<
   const data = {
     title: input.title ?? input.body.split("\n", 1)[0].slice(0, 120),
     body: input.body,
-    url: input.url ?? null,
+    // 保存の時点でも形を確かめる（#137）。積む口（`parseNoticeInput()`）は先に弾くが、
+    // アプリの中から呼ぶ経路（朝の見通し。`briefing.ts`）はそこを通らない。
+    url: safeNoticeUrl(input.url),
     priority: input.priority ?? NoticePriority.NORMAL,
     showAt: input.showAt ?? null,
     expiresAt: input.expiresAt ?? null,
@@ -166,7 +174,12 @@ export async function ingestNotice(userId: string, input: NoticeInput): Promise<
  *   なので、2回目以降は一意制約に触れて弾かれる——**Push・Conversationの多重生成を避けるため、
  *   先に一意制約の有無を確かめてから重い処理へ進む**（TOCTOUは残るが、同じ用件が短時間に
  *   何度も届く運用ではないため許容している）
- * - **押した先は専用の相談。** 1通目はUSER（`toPromptMessages()` の制約を満たす固定文言）、
+ * - **押した先は、リンクがあればそのページ（#137）。** 積む側が `url` を付けた用件では、その
+ *   ページを開く方が用が足りる（「支払期限が近い」を押して支払いの画面が出る）。**リンクが
+ *   無い用件だけ、これまでどおり相談を開く**
+ * - **リンクの有無によらず相談は作る。** 押した先が外のアプリでも、届いた文面と時刻は左の
+ *   メニューから辿れるようにしておく（`NotificationLog.conversationId` もそこを指す）
+ * - **相談の中身は変えない。** 1通目はUSER（`toPromptMessages()` の制約を満たす固定文言）、
  *   2通目はASSISTANTとして `body` をそのまま置く。モデルを呼ばずに「秘書からのお知らせ」として
  *   自然に見せるための構成で、朝の見通し（#79）の「USER=依頼・ASSISTANT=生成物」とは違い、
  *   ASSISTANT側も積んだ側の文面そのもの
@@ -208,7 +221,8 @@ async function notifyUrgentNotice(userId: string, notice: Notice): Promise<void>
   const delivered = await sendPushToUser(userId, {
     title: notice.title,
     body: notice.body,
-    url: `/c/${conversation.id}`,
+    // 積む側が付けたリンクがあればそこへ、無ければいま作った相談へ（#137）。
+    url: safeNoticeUrl(notice.url) ?? `/c/${conversation.id}`,
     tag: URGENT_NOTICE_KIND,
   });
 
@@ -257,6 +271,7 @@ async function currentNotice(userId: string, now: Date): Promise<CurrentNotice |
     text: shown.spokenText,
     urgent: shown.spokenUrgent,
     shownAt: shown.shownAt.toISOString(),
+    url: safeNoticeUrl(shown.url),
   };
 }
 
@@ -420,5 +435,6 @@ export async function resolveNotice(userId: string, now = new Date()): Promise<C
     text: choice.text,
     urgent: choice.urgent,
     shownAt: now.toISOString(),
+    url: safeNoticeUrl(updated.url),
   };
 }

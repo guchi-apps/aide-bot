@@ -1,6 +1,7 @@
 import { NoticePriority, type Notice } from "@prisma/client";
 
 import { db } from "@/lib/db";
+import { safeNoticeUrl } from "@/lib/notice-url";
 import { NOTICE_DISPLAY_TTL_MS } from "@/lib/notices";
 
 /**
@@ -41,6 +42,8 @@ export type NoticeRow = {
   /** 秘書が実際に話した言葉。未読ならnull。 */
   spokenText: string | null;
   spokenUrgent: boolean;
+  /** 押したときに開く先（#137）。無ければnull。`safeNoticeUrl()` を通した値だけを入れる。 */
+  url: string | null;
 };
 
 export type NoticeBoard = {
@@ -74,6 +77,8 @@ function toRow(notice: Notice): NoticeRow {
     shownAt: notice.shownAt,
     spokenText: notice.spokenText,
     spokenUrgent: notice.spokenUrgent,
+    // 判定は取り出すたびに通す（#137）。列を足す前・判定を足す前に積まれた行が残っている。
+    url: safeNoticeUrl(notice.url),
   };
 }
 

@@ -19,6 +19,11 @@ export type NoticeBubble = {
   urgent: boolean;
   /** 選ばれた時刻（ISO）。吹き出しの末尾に「いつ時点か」を出す。 */
   shownAt: string;
+  /**
+   * 押したときに開く先（#137）。積む側が付けた元データへのリンクで、無ければnull。
+   * サーバー側（`resolveNotice()`）が `safeNoticeUrl()` を通した値だけを載せる。
+   */
+  url: string | null;
 };
 
 /**
@@ -86,6 +91,7 @@ function samePayload(a: Payload, b: Payload): boolean {
     a.notice?.id === b.notice?.id &&
     a.notice?.text === b.notice?.text &&
     a.notice?.shownAt === b.notice?.shownAt &&
+    a.notice?.url === b.notice?.url &&
     a.chatter.length === b.chatter.length &&
     a.chatter.every((line, index) => line === b.chatter[index])
   );

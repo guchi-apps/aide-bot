@@ -1,15 +1,10 @@
-import type Anthropic from "@anthropic-ai/sdk";
 import { NoticePriority, type Notice } from "@prisma/client";
 
-import {
-  NOTICE_MAX_OUTPUT_TOKENS,
-  NOTICE_SKIP_TOKEN,
-  NOTICE_URGENT_MARK,
-  getAnthropicClient,
-  noticeSystemPrompt,
-} from "@/lib/anthropic";
+import { NOTICE_SKIP_TOKEN, NOTICE_URGENT_MARK, noticeSystemPrompt } from "@/lib/anthropic";
 import { NOTICE_MODEL } from "@/lib/chat-model";
+import { runCodexExec } from "@/lib/codex";
 import { db } from "@/lib/db";
+import { safeNoticeUrl } from "@/lib/notice-url";
 import { sendPushToUser } from "@/lib/push/subscriptions";
 
 /**
@@ -28,7 +23,15 @@ import { sendPushToUser } from "@/lib/push/subscriptions";
  * - **一度に出すのは1件だけ。** 選ぶのはモデルで、選ばれなかったものは次の回まで残る
  * - **いま伝える価値が無ければ黙る。** `NOTICE_SKIP_TOKEN` を返した回は何も出さない
  * - **一度出したものは繰り返さない。** `shownAt` が入った行はもう候補にならない
- * - **未読が0件ならAPIを1回も叩かない。** 黙っている間の費用は0円
+ * - **未読が0件ならモデルを1回も叩かない。** 黙っている間の費用も、消費する枠も0
+ *
+ * ## 選ばせる相手（#132）
+ *
+ * **#132でAnthropic ClaudeからCodex CLI（ChatGPTサブスク経由）へ移した**（チャットの#128に続く
+ * 2本目）。サブスクの定額制で動くため、1回あたりの単価という意味での費用は掛からない。
+ * 代わりに**Codexが自前の指示文を毎回前置きするので、入力は1回あたり約12,600トークン**
+ * （うち約8,960はキャッシュ読み。実測）になった。40字の一言を書くための量としては大きいので、
+ * 「未読が0件なら叩かない」「10分に1回まで」という上の歯止めは、これまでより効いている。
  */
 
 /** 選び直す間隔。画面を開いている間、これより短い間隔ではモデルを呼ばない。 */
@@ -106,6 +109,11 @@ export type CurrentNotice = {
   urgent: boolean;
   /** 選んだ時刻（ISO）。吹き出しの末尾に「いつ時点か」を出すために使う。 */
   shownAt: string;
+  /**
+   * 押したときに開く先（#137）。積む側が付けた元データへのリンクで、無ければnull。
+   * **必ず `safeNoticeUrl()` を通してから渡す**——`href` へそのまま入る値のため。
+   */
+  url: string | null;
 };
 
 /**
@@ -119,7 +127,9 @@ export async function ingestNotice(userId: string, input: NoticeInput): Promise<
   const data = {
     title: input.title ?? input.body.split("\n", 1)[0].slice(0, 120),
     body: input.body,
-    url: input.url ?? null,
+    // 保存の時点でも形を確かめる（#137）。積む口（`parseNoticeInput()`）は先に弾くが、
+    // アプリの中から呼ぶ経路（朝の見通し。`briefing.ts`）はそこを通らない。
+    url: safeNoticeUrl(input.url),
     priority: input.priority ?? NoticePriority.NORMAL,
     showAt: input.showAt ?? null,
     expiresAt: input.expiresAt ?? null,
@@ -166,7 +176,12 @@ export async function ingestNotice(userId: string, input: NoticeInput): Promise<
  *   なので、2回目以降は一意制約に触れて弾かれる——**Push・Conversationの多重生成を避けるため、
  *   先に一意制約の有無を確かめてから重い処理へ進む**（TOCTOUは残るが、同じ用件が短時間に
  *   何度も届く運用ではないため許容している）
- * - **押した先は専用の相談。** 1通目はUSER（`toPromptMessages()` の制約を満たす固定文言）、
+ * - **押した先は、リンクがあればそのページ（#137）。** 積む側が `url` を付けた用件では、その
+ *   ページを開く方が用が足りる（「支払期限が近い」を押して支払いの画面が出る）。**リンクが
+ *   無い用件だけ、これまでどおり相談を開く**
+ * - **リンクの有無によらず相談は作る。** 押した先が外のアプリでも、届いた文面と時刻は左の
+ *   メニューから辿れるようにしておく（`NotificationLog.conversationId` もそこを指す）
+ * - **相談の中身は変えない。** 1通目はUSER（`toPromptMessages()` の制約を満たす固定文言）、
  *   2通目はASSISTANTとして `body` をそのまま置く。モデルを呼ばずに「秘書からのお知らせ」として
  *   自然に見せるための構成で、朝の見通し（#79）の「USER=依頼・ASSISTANT=生成物」とは違い、
  *   ASSISTANT側も積んだ側の文面そのもの
@@ -208,7 +223,8 @@ async function notifyUrgentNotice(userId: string, notice: Notice): Promise<void>
   const delivered = await sendPushToUser(userId, {
     title: notice.title,
     body: notice.body,
-    url: `/c/${conversation.id}`,
+    // 積む側が付けたリンクがあればそこへ、無ければいま作った相談へ（#137）。
+    url: safeNoticeUrl(notice.url) ?? `/c/${conversation.id}`,
     tag: URGENT_NOTICE_KIND,
   });
 
@@ -257,6 +273,7 @@ async function currentNotice(userId: string, now: Date): Promise<CurrentNotice |
     text: shown.spokenText,
     urgent: shown.spokenUrgent,
     shownAt: shown.shownAt.toISOString(),
+    url: safeNoticeUrl(shown.url),
   };
 }
 
@@ -334,50 +351,56 @@ function parseChoice(answer: string, candidates: number): Choice | null {
 }
 
 /**
- * 1回のAPI呼び出しで使ったトークン数（#51）。
+ * `codex exec` を待つ上限（#132）。
  *
- * 相談と同じ「1呼び出し＝1行」。相談に紐づかないので `conversationId` は付かない
- * （朝の見通しと同じ）。
+ * 実測（サブPC・`gpt-5.6-luna`）では3.5〜5.3秒で返る。上限を置くのは、返らなくなったときに
+ * `/api/notices/current` の応答がそのまま止まるため——この経路は「話す」画面から1分ごとに
+ * 叩かれるので、詰まったリクエストが積み上がる。実測の10倍以上を取って、遅いだけの回を
+ * 切らない値にしてある。
  */
-async function recordUsage(userId: string, message: Anthropic.Message) {
-  try {
-    await db.apiUsage.create({
-      data: {
-        userId,
-        conversationId: null,
-        model: message.model,
-        inputTokens: message.usage.input_tokens,
-        outputTokens: message.usage.output_tokens,
-        cacheWriteTokens: message.usage.cache_creation_input_tokens ?? 0,
-        cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
-      },
-    });
-  } catch (error) {
-    // 記録できなくても吹き出しは出したい（#51と同じ方針）。
-    console.error("[aide-bot] お知らせの選定の使用量の記録に失敗した", error);
-  }
+const CODEX_TIMEOUT_MS = 60 * 1000;
+
+/**
+ * `codex exec` へ渡す1本のプロンプト（#132）。
+ *
+ * Codexにはシステムプロンプトを別に渡す口が無いので、相談（`buildCodexPrompt()`。
+ * `src/app/api/chat/route.ts`）と同じく、体裁の指示と候補一覧を区切り線で繋いだ1本にする。
+ *
+ * **末尾に「本文だけを返せ」の一文を足していない。** 相談と違い、`noticeSystemPrompt()` が
+ * 返させる形（1行目に番号、2行目に本文、3行目以降は書かない）を最後まで指定しているため。
+ */
+function buildNoticePrompt(pending: Notice[], now: Date): string {
+  return [noticeSystemPrompt(), "---", candidateList(pending, now)].join("\n\n");
 }
 
-/** 候補を渡して1件選ばせる。道具は渡さない（材料はもう候補の中にある）。 */
-async function chooseNotice(userId: string, pending: Notice[], now: Date): Promise<Choice | null> {
-  const client = getAnthropicClient();
-
-  const message = await client.messages.create({
+/**
+ * 候補を渡して1件選ばせる。道具は渡さない（材料はもう候補の中にある）。
+ *
+ * **#132でAnthropic ClaudeからCodex CLIへ移した。** サブスクの定額制で動くためトークン単価の
+ * 概念に合わず、`ApiUsage` への記録もやめている（#128でチャットに対して行ったのと同じ判断）。
+ * `/usage` の金額に、ここのぶんはもう積まれない。
+ *
+ * **失敗した回は投げる。** 呼び出し元は例外を捕まえて `lastRuns` を更新せずに戻るため、
+ * 次の問い合わせでやり直せる（#93「生成に失敗した回は何も消費しない」）。**逆に、読めない形で
+ * 返ってきた回は「黙った」ものとして `null` を返す**——モデルは実際に答えており、同じ候補で
+ * すぐ叩き直しても結果は変わらないため。
+ */
+async function chooseNotice(pending: Notice[], now: Date): Promise<Choice | null> {
+  const result = await runCodexExec({
     model: NOTICE_MODEL,
-    max_tokens: NOTICE_MAX_OUTPUT_TOKENS,
-    system: noticeSystemPrompt(),
-    messages: [{ role: "user", content: [{ type: "text", text: candidateList(pending, now) }] }],
+    prompt: buildNoticePrompt(pending, now),
+    signal: AbortSignal.timeout(CODEX_TIMEOUT_MS),
   });
 
-  await recordUsage(userId, message);
+  // 打ち切りは上限に掛かったときにしか起きない（この経路に利用者からの割り込みは無い）。
+  if (result.interrupted) {
+    throw new Error(`お知らせの選定が${CODEX_TIMEOUT_MS / 1000}秒で返らなかった`);
+  }
+  if (result.errorMessage) {
+    throw new Error(result.errorMessage);
+  }
 
-  const answer = message.content
-    .filter((block): block is Anthropic.TextBlock => block.type === "text")
-    .map((block) => block.text)
-    .join("")
-    .trim();
-
-  return parseChoice(answer, pending.length);
+  return parseChoice(result.text.trim(), pending.length);
 }
 
 /**
@@ -396,7 +419,7 @@ export async function resolveNotice(userId: string, now = new Date()): Promise<C
 
   let choice: Choice | null;
   try {
-    choice = await chooseNotice(userId, pending, now);
+    choice = await chooseNotice(pending, now);
   } catch (error) {
     // 吹き出しにエラーを出さない。出しても利用者にできることが無く、状況を知らせる場所が
     // 小言で埋まるだけになる。ログにだけ残し、いま出しているものをそのまま続ける。
@@ -420,5 +443,6 @@ export async function resolveNotice(userId: string, now = new Date()): Promise<C
     text: choice.text,
     urgent: choice.urgent,
     shownAt: now.toISOString(),
+    url: safeNoticeUrl(updated.url),
   };
 }

@@ -50,6 +50,24 @@ scripts/          開発・デプロイ補助スクリプト
   認可URLを組み立てて302）、ログアウトはフォームのPOSTで `/auth/signout`。
   ハイドレーション前でも押せるようにするため
 
+### ログイン後の戻り先（`safeInternalPath()`。#140）
+
+`callbackUrl` / `next` は外から与えられ、最後は `new URL(値, オリジン)` かリンクの `href` へ渡る。
+**判定の正は `isInternalPath()`（`src/lib/safe-path.ts`）1か所**で、お知らせの遷移先
+（`safeNoticeUrl()`。#137）も同じ関数を通す。片方だけに対策を入れると、もう片方が同じ穴を
+持ったまま残る——実際 #137 で `notice-url.ts` にだけ入れた `/\` の対策が #140 まで
+`safe-path.ts` へ入っていなかった。
+
+- **「`/` で始まり `//` で始まらない」だけでは足りない。** URLの解釈ではバックスラッシュが
+  スラッシュとして読まれるため、`/\evil.example.com/` が `new URL()` の時点で
+  `http://evil.example.com/` になる（#140でmiddlewareの302を実測）。`/^\/[/\\]/` で両方落とす
+- **タブ（`%09`）・改行（`%0A`）・復帰（`%0D`）が混ざった値も外部へ出る。** URLの解釈では
+  これらが**取り除かれる**ため、`/%0A/evil.example.com/` は `//evil.example.com` として
+  読まれ、上の判定を素通りする。パスとして正当な値ならこれらは必ずパーセントエンコード
+  されているので、制御文字・空白（`<= 0x20` と `0x7f`）を含む値はまとめて受け付けない
+- **`public/sw.js` の `safeTarget()` にも同じ判定を二重に持っている**（ビルドを通らない素のJSで
+  importできない。#137から続く制約）。**片方だけ直さないこと**
+
 ### 開発用ログイン（Cookieバイパス）
 
 **エージェントは対話的なOAuthを完了できないため、ログイン後の画面はこの導線からしか見られない。**
@@ -80,9 +98,9 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 - 返答の生成は `POST /api/chat`。使うモデルは設定の画面から選べる（後述「返答のモデル」）。
   **#128でCodex CLI（ChatGPTサブスク経由）へ移った。** `codex exec --json` をサブプロセス
   起動し、Server-Sent Eventsで返す（詳細は下記「返答の生成をCodex CLI経由にした（#128）」）
-- **`ANTHROPIC_API_KEY` はチャットではもう使わない。** 朝の見通し・お知らせ選定
-  （`briefingSystemPrompt`・`noticeSystemPrompt`）は#128の対象外で今もClaudeを使うため、
-  そちらでは引き続き必要（`getAnthropicClient()`）。モジュールの読み込み時に検証しないのも
+- **`ANTHROPIC_API_KEY` を使うのは朝の見通し（`briefingSystemPrompt`）だけになった。**
+  チャットは#128、お知らせ選定は#132でCodexへ移っている。**それでも本番には引き続き必要**
+  （`getAnthropicClient()`）——朝の見通しがまだClaudeを呼ぶため。モジュールの読み込み時に検証しないのも
   変えていない——ビルド時にはこの値が無く（CIもActions上のビルドも持たない）、importの時点で
   投げると `next build` が落ちる
 - 履歴は毎回まるごと送り直すため、`HISTORY_LIMIT`（直近30発言）で頭を切る。上限を外すと
@@ -98,6 +116,8 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 チャット（書く・話す）の返答生成元をAnthropic ClaudeからOpenAI Codex CLI（ChatGPTのサブスク枠で
 動く）へ移した。**朝の見通し（#79）・お知らせ選定（#93）・MCP接続によるデータ取得・使用量
 （`/usage`）の記録は対象外**で、引き続きClaudeを使う段階移行（Issue #128の計画を参照）。
+**その後#132でお知らせ選定もCodexへ移した**（下記「お知らせの選定をCodexへ移した（#132）」）。
+**残っているのは朝の見通しだけ**で、そちらは#131（MCP接続のCodex対応）待ち。
 
 - **`codex exec --json` はトークン単位でストリーミングしない。** 実機確認では、応答全体が
   1つの `item.completed`（`item.type === "agent_message"`）イベントとして届いた。
@@ -111,7 +131,14 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   プロジェクトのルートではなく `os.tmpdir()` に切り離す
 - **標準入力は`ignore`にする。** プロンプトを引数で渡していても標準入力がパイプされていると
   「Reading additional input from stdin...」という案内とともにその内容がプロンプトへ
-  追記される仕様があるため（stderrに出る。stdoutのJSONLには混ざらない）
+  追記される仕様があるため（stderrに出る。stdoutのJSONLには混ざらない）。
+  **端末やスクリプトから手で叩いて確かめるときは `< /dev/null` を付ける**——付け忘れると
+  JSONLが1行も出ないまま待ち続け、「Codexが固まった」に見える（#132で実測。同じプロンプトが
+  切り離せば3.5秒、切り離さなければ3分で打ち切りになった）
+- **`codex exec --search` でウェブ検索させられる**（`Enable live web search. When enabled,
+  the native Responses web_search tool is available`）。**まだ使っていない**が、外部情報を
+  取らせたくなったとき、検索用のサービスを新たに契約する前にこちらを検討すること——
+  同じサブスク枠で動くので、APIキーも依存パッケージも増えない（#144で検討中）
 - **利用可能なモデル名を確認できるCLIコマンドは無い。** `~/.codex/models_cache.json` の
   `models[].slug` から拾う（2026-08-31時点: `gpt-5.6-sol` / `gpt-5.6-terra` /
   `gpt-5.6-luna` 等）。Sol＝旗艦（いちばん賢い）、Terra＝GPT-5.5相当の中位、Luna＝いちばん
@@ -227,12 +254,16 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   `codex exec -m` へ渡すと存在しないモデル名で失敗し、相談そのものが通らなくなる。
   知らない値は既定へ落とす
 - **`MODEL_PRICING`（Claudeの単価表）・`BRIEFING_MODEL`・`NOTICE_MODEL` は `chat-model.ts` に
-  残っている。** チャットのモデル選択（`CHAT_MODELS`・`ChatModelId`）とは別物——朝の見通し・
-  お知らせ選定は#128の対象外で引き続きClaudeを使うため、その単価・モデル名の置き場として
-  同じファイルを共有している。チャット用の型を変えても壊さないよう、型は分けてある
+  残っている。** チャットのモデル選択（`CHAT_MODELS`・`ChatModelId`）とは別物で、**設定の画面から
+  選べない**——選ぶ主体が居ない場面（cron・10分ごとの問い合わせ）で使うためCookieを読めない。
+  `NOTICE_MODEL` は#132でCodexのモデル名（`gpt-5.6-luna`）になったが、**型は分けたまま**にしてある。
+  チャット用の型を変えてもこちらが壊れないようにするため
 - **`/usage` の単価注記（`pricingNote()`。`src/components/chat/usage-view.tsx`）は、単価表に
   無いモデル（＝Codex）を「Codexは定額制のため費用に含まない」という文言に読み替える。**
-  チャット分の `ApiUsage` 記録自体、#128以降は増えない（Codex呼び出しは記録していない）
+  `ApiUsage` に積まれるのは#132以降**朝の見通しのぶんだけ**（1日1回）。**`pricingNote()` が
+  見ているのは設定の画面で選んだチャットのモデルだけで、`NOTICE_MODEL` は渡っていない。**
+  チャットが1つでもCodexなら注記が立つので今は成り立っているが、チャットだけをClaudeへ戻す
+  ような変更をするときは文言も一緒に見直すこと
 
 ## プロアクティブ通知（#79）
 
@@ -390,6 +421,39 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
   期限が切れた」（`expiresInMinutes` が負）のダミーも入れてある**（#114）。この2つは
   吹き出しには一生出ないので、一覧（`/notices`）でしか見えない
 
+### お知らせの選定をCodexへ移した（#132）
+
+**候補から1件選んで言い直すのを、Anthropic ClaudeからCodex CLIへ移した**（チャットの#128に続く
+2本目）。プロンプト（`noticeSystemPrompt()`）も返させる形も読み取り（`parseChoice()`）も変えていない。
+**朝の見通し（#79）はまだClaudeのまま**——本文の材料をすべてAIDEのMCP接続から取る設計で、
+Codex側のMCPの扱いが決まる#131より先に移すと届く通知が空になる。
+
+- **`noticeSystemPrompt()` は `src/lib/anthropic.ts` に置いたまま。** ファイル名に反するが、
+  ここは秘書としての振る舞い（`SECRETARY_INTRO`）の置き場で、**Anthropic SDKを使うかどうかとは
+  無関係**——相談の `secretarySystemPrompt()` もCodexへ渡すためにここから読んでいる
+- **Codexにはシステムプロンプトを別に渡す口が無い。** 相談（`buildCodexPrompt()`）と同じく、
+  体裁の指示と候補一覧を `---` で繋いだ1本のプロンプトにする（`buildNoticePrompt()`）。
+  **末尾に「本文だけを返せ」の一文は足していない**——`noticeSystemPrompt()` が返させる形を
+  最後まで指定しているため
+- **`max_tokens` に当たる引数が無い。** `NOTICE_MAX_OUTPUT_TOKENS`（300）は消した。長さの
+  歯止めはプロンプトの「40文字前後」「3行目以降は書かない」だけになっている
+- **タイムアウトを付けた**（`CODEX_TIMEOUT_MS`、60秒）。この経路は「話す」画面から1分ごとに
+  叩かれるので、返らなくなると詰まったリクエストが積み上がる。`runCodexExec()` は打ち切りを
+  `interrupted` で返すが、**この経路に利用者からの割り込みは無い**ので、立っていれば上限に
+  掛かったものとして失敗扱いにする
+- **失敗（例外）と「黙った」（null）を分ける。** 例外は呼び出し元が捕まえて `lastRuns` を
+  更新せずに戻る＝次の問い合わせでやり直す。**読めない形で返ってきた回はnull**——モデルは
+  実際に答えており、同じ候補ですぐ叩き直しても結果は変わらないため
+- **`ApiUsage` への記録をやめた**（#128でチャットに対して行ったのと同じ判断）。`/usage` の
+  金額に、ここのぶんはもう積まれない
+- **Codexは自前の指示文を毎回前置きする。** 実測（サブPC・`codex-cli 0.152.1`）で、プロンプトを
+  `"ok"` の2文字にしても入力は12,113トークンだった。お知らせ選定の実回は12,568〜12,615トークン
+  （うち8,960はキャッシュ読み）で、**足しているのは自前のプロンプトぶん約500トークンだけ**。
+  `--ignore-user-config` で外れるのは利用者の `~/.codex/config.toml` 側だけで、この前置きは消せない。
+  **「未読が0件なら叩かない」「10分に1回まで」の歯止めは、これまでより効いている**
+- **所要は3.5〜5.3秒**（同・`gpt-5.6-luna`。Claudeのときより伸びる）。待っている間、吹き出しは
+  いま出しているものをそのまま出し続けるので画面は止まらない
+
 ### 急ぎ（`URGENT`）のお知らせをその場でPushする（#115）
 
 **`URGENT` は受け付けているのに、届くのは「話す」画面を開いている端末の吹き出しだけだった。**
@@ -406,7 +470,9 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
   Issue本文の提案どおり `<source>:<kind>:<dedupeKey>` を連結する形だと、`Notice` 側の入力上限
   （source/kind各40文字・dedupeKey120文字）をそのまま繋いだ場合に
   `NotificationLog.dedupeKey`（`@db.VarChar(120)`）を超過しうるため採らなかった
-- **押した先は専用の相談（`Conversation`）。** 1通目はUSERの固定文言（`toPromptMessages()`
+- **押した先は、`Notice.url` があればそのページ（#137）。** 無い用件だけ、専用の
+  `Conversation` を開く。**リンクの有無によらず相談は作る**ので、押した先が外のアプリでも
+  届いた文面は左メニューから辿れる。相談の中身は1通目がUSERの固定文言（`toPromptMessages()`
   が履歴の先頭をUSERでないと落とすため。#79の制約と同じ）、2通目はASSISTANTとして
   `body` をそのまま置く。**朝の見通し（#79）と違い、ASSISTANT側もモデルの生成物ではなく
   積んだ側の文面そのもの**——モデルを呼ばない設計なので「USER=実際にモデルへ渡した依頼」
@@ -450,6 +516,39 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
 - **未読の件数は `(chat)/layout.tsx` で引く**ので、相談の画面でも毎回1本増える。`count` 1本
   なので今月の使用量と同じ `Promise.all` に混ぜて待ち時間は足さない
 - 日付・時刻は**日本時間で作る**（#79の `jstDateKey()`・#101の `jstParts()` と同じ理由）
+
+### 押した先へ移る（#137）
+
+**`Notice.url`（積む側が付ける元データへのリンク）を遷移先として使う。** 列もMCPの入力も#93から
+あったが、`prisma/schema.prisma` のコメントどおり「記録するだけで画面からは使わない」まま
+だった。使うのは3か所——急ぎのお知らせのPush（#115）・秘書の頭上の吹き出し・一覧（`/notices`）。
+
+- **判定は `safeNoticeUrl()`（`src/lib/notice-url.ts`）に閉じ、受け取るときと出すときの
+  両方で通す。** 受け付けるのは `http(s)://` の絶対URLと `/` で始まるパスだけで、
+  `javascript:` や `//evil.example.com`（プロトコル相対）は落とす。**`/\evil.example.com` も
+  同じ扱いにする**——Chromeはバックスラッシュをスラッシュとして読む。積む口
+  （`parseNoticeInput()`）だけで弾かないのは、列を足す前・判定を足す前に積まれた行が
+  DBに残っているため。このモジュールはクライアントコンポーネントからimportするので、
+  Prismaや `next/headers` に触れるものを持ち込まない
+- **`public/sw.js` に同じ判定を二重に持っている**（`safeTarget()`）。ビルドを通らない素のJSで
+  importできないため。**片方だけ直さないこと**
+- **`WindowClient.navigate()` は同一オリジンのURLしか受け付けない。** 別オリジンを渡すと
+  拒否されて**何も起きない**（通知を押しても画面が変わらない）。`notificationclick` では
+  `new URL(target, self.location.origin).origin` で見て、別オリジンなら開いているタブを
+  探さずに `openWindow()` する。したがって `PushPayload.url` は**同一オリジンの相対パスとは
+  限らなくなった**（`src/lib/push/subscriptions.ts` のコメント）
+- **外部のリンクは新しいタブ、アプリ内のパスは `next/link` で同じタブ**（`isExternalNoticeUrl()`)。
+  絶対URLは同じオリジンを指していても「外」として扱う——サーバー・Service Worker・ブラウザで
+  「自分のオリジン」の見え方が揃わない（本番・localhost・tailnetのホスト名）
+- **吹き出しは丸ごとリンクにしない。** 待機中の吹き出しは25秒ごとに入れ替わる（#101）ため、
+  面全体が押せると読んでいる途中の誤タップになる。押せるのは末尾の「開く」だけ
+- **一覧では見出しと「開く」を1つのリンクにまとめる**（`notices-view.tsx` の `Title`）。
+  2つに割ると、読み上げソフトには同じ行き先のリンクが2つ並んで聞こえる
+- **開発DBのシードには、リンク有り（外部・アプリ内）とリンク無しの両方を入れてある**
+  （`scripts/seed-ci-db.mjs`）。**リンク無しの行を残すのが要点**——全部にリンクがあると、
+  出し分けているのか全件に出しているのかを画面から切り分けられない。アプリ内を指すぶんは
+  相談のIDが流すたびに変わるので、`fromMorningBriefing` の印から `NotificationLog` を引いて
+  `/c/<ID>` に組み立てる（**相談のタイトルで引かない**——「9月2日の見通し」のように日付で変わる）
 
 ### 待っている間のひとりごと（#101）
 
@@ -501,10 +600,11 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
 Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として残し、`/usage` の画面で
 日・月・累計に足し上げて出す。左メニューの下部に今月の概算費用も出る。
 
-**#128でチャット（書く・話す）の返答生成はCodex CLIへ移り、このテーブルには積まれなくなった。**
-Codexはサブスク定額制でトークン単価の概念に合わないため、`/api/chat` は `ApiUsage` への記録を
-やめている。朝の見通し（#79）・お知らせ選定（#93）は引き続きClaudeを呼ぶため、そのぶんは
-今までどおり記録される。
+**#128でチャット（書く・話す）が、#132でお知らせ選定がCodex CLIへ移り、このテーブルには
+積まれなくなった。** Codexはサブスク定額制でトークン単価の概念に合わないため、どちらも
+`ApiUsage` への記録をやめている。**いま記録が増えるのは朝の見通し（#79）だけ**で、1日1回
+（`pause_turn` で頼み直した回はその回数ぶん）。金額の桁がこれまでと変わるので、**過去の
+グラフと並べて「急に減った」と読まないこと。**
 
 - **数える単位は「API呼び出し1回」で、秘書の返答（`Message`）には持たせない。** 返答は
   `answer.trim() !== ""` のときしか保存されず、1文字も出ないうちに割り込まれた往復・生成に
@@ -812,9 +912,14 @@ Messages APIのSSE（`message_start` → `content_block_delta`×n → `message_s
 **`window.SpeechRecognition` を差し替えれば、マイクの無いサブPCでも「話す」の往復を丸ごと
 動かせる**（#67）。ヘッドレスChromeを `--remote-debugging-port` 付きで起こし、CDPの
 `Page.addScriptToEvaluateOnNewDocument` で偽の `SpeechRecognition`（`start()` の回数を数え、
-`no-speech` → `end` を返すだけ）を仕込んでから開く。開発用ログインのCookieは
-`Network.setCookie` で渡せる。声の設定はlocalStorage（`aide-bot-voice-settings`）に
-先に書いておけば効く。
+`no-speech` → `end` を返すだけ）を仕込んでから開く。声の設定はlocalStorage
+（`aide-bot-voice-settings`）に先に書いておけば効く。
+
+**開発用ログインは、Cookieを差し込むよりログイン画面のフォームを押す方が確実**（#137で実測）。
+`Network.setCookie` に `domain: "localhost"` でも `url: "http://localhost:<ポート>/"` でも
+`/login` へ戻され続けた（原因は詰めていない）。`/login` を開いてから
+`document.querySelector('form[action*="/api/dev/login"]').submit()` を
+`Runtime.evaluate` で流せば、そのまま `/` に着地する。
 
 `[aria-live="polite"]`（秘書の頭上の吹き出し。#93）の文言と `start()` の回数を一定間隔で
 読むだけで、**開き直しているか・どこで畳まれたかが分かる。** 待機中は

@@ -22,7 +22,12 @@ export type PushSubscriptionInput = {
 export type PushPayload = {
   title: string;
   body: string;
-  /** 押したときに開くパス。同じオリジンの相対パスで持つ。 */
+  /**
+   * 押したときに開く先。**同じオリジンの相対パスとは限らない**（#137）。
+   *
+   * 急ぎのお知らせ（#115）は、積む側が付けたリンクがあればそのアプリのURLをそのまま入れる。
+   * 開き分け（別オリジンは `openWindow()`）は `public/sw.js` の側で行う。
+   */
   url: string;
   /** 同じ理由の通知を端末側でも上書きするための印。 */
   tag?: string;

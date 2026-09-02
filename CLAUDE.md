@@ -847,9 +847,14 @@ Messages APIのSSE（`message_start` → `content_block_delta`×n → `message_s
 **`window.SpeechRecognition` を差し替えれば、マイクの無いサブPCでも「話す」の往復を丸ごと
 動かせる**（#67）。ヘッドレスChromeを `--remote-debugging-port` 付きで起こし、CDPの
 `Page.addScriptToEvaluateOnNewDocument` で偽の `SpeechRecognition`（`start()` の回数を数え、
-`no-speech` → `end` を返すだけ）を仕込んでから開く。開発用ログインのCookieは
-`Network.setCookie` で渡せる。声の設定はlocalStorage（`aide-bot-voice-settings`）に
-先に書いておけば効く。
+`no-speech` → `end` を返すだけ）を仕込んでから開く。声の設定はlocalStorage
+（`aide-bot-voice-settings`）に先に書いておけば効く。
+
+**開発用ログインは、Cookieを差し込むよりログイン画面のフォームを押す方が確実**（#137で実測）。
+`Network.setCookie` に `domain: "localhost"` でも `url: "http://localhost:<ポート>/"` でも
+`/login` へ戻され続けた（原因は詰めていない）。`/login` を開いてから
+`document.querySelector('form[action*="/api/dev/login"]').submit()` を
+`Runtime.evaluate` で流せば、そのまま `/` に着地する。
 
 `[aria-live="polite"]`（秘書の頭上の吹き出し。#93）の文言と `start()` の回数を一定間隔で
 読むだけで、**開き直しているか・どこで畳まれたかが分かる。** 待機中は

@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 
 import { NoticePriority } from "@prisma/client";
 
+import { safeNoticeUrl } from "@/lib/notice-url";
 import type { NoticeInput } from "@/lib/notices";
 
 /** 外部の無人実行経路からお知らせを受け取るための共有認証。 */
@@ -61,9 +62,16 @@ export function parseNoticeInput(raw: unknown): { input: NoticeInput; email: str
   const title = value.title === undefined || value.title === null ? undefined : shortString(value.title, 120);
   if (title === null) return "title が長すぎます（120文字まで）。";
 
-  const url = value.url === undefined || value.url === null ? null : shortString(value.url, LIMITS.url);
-  if (url === null && value.url !== undefined && value.url !== null) {
-    return `url が長すぎます（${LIMITS.url}文字まで）。`;
+  // 押したときの遷移先（#137）。**`href` や `openWindow()` へそのまま渡る値**なので、
+  // 長さだけでなく形も見る（`javascript:` などを保存しない）。判定は `safeNoticeUrl()` に
+  // 閉じてあり、出すとき（吹き出し・一覧・Push）も同じものを通す。
+  let url: string | null = null;
+  if (value.url !== undefined && value.url !== null) {
+    const raw = shortString(value.url, LIMITS.url);
+    if (!raw) return `url が長すぎます（${LIMITS.url}文字まで）。`;
+
+    url = safeNoticeUrl(raw);
+    if (!url) return "url は https:// で始まる絶対URLか、/ で始まるアプリ内のパスで指定してください。";
   }
 
   const priority = parsePriority(value.priority);

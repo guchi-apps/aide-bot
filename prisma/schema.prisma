@@ -24,6 +24,11 @@ model User {
   briefingHour   Int @default(7)
   briefingMinute Int @default(0)
 
+  // 話題（#144）として仕入れるニュースの種類。`general` / `life` / `tech` をカンマで繋いだ文字列で、
+  // 正は `src/lib/topic-categories.ts`。空文字なら仕入れない。Cookieにしないのは、仕入れが
+  // 利用者の画面とは別のタイミング（応答後のバックグラウンド）で走り、そこで読む必要があるため。
+  topicCategories String @default("general,life,tech") @db.VarChar(120)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -34,6 +39,7 @@ model User {
   pushSubscriptions PushSubscription[]
   notificationLogs  NotificationLog[]
   notices           Notice[]
+  topics            Topic[]
 }
 
 // --- チャット ---
@@ -353,4 +359,47 @@ enum NoticePriority {
   NORMAL
   /// 時間を逃すと意味が無くなる。届いた回は10分を待たずに選び直す。
   URGENT
+}
+
+// --- 話題（#144） ---
+// **秘書が雑談の話題として振るために、ウェブ検索で仕入れたニュースを溜める場所。**
+// お知らせ（`Notice`）とは分ける——あちらは「逃すと困るか」で1件選ぶ受け皿で、ニュースを
+// 混ぜると選定基準がぶれ、支払い期限のような用件が候補から押し出される。
+//
+// 仕入れは `codex --search exec`（ChatGPTのサブスク枠。`src/lib/topics.ts`）で1日数回だけ走り、
+// 吹き出しへ出すときも相談の材料に添えるときもモデルは呼ばない（#93・#101「黙っている間の
+// 費用は0円」）。**通知（Push）にはしない。** ニュースは「逃すと困る」ものではない。
+
+model Topic {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// 種類（`general` / `life` / `tech`）。正は `src/lib/topic-categories.ts`。
+  category String @db.VarChar(20)
+
+  /// 記事の見出し。
+  title   String @db.VarChar(120)
+  /// 記事の要点。モデルが検索結果から書いたもので、事実の誤りが混じりうる（出典を必ず添える）。
+  summary String @db.VarChar(400)
+  /// 秘書が話題として振る一言。**吹き出しに出るのはこちら。** 仕入れたときに一度だけ書かせる。
+  lead    String @db.VarChar(200)
+
+  /// 出典の記事URL。`safeNoticeUrl()` を通した http(s) の絶対URLだけを入れる。
+  url     String @db.VarChar(500)
+  /// `url` のSHA-256（hex 64文字）。一意制約はこちらに張る（`PushSubscription.endpointHash` と同じ手）。
+  urlHash String @db.VarChar(64)
+  /// 媒体名（「NHK」など）。モデルが書いたもの。
+  sourceName String @db.VarChar(120)
+  /// 記事の日付（`2026-09-02` の形）。モデルが書いたもので、取れなければ空文字。
+  publishedOn String @default("") @db.VarChar(10)
+
+  /// 仕入れた時刻。同じ記事が仕入れ直されたら更新する（新しい順の並びで前へ戻す）。
+  fetchedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  // 同じ記事を二重に溜めない。
+  @@unique([userId, urlHash])
+  // 取り出しは「自分のぶんを新しい順・期間で切る」だけ。
+  @@index([userId, fetchedAt])
 }

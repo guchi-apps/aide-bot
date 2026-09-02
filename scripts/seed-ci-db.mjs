@@ -298,6 +298,62 @@ const NOTICE_SEEDS = [
   },
 ];
 
+// 話題（#144）。「話す」画面の吹き出しに回る「話題」の枠と、`/topics` の一覧を確かめるためのダミー。
+// 実際の仕入れ（`codex --search exec`）は開発DBのシードでは走らせない——27秒掛かるうえ、
+// サブスクの利用枠を消費する。**同じURLは `urlHash` で畳まれる**ので、何度流しても増えない。
+//
+// 種類（category）は3つすべてを入れてある。1種類だけだとチップの出し分けを画面で確かめられない。
+// `fetchedMinutesAgo` は投入時刻からの相対で、24時間の期間を過ぎたものも1件入れてある
+// （一覧にも吹き出しにも出ないことを確かめる）。
+const TOPIC_SEEDS = [
+  {
+    category: "life",
+    title: "青森県津軽で線状降水帯、厳重警戒",
+    summary: "気象庁が津軽地方に線状降水帯の発生を発表。大雨による土砂災害・河川の増水に厳重な警戒を呼びかけている。",
+    lead: "青森の津軽で線状降水帯が出ているそうです。東北方面のご予定はありませんか",
+    url: "https://example.com/news/dev-tsugaru-rain",
+    sourceName: "テレビ朝日",
+    fetchedMinutesAgo: 20,
+  },
+  {
+    category: "general",
+    title: "食料品の消費税1％化、表示猶予を調整",
+    summary: "税率変更の前後2か月は税込み価格の表示を免除する特例を政府が検討。値札の付け替えが間に合わない小売店に配慮する。",
+    lead: "食料品の消費税が1％になる話、値札の表示にしばらく猶予が付くそうですよ",
+    url: "https://example.com/news/dev-tax-label",
+    sourceName: "テレビ朝日",
+    fetchedMinutesAgo: 20,
+  },
+  {
+    category: "tech",
+    title: "Node.js 26がLTSに",
+    summary: "Node.js 26が長期サポート（LTS）に入った。サポート期間は2029年4月まで。",
+    lead: "Node.jsの新しい長期サポート版が出たそうです。そろそろ更新を考えますか",
+    url: "https://example.com/news/dev-node-lts",
+    sourceName: "Node.js",
+    fetchedMinutesAgo: 20,
+  },
+  {
+    category: "general",
+    title: "ネパールの土石流、日本人1人が行方不明",
+    summary: "ネパール中部で発生した土石流に日本人旅行者が巻き込まれた模様。外務省が現地の情報収集を続けている。",
+    lead: "ネパールの土石流で日本の方が行方不明になっているそうです。心配ですね",
+    url: "https://example.com/news/dev-nepal",
+    sourceName: "NHK",
+    fetchedMinutesAgo: 300,
+  },
+  // 期間（24時間）を過ぎたもの。一覧にも吹き出しにも出ない。
+  {
+    category: "life",
+    title: "首都圏の電車、来春のダイヤ改正を発表",
+    summary: "来年3月のダイヤ改正で、平日朝の一部の列車が減便される。",
+    lead: "来春のダイヤ改正で朝の電車が少し減るそうです",
+    url: "https://example.com/news/dev-old-timetable",
+    sourceName: "NHK",
+    fetchedMinutesAgo: 60 * 30,
+  },
+];
+
 async function main() {
   const user = await db.user.upsert({
     where: { supabaseUserId: CI_BYPASS_SUPABASE_USER_ID },
@@ -644,6 +700,22 @@ async function main() {
   }
 
   console.log(`[aide-bot] お知らせを${NOTICE_SEEDS.length}件投入しました`);
+
+  // 話題（#144）。同じURLは畳まれる。日付は投入日（日本時間）にしておく。
+  const publishedOn = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo" }).format(now);
+  for (const seed of TOPIC_SEEDS) {
+    const { fetchedMinutesAgo, ...rest } = seed;
+    const urlHash = createHash("sha256").update(seed.url).digest("hex");
+    const data = { ...rest, publishedOn, fetchedAt: new Date(now.getTime() - fetchedMinutesAgo * 60 * 1000) };
+
+    await db.topic.upsert({
+      where: { userId_urlHash: { userId: user.id, urlHash } },
+      update: data,
+      create: { userId: user.id, urlHash, ...data },
+    });
+  }
+
+  console.log(`[aide-bot] 話題を${TOPIC_SEEDS.length}件投入しました`);
 }
 
 main()

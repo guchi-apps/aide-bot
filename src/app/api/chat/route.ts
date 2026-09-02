@@ -7,6 +7,7 @@ import { selectedChatModels } from "@/lib/chat-model-server";
 import { runCodexExec } from "@/lib/codex";
 import { MAX_MESSAGE_LENGTH, buildConversationTitle } from "@/lib/conversation";
 import { db } from "@/lib/db";
+import { topicsForChat } from "@/lib/topics";
 import { recordApiUsage } from "@/lib/usage";
 
 /**
@@ -106,10 +107,17 @@ function buildConversationText(
   return merged.map((entry) => `${entry.role === "user" ? "利用者" : "秘書"}: ${entry.content}`).join("\n\n");
 }
 
-/** Codexへ渡す1本のプロンプト。体裁の指示・これまでの会話・今回の依頼をまとめる。 */
+/**
+ * Codexへ渡す1本のプロンプト。体裁の指示・これまでの会話・最近の話題・今回の依頼をまとめる。
+ *
+ * **最近の話題（#144）は履歴の後ろに置く。** 仕入れは1時間に1回まで変わるので、前に置くと
+ * そのたびにプレフィックスの先頭側が変わり、履歴ぶんのキャッシュ（#56・#128）が丸ごと外れる。
+ * 後ろなら履歴までは前方一致のまま乗る。
+ */
 function buildCodexPrompt(
   style: ReplyStyle,
   history: { role: "USER" | "ASSISTANT"; content: string; interrupted: boolean }[],
+  topics: string,
 ): string {
   const system = secretarySystemPrompt(style);
   const conversation = buildConversationText(history);
@@ -119,6 +127,15 @@ function buildCodexPrompt(
     "---",
     "これまでの会話:",
     conversation,
+    ...(topics === ""
+      ? []
+      : [
+          "---",
+          "最近の話題（あなたがウェブで仕入れておいたニュース。利用者が世の中の話・雑談・「何かニュースある？」を" +
+            "求めたときの材料にする。頼まれていないのに持ち出さない。要点は仕入れたときの要約なので、" +
+            "詳しく聞かれたら出典の記事を案内し、書かれていない細部を作らない）:",
+          topics,
+        ]),
     "---",
     "直近の利用者の発言に対する、秘書としての返答だけを書いてください。" +
       "「秘書:」のような役割ラベルや前置きは書かず、本文だけを返してください。",
@@ -203,7 +220,10 @@ export async function POST(request: Request) {
   // 返答に使うモデルは、この端末が設定の画面で選んだもの。話すときと書くときで別々に持てる。
   const model = (await selectedChatModels())[style];
 
-  const prompt = buildCodexPrompt(style, history);
+  // 仕入れてある話題（#144）。DBを引くだけで、無ければ空文字（プロンプトの形は変わらない）。
+  const topics = await topicsForChat(user.id);
+
+  const prompt = buildCodexPrompt(style, history, topics);
 
   // 次に割り込んでくるリクエストへ「この生成の後片付けが終わった」と伝えるための錠（#48）。
   // ストリームの外で作るのは、`start` が動くより先にMapへ載せておく必要があるため。

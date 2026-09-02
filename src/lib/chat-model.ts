@@ -36,11 +36,12 @@ export const BRIEFING_MODEL = "claude-haiku-4-5";
 export const NOTICE_MODEL = "gpt-5.6-luna";
 
 /**
- * `/usage` 画面の単価表。**Anthropic（Claude）の単価のまま。**
+ * `/usage` 画面の単価表。**Anthropic（Claude）の単価だけを載せる。**
  *
  * チャット（#128）とお知らせ選定（#132）はCodexへ移り、ChatGPTのサブスク定額制で動くため
- * トークン単価の概念に合わない（どちらも `ApiUsage` への記録自体をやめた）。朝の見通しだけは
- * 引き続きClaudeを呼ぶため、この表はそのまま残す。
+ * トークン単価の概念に合わない。**#133でどちらも `ApiUsage` へ記録し直すようにしたが、
+ * この表へCodexの行を足してはいけない**——足すと定額のはずの経路に費用が付く。課金の形の
+ * 判定は `billingKind()` が持つ。朝の見通しだけは引き続きClaudeを呼ぶため、この表を使う。
  *
  * 出典: https://claude.com/pricing#api（2026-08-25 時点）
  */
@@ -58,6 +59,28 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-sonnet-5": { input: 2, output: 10, cacheWrite: 2.5, cacheRead: 0.2 },
   "claude-haiku-4-5": { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 },
 };
+
+/**
+ * 課金の形（#133）。`/usage` はこれで節を割る。
+ *
+ * - `subscription`：Codex（ChatGPTのサブスク枠）。**トークン単価が存在しない。**
+ *   使った量は分かるが費用は0円で、代わりに利用枠（5時間ローリング＋週次）を消費する
+ * - `metered`：Anthropic（Claude）。従来どおりトークン数×単価で概算費用を出す
+ */
+export type BillingKind = "subscription" | "metered";
+
+/**
+ * モデル名から課金の形を決める。
+ *
+ * **単価表に載っているかどうかでは判定しない。** 表に無いClaudeのモデル（新しい版・
+ * 使うのをやめた版）まで「定額」に倒れてしまい、費用が黙って0円になる。Codexが提供するのは
+ * GPT系だけなので、そちらを名指しする向きにしてある——知らない名前は従量課金として扱い、
+ * 単価が引けなければ既定の単価で概算する（`estimateCostUsd()`。0円にして「使っていない」と
+ * 読ませない方針は#51から変えていない）。
+ */
+export function billingKind(model: string | null | undefined): BillingKind {
+  return (model ?? "").startsWith("gpt-") ? "subscription" : "metered";
+}
 
 export type ChatModelId = "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna";
 

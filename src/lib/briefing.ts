@@ -14,6 +14,7 @@ import { db } from "@/lib/db";
 import { listConnectedServers, toMcpRequestParts } from "@/lib/mcp/connections";
 import { ingestNotice } from "@/lib/notices";
 import { sendPushToUser, usersWithSubscriptions } from "@/lib/push/subscriptions";
+import { recordApiUsage } from "@/lib/usage";
 
 /**
  * 秘書の方から知らせる「朝の見通し」（#79）。**サーバー専用。**
@@ -116,24 +117,23 @@ export type BriefingOutcome = {
  *
  * **数える単位は「API呼び出し1回」**で、相談と同じ。`pause_turn` で頼み直した回は
  * その回数ぶん行ができる。
+ *
+ * **`/usage` で従量課金の節に入るのはここだけになった**（#133）。相談とお知らせ選定は
+ * Codexへ移っており、同じテーブルへ入るが単価は引かれない。
  */
 async function recordUsage(userId: string, conversationId: string | null, message: Anthropic.Beta.BetaMessage) {
-  try {
-    await db.apiUsage.create({
-      data: {
-        userId,
-        conversationId,
-        model: message.model,
-        inputTokens: message.usage.input_tokens,
-        outputTokens: message.usage.output_tokens,
-        cacheWriteTokens: message.usage.cache_creation_input_tokens ?? 0,
-        cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
-      },
-    });
-  } catch (error) {
-    // 記録できなくても通知は届けたい（#51と同じ方針）。
-    console.error("[aide-bot] 朝の見通しの使用量の記録に失敗した", error);
-  }
+  // 失敗しても通知は届けたい（#51と同じ方針）。飲むのは `recordApiUsage()` の側。
+  await recordApiUsage({
+    userId,
+    conversationId,
+    model: message.model,
+    usage: {
+      inputTokens: message.usage.input_tokens,
+      outputTokens: message.usage.output_tokens,
+      cacheWriteTokens: message.usage.cache_creation_input_tokens ?? 0,
+      cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
+    },
+  });
 }
 
 function textOf(message: Anthropic.Beta.BetaMessage): string {

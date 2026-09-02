@@ -13,7 +13,7 @@ import type { ConversationSummary } from "./types";
 type Props = {
   conversations: ConversationSummary[];
   /** 今月の概算費用（`$1.23` の形）。一覧の下に出す（#51）。 */
-  monthlyCostLabel: string;
+  monthlyUsageLabel: string;
   /** まだ秘書が出していないお知らせの件数（#114）。一覧の下のバッジに出す。 */
   pendingNoticeCount: number;
   userLabel: string;
@@ -31,7 +31,7 @@ type Props = {
  */
 export function ChatShell({
   conversations,
-  monthlyCostLabel,
+  monthlyUsageLabel,
   pendingNoticeCount,
   userLabel,
   userEmail,
@@ -79,7 +79,7 @@ export function ChatShell({
           isSettingsActive={isSettings}
           isNoticesActive={isNotices}
           pendingNoticeCount={pendingNoticeCount}
-          monthlyCostLabel={monthlyCostLabel}
+          monthlyUsageLabel={monthlyUsageLabel}
           userLabel={userLabel}
           userEmail={userEmail}
           appVersion={appVersion}
@@ -108,7 +108,7 @@ export function ChatShell({
               isSettingsActive={isSettings}
               isNoticesActive={isNotices}
               pendingNoticeCount={pendingNoticeCount}
-              monthlyCostLabel={monthlyCostLabel}
+              monthlyUsageLabel={monthlyUsageLabel}
               userLabel={userLabel}
               userEmail={userEmail}
               appVersion={appVersion}

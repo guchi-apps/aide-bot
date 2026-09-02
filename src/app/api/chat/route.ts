@@ -7,14 +7,18 @@ import { selectedChatModels } from "@/lib/chat-model-server";
 import { runCodexExec } from "@/lib/codex";
 import { MAX_MESSAGE_LENGTH, buildConversationTitle } from "@/lib/conversation";
 import { db } from "@/lib/db";
+import { recordApiUsage } from "@/lib/usage";
 
 /**
  * 相談（チャット）の返答生成（#128）。
  *
  * **返答の生成元はAnthropic ClaudeからCodex（ChatGPTサブスク経由）に変わった。**
- * MCP接続によるデータ取得・書き込みの道具・使用量（`ApiUsage`）の記録は、いずれも
- * このスコープでは対象外——今回は「書く・話す」の基本応答だけを移した（Issueの計画を参照）。
- * これらは朝の見通し・お知らせ選定と同様、引き続きClaude経由で使われる別経路にある。
+ * MCP接続によるデータ取得と書き込みの道具は、このスコープでは対象外（Issue #128の計画を参照）。
+ *
+ * **使用量（`ApiUsage`）の記録は#133で戻した。** Codexはサブスク定額で費用が付かないが、
+ * `codex exec --json` の `turn.completed` がトークン数を返すため、`/usage` の「相談・お知らせ」
+ * の節に量として出す。**費用が0になるのは単価表を引かないから**で、記録しないからではない
+ * （`billingKind()`。`@/lib/chat-model`）。
  *
  * **`codex exec` はトークン単位でストリーミングしない**（`@/lib/codex`）。応答が完結して
  * から `delta` イベントを1回だけ送るため、届いた端から文字が増えていく従来の見え方はしない。
@@ -225,6 +229,17 @@ export async function POST(request: Request) {
           answer = result.text;
           interrupted = result.interrupted;
           errorMessage = result.errorMessage;
+
+          // 使った量は返答の保存とは独立に残す（#51「1呼び出し＝1行」）。中断・起動失敗で
+          // `turn.completed` が届かなかった回は `usage` がnullになり、行は作られない。
+          if (result.usage) {
+            await recordApiUsage({
+              userId: user.id,
+              conversationId: conversation.id,
+              model,
+              usage: result.usage,
+            });
+          }
 
           // `codex exec` は応答が完結してからしか本文を返さないため、ここで1回だけ流す
           // （届いた端から逐次表示する形にはならない）。

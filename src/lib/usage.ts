@@ -1,4 +1,4 @@
-import { MODEL_PRICING, type ModelPricing } from "@/lib/chat-model";
+import { MODEL_PRICING, billingKind, type BillingKind, type ModelPricing } from "@/lib/chat-model";
 import { db } from "@/lib/db";
 
 /**
@@ -7,8 +7,11 @@ import { db } from "@/lib/db";
  * **単価表（`MODEL_PRICING`）は `@/lib/chat-model` へ移した**（#71）。モデルを選ぶ画面が
  * クライアントコンポーネントで、単価をバッジに出すため。
  *
- * **#128でチャット（書く・話す）の返答生成はCodexへ移り、この記録には積まれなくなった。**
- * 朝の見通し・お知らせ選定は引き続きClaudeを呼ぶため、そのぶんの記録・単価表はそのまま残す。
+ * **#133から、記録には課金の形が違う2種類が混ざる。** Codex（ChatGPTのサブスク定額）で動く
+ * 相談・お知らせ選定と、Anthropic（従量課金）で動く朝の見通し。**足し上げるときは必ず
+ * `billingKind()` で割ってから使うこと**——1つの金額へ混ぜると、定額のはずの相談に費用が
+ * 付いているように見える。取り出し口（`usageBreakdown()` / `dailyUsage()`）は割った形でしか
+ * 返さない。
  *
  * **このモジュールはサーバー専用。** `@/lib/db` 経由でPrismaを引き込むため、クライアント
  * コンポーネントからimportしないこと（`src/lib/app-version.ts` と同じ理由で、バンドルへ
@@ -38,13 +41,22 @@ export type UsageRow = {
 
 /** 足し上げた結果。`costUsd` はこのアプリが数えたトークン数からの概算。 */
 export type UsageSummary = {
-  /** Messages APIを呼んだ回数。いまは1往復＝1回。 */
+  /** APIを呼んだ回数。いまは1往復＝1回。 */
   calls: number;
   inputTokens: number;
   outputTokens: number;
   cacheWriteTokens: number;
   cacheReadTokens: number;
+  /** 定額制（Codex）ぶんは常に0。 */
   costUsd: number;
+  /**
+   * この期間に実際に呼んだモデル名（重複なし・古い順ではない）。
+   *
+   * 画面の注記が「いま選んでいるモデル」ではなく**この集計に入っているモデル**の単価を
+   * 出せるようにするために持つ。モデルを切り替えた前後の記録が混ざった期間では、
+   * 選択中のモデルだけを書くと注記が嘘になる。
+   */
+  models: string[];
 };
 
 export const EMPTY_SUMMARY: UsageSummary = {
@@ -54,7 +66,16 @@ export const EMPTY_SUMMARY: UsageSummary = {
   cacheWriteTokens: 0,
   cacheReadTokens: 0,
   costUsd: 0,
+  models: [],
 };
+
+/**
+ * 課金の形で割った集計（#133）。画面はこの単位で節を分ける。
+ *
+ * **どちらかが0件でも省かない。** 呼び出し側が「記録が1件も無い節は畳む」判断をするため、
+ * 空でも `EMPTY_SUMMARY` を入れて返す。
+ */
+export type UsageBreakdown = Record<BillingKind, UsageSummary>;
 
 /**
  * 入力ぶんのトークン数の合計（#56）。
@@ -69,17 +90,23 @@ export function promptTokens(row: UsageSummary): number {
 }
 
 /**
- * 単価を引く。表に無いモデルは、既定のモデルの単価で概算する。
+ * 単価を引く。**定額制（Codex）のモデルには単価が無いので `null`。**
  *
- * 0円として捨てると「使っていない」と読めてしまうため、近い値を出して概算だと断る方を採る。
+ * 従量課金のモデルで表に無いものは、既定のモデルの単価で概算する（#51）。0円として捨てると
+ * 「使っていない」と読めてしまうため、近い値を出して概算だと断る方を採る。
+ *
+ * **Codexぶんを既定の単価へ落とさないことが#133の要点。** 落とすと、定額で動いている相談に
+ * `claude-opus-5` の単価が付き、概算費用が実態と桁ごと食い違う。
  */
-function pricingFor(model: string | null): ModelPricing {
+function pricingFor(model: string | null): ModelPricing | null {
+  if (billingKind(model) === "subscription") return null;
   return MODEL_PRICING[model ?? ""] ?? MODEL_PRICING["claude-opus-5"];
 }
 
-/** 1件ぶんの概算費用（USD）。 */
+/** 1件ぶんの概算費用（USD）。定額制のモデルは0。 */
 export function estimateCostUsd(row: UsageRow): number {
   const pricing = pricingFor(row.model);
+  if (!pricing) return 0;
 
   return (
     ((row.inputTokens ?? 0) * pricing.input +
@@ -90,7 +117,7 @@ export function estimateCostUsd(row: UsageRow): number {
   );
 }
 
-/** 複数件を足し上げる。 */
+/** 複数件を足し上げる。**課金の形が混ざった配列を渡さないこと**（`splitByBilling()` で割る）。 */
 export function summarize(rows: UsageRow[]): UsageSummary {
   return rows.reduce<UsageSummary>((total, row) => {
     return {
@@ -100,8 +127,17 @@ export function summarize(rows: UsageRow[]): UsageSummary {
       cacheWriteTokens: total.cacheWriteTokens + (row.cacheWriteTokens ?? 0),
       cacheReadTokens: total.cacheReadTokens + (row.cacheReadTokens ?? 0),
       costUsd: total.costUsd + estimateCostUsd(row),
+      models: total.models.includes(row.model ?? "") ? total.models : [...total.models, row.model ?? ""],
     };
   }, EMPTY_SUMMARY);
+}
+
+/** 課金の形で割ってから足し上げる。 */
+export function summarizeByBilling(rows: UsageRow[]): UsageBreakdown {
+  return {
+    subscription: summarize(rows.filter((row) => billingKind(row.model) === "subscription")),
+    metered: summarize(rows.filter((row) => billingKind(row.model) === "metered")),
+  };
 }
 
 // --- 期間の区切り ---
@@ -159,12 +195,13 @@ function whereClause({ userId, since }: UsageWhere) {
 }
 
 /**
- * 期間ぶんの合計。`since` を省くと累計。
+ * 期間ぶんの合計を、課金の形で割って返す。`since` を省くと累計。
  *
  * モデル別に集計してから足すのは、単価がモデルごとに違うため。件数ぶんの行を持ち帰らずに
- * 済むので、相談が増えても読み出す量が増えない。
+ * 済むので、相談が増えても読み出す量が増えない。**課金の形の判別もモデル名から決まる**ので、
+ * このgroupByの結果だけで両方の節を作れる（問い合わせは1本のまま）。
  */
-export async function usageSummary(params: UsageWhere): Promise<UsageSummary> {
+export async function usageBreakdown(params: UsageWhere): Promise<UsageBreakdown> {
   const groups = await db.apiUsage.groupBy({
     by: ["model"],
     where: whereClause(params),
@@ -177,32 +214,38 @@ export async function usageSummary(params: UsageWhere): Promise<UsageSummary> {
     },
   });
 
-  return groups.reduce<UsageSummary>(
-    (total, group) => ({
-      calls: total.calls + group._count._all,
-      inputTokens: total.inputTokens + (group._sum.inputTokens ?? 0),
-      outputTokens: total.outputTokens + (group._sum.outputTokens ?? 0),
-      cacheWriteTokens: total.cacheWriteTokens + (group._sum.cacheWriteTokens ?? 0),
-      cacheReadTokens: total.cacheReadTokens + (group._sum.cacheReadTokens ?? 0),
-      costUsd:
-        total.costUsd +
-        estimateCostUsd({
-          model: group.model,
-          inputTokens: group._sum.inputTokens,
-          outputTokens: group._sum.outputTokens,
-          cacheWriteTokens: group._sum.cacheWriteTokens,
-          cacheReadTokens: group._sum.cacheReadTokens,
+  const fold = (kind: BillingKind): UsageSummary =>
+    groups
+      .filter((group) => billingKind(group.model) === kind)
+      .reduce<UsageSummary>(
+        (total, group) => ({
+          calls: total.calls + group._count._all,
+          inputTokens: total.inputTokens + (group._sum.inputTokens ?? 0),
+          outputTokens: total.outputTokens + (group._sum.outputTokens ?? 0),
+          cacheWriteTokens: total.cacheWriteTokens + (group._sum.cacheWriteTokens ?? 0),
+          cacheReadTokens: total.cacheReadTokens + (group._sum.cacheReadTokens ?? 0),
+          costUsd:
+            total.costUsd +
+            estimateCostUsd({
+              model: group.model,
+              inputTokens: group._sum.inputTokens,
+              outputTokens: group._sum.outputTokens,
+              cacheWriteTokens: group._sum.cacheWriteTokens,
+              cacheReadTokens: group._sum.cacheReadTokens,
+            }),
+          models: [...total.models, group.model],
         }),
-    }),
-    EMPTY_SUMMARY,
-  );
+        EMPTY_SUMMARY,
+      );
+
+  return { subscription: fold("subscription"), metered: fold("metered") };
 }
 
-/** 日別に並べた1日ぶん。 */
+/** 日別に並べた1日ぶん。課金の形で割ったまま持つ（グラフを節ごとに描くため）。 */
 export type DailyUsage = {
   /** その日の0時。 */
   date: Date;
-  summary: UsageSummary;
+  summary: UsageBreakdown;
 };
 
 /**
@@ -236,6 +279,48 @@ export async function dailyUsage(userId: string, days: number, now: Date): Promi
 
   return Array.from({ length: days }, (_, index) => {
     const date = addDays(since, index);
-    return { date, summary: summarize(buckets.get(date.getTime()) ?? []) };
+    return { date, summary: summarizeByBilling(buckets.get(date.getTime()) ?? []) };
   });
+}
+
+
+// --- DBへの書き込み ---
+
+/**
+ * API呼び出し1回ぶんを記録する（#51・#133）。
+ *
+ * **数える単位は「API呼び出し1回」で、秘書の返答（`Message`）には持たせない。** 1文字も
+ * 出ないうちに割り込まれた往復では返答の行そのものが作られないが、入力ぶんはその時点で
+ * 使い終わっている。
+ *
+ * **記録に失敗しても呼び出し元を止めない。** 相談も通知も、記録できないことより返らないことの
+ * 方が重い（#51から変えていない）。呼び出し元でtry/catchを書かずに済むよう、ここで飲む。
+ *
+ * **全部0の回は行を作らない。** Codexでは中断・起動失敗で `turn.completed` が届かず、
+ * 使った量が分からない。0として残すと「呼んだのに一切消費しなかった」記録になり、
+ * 回数だけが実態より多く見える。
+ */
+export async function recordApiUsage(params: {
+  userId: string;
+  /** 相談に紐づかない経路（朝の見通し・お知らせ選定）は `null`。 */
+  conversationId: string | null;
+  model: string;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheWriteTokens: number;
+    cacheReadTokens: number;
+  };
+}): Promise<void> {
+  const { userId, conversationId, model, usage } = params;
+
+  const total =
+    usage.inputTokens + usage.outputTokens + usage.cacheWriteTokens + usage.cacheReadTokens;
+  if (total <= 0) return;
+
+  try {
+    await db.apiUsage.create({ data: { userId, conversationId, model, ...usage } });
+  } catch (error) {
+    console.error("[aide-bot] 使用量の記録に失敗した", error);
+  }
 }

@@ -17,19 +17,28 @@ import { PrismaClient } from "@prisma/client";
 
 const CI_BYPASS_SUPABASE_USER_ID = "ci-screenshot-bot";
 
-// 使用量の画面（#51）で使うモデル名。単価表（src/lib/chat-model.ts の MODEL_PRICING）に
-// ある値にしておかないと、画面の概算費用が「表に無いモデル」の扱いになる。
+// 相談のダミーの記録に使うモデル名（#128・#133）。**Codexのモデル名にしてある。**
+// 使用量の画面はモデル名から課金の形を決める（src/lib/chat-model.ts の billingKind）ので、
+// ここをClaudeのままにすると、相談のぶんが従量課金の節へ入って費用が付く。
 //
 // 返答のモデルは設定の画面から切り替えられる（#71）。**切り替えた前後が混ざった記録**を
-// 入れておかないと、モデルごとに単価を引き直せているかを画面で確かめられない。
-const USAGE_MODELS = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"];
+// 入れておかないと、モデルごとに集計を引き直せているかを画面で確かめられない。
+const USAGE_MODELS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
 const USAGE_MODEL = USAGE_MODELS[0];
+
+// 朝の見通し（#79）のモデル。**いま従量課金の節に入るのはこれだけ**（src/lib/chat-model.ts の
+// BRIEFING_MODEL と揃える）。片方だけ変えると、画面の節が空になって気付けない。
+const BRIEFING_USAGE_MODEL = "claude-haiku-4-5";
 
 /**
  * API呼び出し1回ぶんのダミーのトークン数（`ApiUsage` の1行）。
  *
  * 履歴は毎回まるごと送り直すため、同じスレッドでは往復を重ねるほど入力ぶんが増える。
  * 画面で内訳を見たときに不自然にならないよう、その形に寄せてある。
+ *
+ * **キャッシュ読みを必ず入れてある。** Codexは自前の指示文を毎回前置きするため、実測でも
+ * 入力の大半（12,000のうち8,960）がキャッシュ読みで、カードの「入力のうち N はキャッシュから」が
+ * 常に出る。0のままにすると、その行が出ているかを画面から確かめられない。
  */
 const dummyUsage = (turnIndex, createdAt, userId, model = USAGE_MODEL) => ({
   // Conversation配下のネストで作るためconversationIdは省けるが、userIdは自分で繋ぐ必要がある。
@@ -38,7 +47,7 @@ const dummyUsage = (turnIndex, createdAt, userId, model = USAGE_MODEL) => ({
   inputTokens: 3200 + turnIndex * 2600,
   outputTokens: 540 + turnIndex * 160,
   cacheWriteTokens: 0,
-  cacheReadTokens: 0,
+  cacheReadTokens: 8960,
   createdAt,
 });
 
@@ -426,6 +435,59 @@ async function main() {
     });
   }
 
+  // 相談に紐づかない記録（#133）。**この2つが無いと、使用量の画面の従量課金の節が
+  // 「今日ぶん1件」だけになり、日別のグラフも表も空に近い状態でしか確かめられない。**
+  //
+  // - 朝の見通し（#79）: `conversationId` は付かない（相談は生成が終わってから作るため）。
+  //   1日1回で、`pause_turn` で頼み直した日だけ2行になる
+  // - お知らせの選定（#132）: Codexで動くぶん。相談以外にも定額の記録が積まれることを
+  //   画面で確かめられるように入れてある
+  const standaloneUsageExists = await db.apiUsage.count({
+    where: { userId: user.id, conversationId: null },
+  });
+
+  if (standaloneUsageExists === 0) {
+    const standalone = [];
+
+    // 古い日→今日。8日前だけ pause_turn で2回叩いた形にする。
+    for (let daysBefore = 13; daysBefore >= 0; daysBefore -= 1) {
+      const at = daysAgo(daysBefore);
+      at.setHours(7, 0, 30, 0);
+
+      const calls = daysBefore === 8 ? 2 : 1;
+      for (let call = 0; call < calls; call += 1) {
+        standalone.push({
+          userId: user.id,
+          model: BRIEFING_USAGE_MODEL,
+          inputTokens: 8600 + call * 400 + daysBefore * 40,
+          outputTokens: 560 + call * 40,
+          cacheWriteTokens: 0,
+          // 1日1回ではキャッシュの保持時間（5分）をとうに過ぎており、実際にも効かない（#56）。
+          cacheReadTokens: 0,
+          createdAt: new Date(at.getTime() + call * 40_000),
+        });
+      }
+
+      // お知らせの選定は「話す」画面を開いている間だけ走る。毎日は積まない。
+      if (daysBefore % 3 === 0) {
+        const noticeAt = new Date(at.getTime());
+        noticeAt.setHours(21, 10, 0, 0);
+        standalone.push({
+          userId: user.id,
+          model: "gpt-5.6-luna",
+          inputTokens: 3200,
+          outputTokens: 40,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 8960,
+          createdAt: noticeAt,
+        });
+      }
+    }
+
+    await db.apiUsage.createMany({ data: standalone });
+    console.log(`[aide-bot] 相談に紐づかない使用量を投入しました: ${standalone.length}件`);
+  }
+
   const conversationCount = await db.conversation.count({ where: { userId: user.id } });
   const toolCallCount = await db.toolCall.count({ where: { userId: user.id } });
   console.log(
@@ -509,7 +571,7 @@ async function main() {
           create: [
             {
               user: { connect: { id: user.id } },
-              model: "claude-haiku-4-5",
+              model: BRIEFING_USAGE_MODEL,
               inputTokens: 4200,
               outputTokens: 210,
               cacheWriteTokens: 0,

@@ -22,7 +22,7 @@ type Props = {
   /** まだ秘書が出していないお知らせの件数（#114）。0のときは数字を出さない。 */
   pendingNoticeCount: number;
   /** 今月の概算費用（`$1.23` の形）。集計はサーバー側で済ませて文字列で受け取る。 */
-  monthlyCostLabel: string;
+  monthlyUsageLabel: string;
   userLabel: string;
   userEmail: string | null;
   appVersion: string;
@@ -39,7 +39,7 @@ export function ConversationRail({
   isSettingsActive,
   isNoticesActive,
   pendingNoticeCount,
-  monthlyCostLabel,
+  monthlyUsageLabel,
   userLabel,
   userEmail,
   appVersion,
@@ -237,7 +237,8 @@ export function ConversationRail({
           設定
         </Link>
 
-        {/* APIの消費量（#51）。金額だけを一覧に出し、内訳は専用の画面で見る。 */}
+        {/* APIの消費量（#51）。1つの数字だけを一覧に出し、内訳は専用の画面で見る。
+            出るのは従量課金ぶんの金額か、それが0のときは定額ぶんの回数（#133）。 */}
         <Link
           href="/usage"
           onClick={onNavigate}
@@ -251,7 +252,7 @@ export function ConversationRail({
             <BarChart3 className="size-3.5 text-muted" aria-hidden="true" />
             使用量
           </span>
-          <span className="tabular-nums font-bold text-accent">今月 {monthlyCostLabel}</span>
+          <span className="tabular-nums font-bold text-accent">今月 {monthlyUsageLabel}</span>
         </Link>
 
         <div className="flex items-center justify-between gap-2.5 px-4 pb-2 pt-3">

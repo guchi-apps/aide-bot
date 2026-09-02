@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { formatJpy, startOfMonth, usageSummary } from "@/lib/usage";
+import { startOfMonth } from "@/lib/usage";
 
 /**
  * 待っている間、秘書が頭上の吹き出しで回す「ひとりごと」（#101）。**サーバー専用。**
@@ -137,7 +137,7 @@ function conversationLine(lastTalkedAt: Date | null, now: Date): string {
 async function personalLines(userId: string, now: Date): Promise<string[]> {
   const monthStart = startOfMonth(now);
 
-  const [lastConversation, monthlyCount, unreadCount, usage] = await Promise.all([
+  const [lastConversation, monthlyCount, unreadCount] = await Promise.all([
     db.conversation.findFirst({
       where: { userId },
       orderBy: { updatedAt: "desc" },
@@ -152,13 +152,12 @@ async function personalLines(userId: string, now: Date): Promise<string[]> {
         AND: [{ OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] }],
       },
     }),
-    usageSummary({ userId, since: monthStart }),
   ]);
 
   const lines = [conversationLine(lastConversation?.updatedAt ?? null, now)];
 
   if (monthlyCount > 0) {
-    lines.push(`今月の相談は${monthlyCount}件、費用は概算で${formatJpy(usage.costUsd)}です`);
+    lines.push(`今月の相談は${monthlyCount}件です`);
   }
 
   if (unreadCount > 0) {

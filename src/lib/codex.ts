@@ -17,9 +17,30 @@ import { tmpdir } from "node:os";
  *
  * **中断（#48）しても、そこまでの本文は取り出せない。** 本文は完了時にしか届かないため、
  * 生成中に打ち切ると保存すべき本文が空になる。
+ *
+ * **使ったトークン数は `turn.completed` の `usage` に載る（#133）。** 取れないのは
+ * ChatGPTサブスクの利用枠（5時間ローリング・週次）の消費率だけで、トークン量は取れる。
+ * 呼び出し側はこれを `ApiUsage` の1行として残す（`recordApiUsage()`。`@/lib/usage`）。
  */
 
 const CODEX_BIN = process.env.CODEX_BIN ?? "codex";
+
+/**
+ * 1回の`codex exec`で使ったトークン数（#133）。
+ *
+ * **`ApiUsage` の列と同じ意味に均してある。** Codexが返す `input_tokens` は
+ * キャッシュ読み・キャッシュ書きを**含んだ総量**で、Anthropicの `input_tokens`
+ * （キャッシュに載らなかった残りだけ）とは意味が逆。ここで引き算しておかないと、
+ * 画面が `inputTokens + cacheReadTokens + cacheWriteTokens` で合計を作る（`promptTokens()`）
+ * ときに入力ぶんを二重に数える。
+ */
+export type CodexUsage = {
+  /** キャッシュに載らなかった入力ぶんだけ。 */
+  inputTokens: number;
+  outputTokens: number;
+  cacheWriteTokens: number;
+  cacheReadTokens: number;
+};
 
 export type CodexResult = {
   /** 受け取れた返答の全文。中断・失敗のときは空文字。 */
@@ -28,6 +49,13 @@ export type CodexResult = {
   interrupted: boolean;
   /** 利用者へ出す文言。中断のときは`null`。 */
   errorMessage: string | null;
+  /**
+   * 使ったトークン数。**`turn.completed` が届かなかった回（中断・起動失敗）は`null`。**
+   *
+   * 中断しても本文が取れないのと同じ理由で、途中までの消費量も分からない。推定で埋めず、
+   * 記録しないでおく（#51「埋め合わせの推定はしない」と同じ扱い）。
+   */
+  usage: CodexUsage | null;
 };
 
 /** `codex exec --json` が出すJSONLの1行。実際に使う項目だけを緩く宣言する。 */
@@ -36,6 +64,13 @@ type CodexEvent = {
   item?: { type?: string; text?: string };
   error?: { message?: string };
   message?: string;
+  usage?: {
+    input_tokens?: number;
+    cached_input_tokens?: number;
+    cache_write_input_tokens?: number;
+    output_tokens?: number;
+    reasoning_output_tokens?: number;
+  };
 };
 
 /**
@@ -87,6 +122,7 @@ export async function runCodexExec(params: {
     let settled = false;
     let stdoutBuffer = "";
     let stderrLog = "";
+    let usage: CodexUsage | null = null;
 
     const onAbort = () => {
       interrupted = true;
@@ -120,6 +156,8 @@ export async function runCodexExec(params: {
 
         if (event.type === "item.completed" && event.item?.type === "agent_message") {
           text += event.item.text ?? "";
+        } else if (event.type === "turn.completed" && event.usage) {
+          usage = addUsage(usage, event.usage);
         } else if (event.type === "turn.failed" || event.type === "error") {
           errorMessage =
             event.error?.message ?? event.message ?? "返答の生成に失敗しました。少し待ってからもう一度お試しください。";
@@ -138,12 +176,13 @@ export async function runCodexExec(params: {
         text: "",
         interrupted: false,
         errorMessage: "返答の生成に必要な設定がサーバー側にありません。管理者に連絡してください。",
+        usage: null,
       });
     });
 
     child.on("close", (code) => {
       if (interrupted) {
-        finish({ text: "", interrupted: true, errorMessage: null });
+        finish({ text: "", interrupted: true, errorMessage: null, usage: null });
         return;
       }
 
@@ -152,7 +191,35 @@ export async function runCodexExec(params: {
         errorMessage = "返答の生成に失敗しました。少し待ってからもう一度お試しください。";
       }
 
-      finish({ text, interrupted: false, errorMessage });
+      finish({ text, interrupted: false, errorMessage, usage });
     });
   });
+}
+
+/**
+ * `turn.completed` の `usage` を `ApiUsage` の列に均して足し込む（#133）。
+ *
+ * **`input_tokens` は総量なので、キャッシュぶんを引く。** 実測（サブPC・`codex-cli 0.152.1`・
+ * 2026-09-02）では、同じ条件のプロンプトへ約12,000トークンぶんを足すと `input_tokens` だけが
+ * 12,121→24,133と増え、`cached_input_tokens` は8,960→11,008で据え置きだった。
+ *
+ * **`reasoning_output_tokens` は足さない。** 実測ではSolに考えさせる問いを投げても常に0で、
+ * `output_tokens` との包含関係を確かめられなかった（OpenAIのAPIでは推論ぶんは出力ぶんの
+ * 内訳として数えられる）。二重に数える方が実害が大きいので、値が入るようになったら
+ * 包含関係を確かめてから足すこと。
+ *
+ * 1回の`codex exec`で `turn.completed` は1つだが、複数届いても足せるようにしてある。
+ */
+function addUsage(current: CodexUsage | null, raw: NonNullable<CodexEvent["usage"]>): CodexUsage {
+  const base = current ?? { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 };
+
+  const cacheRead = raw.cached_input_tokens ?? 0;
+  const cacheWrite = raw.cache_write_input_tokens ?? 0;
+
+  return {
+    inputTokens: base.inputTokens + Math.max(0, (raw.input_tokens ?? 0) - cacheRead - cacheWrite),
+    outputTokens: base.outputTokens + (raw.output_tokens ?? 0),
+    cacheWriteTokens: base.cacheWriteTokens + cacheWrite,
+    cacheReadTokens: base.cacheReadTokens + cacheRead,
+  };
 }

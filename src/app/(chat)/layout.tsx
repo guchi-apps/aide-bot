@@ -9,6 +9,7 @@ import { conversationGroupLabel } from "@/lib/conversation";
 import { db } from "@/lib/db";
 import { pendingNoticeCount } from "@/lib/notice-list";
 import { TALK_MODE_COOKIE, normalizeTalkMode } from "@/lib/talk-mode";
+import { recentTopicCount } from "@/lib/topics";
 import { formatUsd, startOfMonth, usageBreakdown, type UsageBreakdown } from "@/lib/usage";
 
 // 一覧に出す件数の上限。これより古いものは、いまのところ辿る導線を持たない。
@@ -33,6 +34,9 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
   // なるが、`count` 1本なので一覧の取得と一緒に流して待ち時間を足さない。
   const pendingNoticesPromise = pendingNoticeCount(user.id, now);
 
+  // 溜まっている話題の件数（#144）。こちらも `count` 1本なので同じく並行して流す。
+  const topicCountPromise = recentTopicCount(user.id, now);
+
   const conversations = await db.conversation.findMany({
     where: { userId: user.id },
     orderBy: { updatedAt: "desc" },
@@ -43,9 +47,10 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
   // 最初の描画からモードを確定させたいのでCookieから読む。クライアント側で決めると、
   // 「書く」を選んでいる人にも一瞬だけ音声画面が出る。
   const mode = normalizeTalkMode((await cookies()).get(TALK_MODE_COOKIE)?.value);
-  const [monthlyUsage, pendingNotices] = await Promise.all([
+  const [monthlyUsage, pendingNotices, topicCount] = await Promise.all([
     monthlyUsagePromise,
     pendingNoticesPromise,
+    topicCountPromise,
   ]);
 
   return (
@@ -58,6 +63,7 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
         }))}
         monthlyUsageLabel={monthlyUsageLabel(monthlyUsage)}
         pendingNoticeCount={pendingNotices}
+        topicCount={topicCount}
         userLabel={user.name ?? user.email ?? "ログイン中"}
         userEmail={user.email}
         appVersion={APP_VERSION}

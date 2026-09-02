@@ -17,6 +17,9 @@
   --rail-active: #e7e2e1;
   --accent-surface: #fbe7e2;
   --accent-foreground: #ffffff;
+  /* 話題（#144）のチップ。用件（accent）と見分けるための落ち着いた青灰。 */
+  --topic: #3b5b7d;
+  --topic-surface: #e8eef5;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -33,6 +36,8 @@
     --rail-active: #172136;
     --accent-surface: #3d1f18;
     --accent-foreground: #3a120a;
+    --topic: #9dbbe0;
+    --topic-surface: #16243a;
   }
 }
 
@@ -49,6 +54,8 @@
   --color-rail-active: var(--rail-active);
   --color-accent-surface: var(--accent-surface);
   --color-accent-foreground: var(--accent-foreground);
+  --color-topic: var(--topic);
+  --color-topic-surface: var(--topic-surface);
 }
 
 body {

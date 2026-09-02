@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, Bell, Plus, Settings, X } from "lucide-react";
+import { BarChart3, Bell, Newspaper, Plus, Settings, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
@@ -21,6 +21,10 @@ type Props = {
   isNoticesActive: boolean;
   /** まだ秘書が出していないお知らせの件数（#114）。0のときは数字を出さない。 */
   pendingNoticeCount: number;
+  /** 話題の画面を開いているか（#144）。 */
+  isTopicsActive: boolean;
+  /** 溜まっている話題の件数（#144）。0のときは数字を出さない。 */
+  topicCount: number;
   /** 今月の概算費用（`$1.23` の形）。集計はサーバー側で済ませて文字列で受け取る。 */
   monthlyUsageLabel: string;
   userLabel: string;
@@ -39,6 +43,8 @@ export function ConversationRail({
   isSettingsActive,
   isNoticesActive,
   pendingNoticeCount,
+  isTopicsActive,
+  topicCount,
   monthlyUsageLabel,
   userLabel,
   userEmail,
@@ -221,6 +227,24 @@ export function ConversationRail({
           {pendingNoticeCount > 0 && (
             <span className="tabular-nums font-bold text-accent">未読 {pendingNoticeCount}</span>
           )}
+        </Link>
+
+        {/* 仕入れた話題（#144）。お知らせとは別の受け皿で、数字は「未読」ではなく溜まっている件数。
+            用件ではないので、お知らせと違って数字を強調しない。 */}
+        <Link
+          href="/topics"
+          onClick={onNavigate}
+          aria-current={isTopicsActive ? "page" : undefined}
+          className={cn(
+            "mx-2.5 mt-2 flex items-center justify-between gap-2 rounded-[9px] px-2.5 py-2 text-[0.8125rem] transition-colors hover:bg-rail-active focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            isTopicsActive && "bg-rail-active shadow-[inset_2px_0_0_var(--accent)]",
+          )}
+        >
+          <span className="flex items-center gap-1.5">
+            <Newspaper className="size-3.5 text-muted" aria-hidden="true" />
+            話題
+          </span>
+          {topicCount > 0 && <span className="tabular-nums text-xs font-medium text-muted">{topicCount}件</span>}
         </Link>
 
         {/* 返答のモデル（#71）と外部サービスとの接続（#46）。相談ではないので、一覧ではなく下部に置く。 */}

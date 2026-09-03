@@ -18,8 +18,14 @@ import type { ReplyStyle } from "@/lib/chat-model";
  * **ちょうどこの数で切るわけではない**（#56）。窓の先頭は `HISTORY_WINDOW_STEP` の刻みでしか
  * 動かさないため、実際に送るのは `HISTORY_LIMIT` 〜 `HISTORY_LIMIT + HISTORY_WINDOW_STEP - 1`
  * 発言になる。理由は `historyWindowSkip()` を参照。
+ *
+ * **#157で30から40へ引き上げた。数える対象も「要約に畳んでいない発言」だけになっている。**
+ * compact（`src/lib/compact.ts`）は要約していない発言が `COMPACT_THRESHOLD`（40）を超えた
+ * 回に走るので、**普段はこの窓に全部が収まり、読み飛ばしは起きない。** 30のままだと、
+ * 41件目でcompactが走るまでの間に古い方の10件が窓から溢れ、要約にも履歴にも入らない
+ * 数往復ができる。ここが効くのはcompactが失敗し続けたときの歯止めとしてだけ。
  */
-export const HISTORY_LIMIT = 30;
+export const HISTORY_LIMIT = 40;
 
 /**
  * 履歴の窓の先頭を動かす刻み（#56）。
@@ -299,6 +305,34 @@ export function noticeSystemPrompt(): string {
   ];
 
   const intro = `${SECRETARY_INTRO}\n\n利用者は「話す」画面を開いて待っています。各アプリから届いた「知らせたいこと」の候補をこれから渡すので、その中から1つ選び、あなたの言葉で短く伝えてください。`;
+
+  return `${intro}\n\n${rules.map((rule) => `- ${rule}`).join("\n")}`;
+}
+
+/**
+ * 古い発言を要約へ畳むときの指示（#157）。
+ *
+ * 相談を1本の連続セッションにしたので、**畳まないかぎり話は終わらない。** 要約は履歴の
+ * 手前に置かれ、窓から外れた発言の代わりに文脈を担う（`src/lib/compact.ts`）。
+ *
+ * `noticeSystemPrompt()` と同じくCodexへ渡すが、このモジュールに置いてあるのは秘書としての
+ * 振る舞い（`SECRETARY_INTRO`）を共有しているため。Anthropic SDKを使うかどうかとは関係ない。
+ *
+ * **落としてよいものを名指しする。** 「要点をまとめて」だけだと、決まったことより会話の
+ * 流れを残しがちで、往復を重ねるほど「何を頼んだか」が薄まる。
+ */
+export function compactSystemPrompt(maxLength: number): string {
+  const rules = [
+    "これまでの要約と、そこに続く会話を渡します。両方を1つの要約にまとめ直してください",
+    `全体で${maxLength}文字以内。箇条書きでよい`,
+    "決まったこと・引き受けた頼まれごと・期日・金額・場所・人や店の名前・利用者の好みや事情は落とさない",
+    "済んだ挨拶・相槌・言い直し・すでに片付いた用件は落としてよい",
+    "まだ終わっていないこと（返事待ち・次にやると言ったこと）は、終わったものと混ぜずに残す",
+    "推測で補わない。渡された中に無いことは書かない",
+    "「要約:」のような前置きや、まとめ方の説明は書かない。要約の本文だけを返す",
+  ];
+
+  const intro = `${SECRETARY_INTRO}\n\n利用者との記録が長くなってきたので、古いところを畳んで手元に残す覚え書きを作ります。`;
 
   return `${intro}\n\n${rules.map((rule) => `- ${rule}`).join("\n")}`;
 }

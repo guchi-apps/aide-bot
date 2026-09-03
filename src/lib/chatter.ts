@@ -143,7 +143,11 @@ async function personalLines(userId: string, now: Date): Promise<string[]> {
       orderBy: { updatedAt: "desc" },
       select: { updatedAt: true },
     }),
-    db.conversation.count({ where: { userId, createdAt: { gte: monthStart } } }),
+    // **数えるのは相談の本数ではなく利用者の発言（#157）。** 相談を1本の連続セッションに
+    // したので、本数は「今月も1件」から動かなくなった。
+    db.message.count({
+      where: { conversation: { userId }, role: "USER", createdAt: { gte: monthStart } },
+    }),
     db.notice.count({
       where: {
         userId,
@@ -157,7 +161,7 @@ async function personalLines(userId: string, now: Date): Promise<string[]> {
   const lines = [conversationLine(lastConversation?.updatedAt ?? null, now)];
 
   if (monthlyCount > 0) {
-    lines.push(`今月の相談は${monthlyCount}件です`);
+    lines.push(`今月は${monthlyCount}回話しかけていただきました`);
   }
 
   if (unreadCount > 0) {

@@ -1,45 +1,36 @@
 "use client";
 
 import { VoicePanel } from "@/components/voice/voice-panel";
-import { useNewConversationEpoch } from "@/lib/new-conversation";
 
 import { ChatPanel } from "./chat-panel";
 import { useTalkMode } from "./talk-mode-context";
 import type { ChatEntry } from "./types";
 
 type Props = {
-  /** 既存スレッドならそのID。新しい相談ならnull。 */
-  conversationId: string | null;
   /** 発言と、書き込みの道具を使った記録（#81）を時刻順に混ぜたもの。 */
   initialEntries: ChatEntry[];
+  /** サーバー側で確定させた今日の日付（`2026-09-03`）。日付の区切りに使う（#157）。 */
+  todayKey: string;
+  /** 要約へ畳んである発言の数（#157）。 */
+  compactedCount: number;
 };
 
 /**
- * 相談1件の中身。「話す」と「書く」で見た目も操作も変わるが、扱うスレッドは同じ。
+ * 今日の記録。「話す」と「書く」で見た目も操作も変わるが、書き込む先は同じ連続セッション。
  *
- * `key` を分けているのは、切り替えたときに前のモードの状態（聞き取り中・入力途中）を
- * 残さず作り直すため。どちらも表示の元は同じ `initialEntries` で、直前のやり取りは
- * 送信のたびの `router.refresh()` で取り直されている。
+ * どちらも表示の元は同じ `initialEntries` で、直前のやり取りは送信のたびの
+ * `router.refresh()` で取り直されている。
  *
- * **`key` には「新しい相談」を押した回数も混ぜる（#155）。** 左メニューのそれは `/` への
- * リンクで、`/` を開いている間はルートが変わらないため、これが無いと画面が作り直されず、
- * 押した後に話しかけた内容がさっきまでの相談へ足される（`@/lib/new-conversation`）。
+ * **#157で「新しい相談」が無くなり、`key` の付け替えも要らなくなった。** #155で足していた
+ * `useNewConversationEpoch()` は「`/` を開いたまま新しいスレッドを始める」ための仕掛けで、
+ * スレッドを分けなくなった今は始める対象そのものが無い。
  */
-export function ConversationView({ conversationId, initialEntries }: Props) {
+export function ConversationView({ initialEntries, todayKey, compactedCount }: Props) {
   const { mode } = useTalkMode();
-  const epoch = useNewConversationEpoch();
 
   return mode === "voice" ? (
-    <VoicePanel
-      key={`voice-${epoch}`}
-      conversationId={conversationId}
-      initialEntries={initialEntries}
-    />
+    <VoicePanel initialEntries={initialEntries} todayKey={todayKey} />
   ) : (
-    <ChatPanel
-      key={`write-${epoch}`}
-      conversationId={conversationId}
-      initialEntries={initialEntries}
-    />
+    <ChatPanel initialEntries={initialEntries} todayKey={todayKey} compactedCount={compactedCount} />
   );
 }

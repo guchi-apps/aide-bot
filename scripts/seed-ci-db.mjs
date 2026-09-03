@@ -41,8 +41,9 @@ const BRIEFING_USAGE_MODEL = "claude-haiku-4-5";
  * 常に出る。0のままにすると、その行が出ているかを画面から確かめられない。
  */
 const dummyUsage = (turnIndex, createdAt, userId, model = USAGE_MODEL) => ({
-  // Conversation配下のネストで作るためconversationIdは省けるが、userIdは自分で繋ぐ必要がある。
-  user: { connect: { id: userId } },
+  // `createMany` で入れるので、繋ぎ先はidをそのまま渡す（#157で連続セッションへ移した際、
+  // Conversation配下のネスト（`user: { connect: ... }`）から切り替えた）。
+  userId,
   model,
   inputTokens: 3200 + turnIndex * 2600,
   outputTokens: 540 + turnIndex * 160,
@@ -53,12 +54,15 @@ const dummyUsage = (turnIndex, createdAt, userId, model = USAGE_MODEL) => ({
 
 const db = new PrismaClient();
 
-// ダミーの相談。一覧の見出し（今日 / 今週 / それ以前）が分かれて見えるよう、
-// 更新時刻を散らしてある。基準時刻は実行時のnow。
+// ダミーの記録（#157）。**すべて1本の連続セッションへ入る。** 左メニューの日付一覧が
+// 複数の日に分かれて見えるよう、日をずらしてある。基準時刻は実行時のnow。
+//
+// `title` は連続セッションでは画面に出ないが、その塊が何の話かを読む人のために残してある
+// （投入済みかどうかの判定は1通目の本文で行う）。
 const now = new Date();
 const daysAgo = (days) => new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 
-const CONVERSATION_SEEDS = [
+const DAY_SEEDS = [
   {
     title: "引っ越しの段取りを整理する",
     startedAt: daysAgo(0),
@@ -367,78 +371,81 @@ async function main() {
 
   console.log(`[aide-bot] バイパス用ユーザーをupsertしました: id=${user.id} name=${user.name}`);
 
-  // 相談スレッドと発言（#24）。認証を抜けても画面が空のままでは、一覧・Markdown表示・
-  // スレッド切り替えのどれも確かめられない。
-  //
-  // 繰り返し流しても増えないよう、タイトルで引いてから作る。Conversationのタイトルには
-  // 一意制約が無いのでupsertは使えない。
-  for (const seed of CONVERSATION_SEEDS) {
-    const existing = await db.conversation.findFirst({
-      where: { userId: user.id, title: seed.title },
+  // 連続セッション（#157）。**利用者につき1本**で、画面の分け目は日付だけ。
+  // 認証を抜けても画面が空のままでは、日付一覧・日付の区切り・Markdown表示のどれも
+  // 確かめられない。
+  const conversation = await db.conversation.upsert({
+    where: { id: `main_${user.id}` },
+    update: {},
+    create: { id: `main_${user.id}`, userId: user.id, isPrimary: true, title: "秘書との記録" },
+    select: { id: true },
+  });
+
+  // 繰り返し流しても増えないよう、1通目の本文で引いてから入れる。タイトルで引いていた
+  // 頃（#24）と違い、連続セッションには塊ごとの見出しが無い。
+  for (const seed of DAY_SEEDS) {
+    const firstContent =
+      typeof seed.messages[0] === "string" ? seed.messages[0] : seed.messages[0].content;
+
+    const existing = await db.message.findFirst({
+      where: { conversationId: conversation.id, content: firstContent },
       select: { id: true },
     });
     if (existing) continue;
 
-    // createdAt / updatedAt は明示的に入れる。updatedAt は @updatedAt なので、
-    // 渡さないと全件が実行時刻になり、一覧の見出しが「今日」だけになる。
-    const lastMessageAt = new Date(seed.startedAt.getTime() + (seed.messages.length - 1) * 60_000);
+    await db.message.createMany({
+      data: seed.messages.map((message, index) => ({
+        conversationId: conversation.id,
+        role: index % 2 === 0 ? "USER" : "ASSISTANT",
+        // createdAtが同一だと並び順が不定になるため、1分ずつずらす。
+        createdAt: new Date(seed.startedAt.getTime() + index * 60_000),
+        content: typeof message === "string" ? message : message.content,
+        interrupted: typeof message === "string" ? false : message.interrupted === true,
+      })),
+    });
 
-    await db.conversation.create({
-      data: {
-        userId: user.id,
-        title: seed.title,
-        createdAt: seed.startedAt,
-        updatedAt: lastMessageAt,
-        messages: {
-          create: seed.messages.map((message, index) => ({
-            role: index % 2 === 0 ? "USER" : "ASSISTANT",
-            // createdAtが同一だと並び順が不定になるため、1分ずつずらす。
-            createdAt: new Date(seed.startedAt.getTime() + index * 60_000),
-            content: typeof message === "string" ? message : message.content,
-            interrupted: typeof message === "string" ? false : message.interrupted === true,
-          })),
-        },
-        // 書き込みの道具の記録（#81）。発言とは別のテーブルに持ち、画面が時刻順に混ぜて出す。
-        toolCalls: {
-          create: (seed.toolCalls ?? []).map((call) => ({
-            user: { connect: { id: user.id } },
-            serverLabel: call.serverLabel,
-            serverSlug: call.serverSlug,
-            toolName: call.toolName,
-            input: call.input,
-            output: call.output,
-            failed: call.failed,
-            // 直後の返答より前に並ぶよう、その発言の1秒前にする。
-            createdAt: new Date(
-              seed.startedAt.getTime() + (call.afterMessageIndex + 1) * 60_000 - 1_000,
-            ),
-          })),
-        },
-        // 消費量は返答とは別の行に持つ（#51）。返答1件につきAPIを1回呼んだ形にする。
-        apiUsages: {
-          create: seed.messages
-            .map((message, index) => ({ message, index }))
-            .filter(({ index }) => index % 2 === 1)
-            .map(({ index }) =>
-              dummyUsage(
-                (index - 1) / 2,
-                new Date(seed.startedAt.getTime() + index * 60_000),
-                user.id,
-              ),
-            ),
-        },
-      },
+    // 書き込みの道具の記録（#81）。発言とは別のテーブルに持ち、画面が時刻順に混ぜて出す。
+    if (seed.toolCalls?.length) {
+      await db.toolCall.createMany({
+        data: seed.toolCalls.map((call) => ({
+          userId: user.id,
+          conversationId: conversation.id,
+          serverLabel: call.serverLabel,
+          serverSlug: call.serverSlug,
+          toolName: call.toolName,
+          input: call.input,
+          output: call.output,
+          failed: call.failed,
+          // 直後の返答より前に並ぶよう、その発言の1秒前にする。
+          createdAt: new Date(
+            seed.startedAt.getTime() + (call.afterMessageIndex + 1) * 60_000 - 1_000,
+          ),
+        })),
+      });
+    }
+
+    // 消費量は返答とは別の行に持つ（#51）。返答1件につきAPIを1回呼んだ形にする。
+    await db.apiUsage.createMany({
+      data: seed.messages
+        .map((message, index) => ({ message, index }))
+        .filter(({ index }) => index % 2 === 1)
+        .map(({ index }) => ({
+          ...dummyUsage((index - 1) / 2, new Date(seed.startedAt.getTime() + index * 60_000), user.id),
+          conversationId: conversation.id,
+        })),
     });
   }
 
-  // 使用量の画面（#51）は日別のグラフを持つ。相談が数日ぶんしか無いとグラフがほぼ空になり、
-  // 「日ごとに並んで見えるか」を確かめられないため、直近14日ぶんの往復を1本のスレッドへ入れる。
-  const USAGE_HISTORY_TITLE = "毎日のこまごました相談";
+  // 使用量の画面（#51）は日別のグラフを持つ。数日ぶんしか無いとグラフがほぼ空になり、
+  // 「日ごとに並んで見えるか」を確かめられないため、直近14日ぶんの往復も足す。
+  // **左メニューの日付一覧（#157）が14日ぶん並ぶのもこれのおかげ**なので、消さないこと。
+  //
   // 日ごとの往復数（古い日→今日）。棒の高さが散るように、あえて凸凹させてある。
   const USAGE_DAILY_TURNS = [1, 2, 3, 1, 4, 1, 2, 3, 1, 5, 1, 3, 2, 2];
+  const USAGE_HISTORY_MARKER = `${USAGE_DAILY_TURNS.length - 1}日前の1件目の相談です。`;
 
-  const usageHistoryExists = await db.conversation.findFirst({
-    where: { userId: user.id, title: USAGE_HISTORY_TITLE },
+  const usageHistoryExists = await db.message.findFirst({
+    where: { conversationId: conversation.id, content: USAGE_HISTORY_MARKER },
     select: { id: true },
   });
 
@@ -479,17 +486,45 @@ async function main() {
       }
     });
 
-    await db.conversation.create({
-      data: {
-        userId: user.id,
-        title: USAGE_HISTORY_TITLE,
-        createdAt: messages[0].createdAt,
-        updatedAt: messages[messages.length - 1].createdAt,
-        messages: { create: messages },
-        apiUsages: { create: usages },
-      },
+    await db.message.createMany({
+      data: messages.map((message) => ({ ...message, conversationId: conversation.id })),
+    });
+    await db.apiUsage.createMany({
+      data: usages.map((usage) => ({ ...usage, conversationId: conversation.id })),
     });
   }
+
+  // 最後に話した時刻（#101のひとりごとが読む）と、畳んだ発言の数（#157のcompact）。
+  //
+  // **要約を入れておかないと、記録の先頭に出る「ここまでは要約にまとめてあります」の印が
+  // 開発環境で一度も出ない。** 畳んだことにするのは14日より前の発言——`summarizedCount` は
+  // 「古い方から数えた件数」なので、その数をそのまま数えて入れる（ずれると、畳んでいない
+  // 発言まで読み飛ばされてモデルへ渡らなくなる）。
+  const compactBefore = daysAgo(14);
+  const summarizedCount = await db.message.count({
+    where: { conversationId: conversation.id, createdAt: { lt: compactBefore } },
+  });
+  const lastMessage = await db.message.findFirst({
+    where: { conversationId: conversation.id },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { createdAt: true },
+  });
+
+  await db.conversation.update({
+    where: { id: conversation.id },
+    data: {
+      summarizedCount,
+      summary:
+        summarizedCount === 0
+          ? null
+          : [
+              "- 引っ越しは来月頭。1Kの単身で、大物は洗濯機と冷蔵庫。解約予告期間の確認がまだ。",
+              "- 今月の食費が予算より1万円多い。外食・中食・材料費の3つに割って見直す話をした。",
+              "- 通勤用の自転車（片道5km）を買い替え検討中。予算と駐輪場所は未確定。",
+            ].join("\n"),
+      ...(lastMessage ? { updatedAt: lastMessage.createdAt } : {}),
+    },
+  });
 
   // 相談に紐づかない記録（#133）。**この2つが無いと、使用量の画面の従量課金の節が
   // 「今日ぶん1件」だけになり、日別のグラフも表も空に近い状態でしか確かめられない。**
@@ -544,10 +579,11 @@ async function main() {
     console.log(`[aide-bot] 相談に紐づかない使用量を投入しました: ${standalone.length}件`);
   }
 
-  const conversationCount = await db.conversation.count({ where: { userId: user.id } });
+  const messageCount = await db.message.count({ where: { conversationId: conversation.id } });
   const toolCallCount = await db.toolCall.count({ where: { userId: user.id } });
   console.log(
-    `[aide-bot] 相談スレッドを投入しました: ${conversationCount}件（書き込みの記録 ${toolCallCount}件）`,
+    `[aide-bot] 連続セッションへ発言を投入しました: ${messageCount}件` +
+      `（うち要約へ畳んだもの ${summarizedCount}件 / 書き込みの記録 ${toolCallCount}件）`,
   );
 
   // 外部サービスとの接続（#46）。slugは利用者の中で一意なのでupsertできる。
@@ -600,44 +636,39 @@ async function main() {
     const briefedAt = new Date(now.getTime());
     briefedAt.setHours(7, 0, 0, 0);
 
-    const conversation = await db.conversation.create({
+    // #157から新しい相談は作らず、連続セッションの今日ぶんへ追記する。
+    await db.message.createMany({
+      data: [
+        {
+          conversationId: conversation.id,
+          role: "USER",
+          content: BRIEFING_REQUEST,
+          createdAt: briefedAt,
+          interrupted: false,
+        },
+        {
+          conversationId: conversation.id,
+          role: "ASSISTANT",
+          content: BRIEFING_ANSWER,
+          createdAt: new Date(briefedAt.getTime() + 1000),
+          interrupted: false,
+        },
+      ],
+    });
+
+    // 見通しの生成もMessages APIの呼び出し1回ぶんとして数える（#51）。**相談との紐付けは
+    // 付けない**——実際の経路（`src/lib/briefing.ts`）でも、記録するのは生成の直後で
+    // 追記より前になる。
+    await db.apiUsage.create({
       data: {
         userId: user.id,
-        title: `${new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", month: "long", day: "numeric" }).format(now)}の見通し`,
-        createdAt: briefedAt,
-        updatedAt: briefedAt,
-        messages: {
-          create: [
-            {
-              role: "USER",
-              content: BRIEFING_REQUEST,
-              createdAt: briefedAt,
-              interrupted: false,
-            },
-            {
-              role: "ASSISTANT",
-              content: BRIEFING_ANSWER,
-              createdAt: new Date(briefedAt.getTime() + 1000),
-              interrupted: false,
-            },
-          ],
-        },
-        // 見通しの生成もMessages APIの呼び出し1回ぶんとして数える（#51）。
-        apiUsages: {
-          create: [
-            {
-              user: { connect: { id: user.id } },
-              model: BRIEFING_USAGE_MODEL,
-              inputTokens: 4200,
-              outputTokens: 210,
-              cacheWriteTokens: 0,
-              cacheReadTokens: 0,
-              createdAt: new Date(briefedAt.getTime() + 1000),
-            },
-          ],
-        },
+        model: BRIEFING_USAGE_MODEL,
+        inputTokens: 4200,
+        outputTokens: 210,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+        createdAt: new Date(briefedAt.getTime() + 1000),
       },
-      select: { id: true },
     });
 
     await db.notificationLog.create({
@@ -660,17 +691,12 @@ async function main() {
   for (const seed of NOTICE_SEEDS) {
     const { expiresInMinutes, shownMinutesAgo, showAtInMinutes, fromMorningBriefing, ...rest } = seed;
 
-    // アプリの中の相談を指すぶん（#137）。相談のIDは流すたびに変わるので、朝の見通しの
-    // 記録（NotificationLog）から引き直す。**相談のタイトルで引かない**——タイトルは
-    // 「9月2日の見通し」のように日付で変わる。見つからなければリンク無しで積む。
+    // アプリの中を指すぶん（#137）。**#157で行き先が今日の記録（`/`）に固定された**
+    // ——朝の見通しは新しい相談を作らず連続セッションへ追記するので、指すべきIDが無い。
+    // 実際の経路（`src/lib/briefing.ts` の `ingestNotice()`）と同じ値にしてある。
     let url = rest.url ?? null;
     if (fromMorningBriefing) {
-      const log = await db.notificationLog.findFirst({
-        where: { userId: user.id, kind: "morning-briefing", conversationId: { not: null } },
-        orderBy: { createdAt: "desc" },
-        select: { conversationId: true },
-      });
-      url = log?.conversationId ? `/c/${log.conversationId}` : null;
+      url = "/";
     }
 
     const data = {

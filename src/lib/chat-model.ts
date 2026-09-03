@@ -46,6 +46,16 @@ export const NOTICE_MODEL = "gpt-5.6-luna";
 export const TOPIC_MODEL = "gpt-5.6-luna";
 
 /**
+ * 連続セッションの古い発言を要約へ畳むモデル（#157のcompact）。
+ *
+ * `NOTICE_MODEL`・`TOPIC_MODEL` と同じく設定の画面からは選べない（返答を返した後の
+ * 後始末で走り、選ぶ主体が居ない）。**ここだけ中位のTerraにしてある。** 落とすものを
+ * 選び損ねると、その要約が以後ずっと文脈として使われ、あとから直す機会が無い——
+ * 40発言ごとに1回しか走らないので、利用枠への影響も小さい。
+ */
+export const COMPACT_MODEL = "gpt-5.6-terra";
+
+/**
  * `/usage` 画面の単価表。**Anthropic（Claude）の単価だけを載せる。**
  *
  * チャット（#128）とお知らせ選定（#132）はCodexへ移り、ChatGPTのサブスク定額制で動くため

@@ -18,6 +18,12 @@ import { parseStreamEvent, readString } from "@/lib/sse";
  *
  * 返答の途中で次を送る「割り込み」（#48）は呼ぶ側が組み立てる。順序（そこまでの返答を
  * 残してから次の発言を並べる）が画面ごとに違うため、ここでは `abort()` を提供するに留める。
+ *
+ * **#157で、スレッドのIDにまつわるものが全部消えた。** 書き込み先は利用者につき1本の
+ * 連続セッションで、サーバー側（`primaryConversation()`）が決める。これで#67・#155で
+ * 手当てしていた「新しい相談の1通目で `/c/<ID>` へ移る」という経路そのものが無くなり、
+ * 送信の途中で画面が作り直されることも、移動を遅らせる仕掛け（`deferNavigation` /
+ * `flushNavigation()`）も要らなくなった。
  */
 
 export type SendOptions = {
@@ -37,18 +43,6 @@ export type SendOptions = {
   onRecord?: (call: ChatToolCall) => void;
   /** 利用者へ出す文言。中断のときは呼ばれない。 */
   onError: (message: string) => void;
-  /**
-   * 新しい相談で `/c/<ID>` へ移るのを、呼ぶ側が `flushNavigation()` を呼ぶまで遅らせる（#67）。
-   *
-   * この移動はルートをまたぐため、画面（`VoicePanel` など）が作り直される。「話す」では
-   * 送信を終えた後も読み上げと聞き取りが続いているので、途中で作り直されると読み上げが
-   * 途切れ、開いたばかりのマイクごと畳まれて「待っています」へ戻ってしまう。
-   *
-   * **「話す」はこれを最後まで消化しない（#155）。** 消化するのは「文字で送る」で
-   * 「書く」へ切り替えるときだけで、それまでURLは `/` のまま。待機に入った時点で移す形
-   * （#67）だと、移動を頼んでから切り替わるまでの間にマイクを押した往復が丸ごと消える。
-   */
-  deferNavigation?: boolean;
 };
 
 export type SendResult = {
@@ -60,21 +54,9 @@ export type SendResult = {
   failed: boolean;
 };
 
-export function useChatStream(conversationId: string | null) {
+export function useChatStream() {
   const router = useRouter();
   const abortRef = useRef<AbortController | null>(null);
-
-  // 新しい相談で最初の返答を割り込むと、`router.replace()` が効く前に2通目が飛ぶ。
-  // propsの `conversationId` はまだnullなので、そのまま送るとスレッドがもう1本作られる。
-  // 一度受け取ったIDを覚えておき、propsが追いつくまではこちらを使う（#48）。
-  const startedIdRef = useRef<string | null>(null);
-
-  // `deferNavigation` で遅らせている移動先。`flushNavigation()` で消化する。
-  const pendingConversationIdRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    startedIdRef.current = null;
-  }, [conversationId]);
 
   useEffect(() => {
     return () => abortRef.current?.abort();
@@ -85,41 +67,19 @@ export function useChatStream(conversationId: string | null) {
     abortRef.current?.abort();
   }, []);
 
-  /**
-   * 遅らせておいた `/c/<ID>` への移動を行う（#67）。
-   *
-   * 呼ぶ側が「いま画面を作り直されても失うものが無い」と判断した時点で呼ぶ。遅らせて
-   * いない送信では何もしない。
-   *
-   * **「待機に入った」はその時点にならない（#155）。** 待機のすぐ後は利用者が次に
-   * 話しかける時点そのもので、移動が切り替わるまでの1〜2秒にマイクを押されると、
-   * 聞き取りも送信中の問い合わせも作り直しに巻き込まれる。「話す」から呼ぶのは、
-   * 利用者が「書く」へ切り替えたときだけにしてある。
-   */
-  const flushNavigation = useCallback(() => {
-    const pendingId = pendingConversationIdRef.current;
-    if (!pendingId) return;
-
-    pendingConversationIdRef.current = null;
-    router.replace(`/c/${pendingId}`);
-  }, [router]);
-
   const send = useCallback(
     async (message: string, options: SendOptions): Promise<SendResult> => {
       const controller = new AbortController();
       abortRef.current = controller;
 
-      const targetId = conversationId ?? startedIdRef.current;
-
       let answer = "";
-      let createdConversationId: string | null = null;
       let failed = false;
 
       try {
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ conversationId: targetId, message, mode: options.mode }),
+          body: JSON.stringify({ message, mode: options.mode }),
           signal: controller.signal,
         });
 
@@ -147,10 +107,7 @@ export function useChatStream(conversationId: string | null) {
             const event = parseStreamEvent(block);
             if (!event) continue;
 
-            if (event.name === "meta") {
-              createdConversationId = readString(event.data, "conversationId");
-              startedIdRef.current = createdConversationId;
-            } else if (event.name === "delta") {
+            if (event.name === "delta") {
               const delta = readString(event.data, "text") ?? "";
               answer += delta;
               options.onDelta(delta);
@@ -186,21 +143,15 @@ export function useChatStream(conversationId: string | null) {
         // 後から始まった往復の「止める」が効かなくなる（#48）。
         if (abortRef.current === controller) abortRef.current = null;
 
-        if (conversationId === null && createdConversationId !== null) {
-          // 新しく作られたスレッドのURLへ移す。同じ内容がDBにあるので表示は変わらない。
-          // ただしルートをまたぐ移動なので画面は作り直される。まだ続きがある画面では
-          // `flushNavigation()` まで待たせる（#67）。
-          if (options.deferNavigation) pendingConversationIdRef.current = createdConversationId;
-          else router.replace(`/c/${createdConversationId}`);
-        }
-        // 一覧の並び順とタイトルを取り直す。
+        // 左メニューの日付一覧（その日の件数）を取り直す。**ルートは変わらない**ので、
+        // 画面が作り直されて読み上げや聞き取りが巻き添えで畳まれることは無い（#157）。
         router.refresh();
       }
 
       return { answer, aborted: controller.signal.aborted, failed };
     },
-    [conversationId, router],
+    [router],
   );
 
-  return { send, abort, flushNavigation };
+  return { send, abort };
 }

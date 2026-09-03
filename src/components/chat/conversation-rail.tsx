@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { AppIcon } from "@/components/brand/app-icon";
+import { requestNewConversation } from "@/lib/new-conversation";
 import { cn } from "@/lib/utils";
 
 import type { ConversationSummary } from "./types";
@@ -133,7 +134,12 @@ export function ConversationRail({
 
         <Link
           href="/"
-          onClick={onNavigate}
+          onClick={() => {
+            // `/` を開いている間はルートが変わらず、相談の画面が作り直されない。
+            // 押されたことを伝えて作り直させる（#155）。
+            requestNewConversation();
+            onNavigate?.();
+          }}
           className="flex items-center justify-center gap-1.5 rounded-[10px] bg-accent px-3 py-2.5 text-[0.8125rem] font-medium text-accent-foreground transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         >
           <Plus className="size-3.5" aria-hidden="true" />

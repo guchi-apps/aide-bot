@@ -136,6 +136,13 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
   const [engineChecking, setEngineChecking] = useState(false);
 
   const recognitionRef = useRef<RecognitionHandle | null>(null);
+  /**
+   * 聞き取りの世代（#155）。
+   *
+   * 畳んだ聞き取りから遅れて届いたイベントで、開いたばかりの聞き取りを壊さないための印。
+   * `onend` が返ってこない実装（iOSで実際に起きる）でも、押し直せば必ず新しい世代で開き直せる。
+   */
+  const recognitionSessionRef = useRef(0);
   const readerRef = useRef<Reader | null>(null);
   const sampleRef = useRef<Reader | null>(null);
   const finalRef = useRef("");
@@ -180,20 +187,36 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
     restartTimerRef.current = null;
   }, []);
 
+  /**
+   * 走っている聞き取りを捨てる（#155）。
+   *
+   * **`recognitionRef` を持っているだけで何もしない、をやめるための関数。** 以前は
+   * `beginListening()` の先頭で「すでに持っていたら何もせず戻る」としていたが、
+   * **`onend` が返らない実装ではこの参照が居座り、以後どれだけマイクを押しても
+   * 黙って戻るだけになる**（画面は「続けて話しかけてください。」のまま変わらない）。
+   * 捨てたぶんから遅れて届くイベントは、世代の印で落とす。
+   */
+  const discardRecognition = useCallback(() => {
+    recognitionSessionRef.current += 1;
+
+    const handle = recognitionRef.current;
+    recognitionRef.current = null;
+    handle?.abort();
+  }, []);
+
   /** 動いているものを全部止める。画面を離れるときと、利用者が止めたとき。 */
   const stopEverything = useCallback(() => {
     // 開き直しの待ち合わせが残っていると、止めた直後にマイクが開き直す（#67）。
     closedByUserRef.current = true;
     clearRestartTimer();
-    recognitionRef.current?.abort();
-    recognitionRef.current = null;
+    discardRecognition();
     readerRef.current?.cancel();
     readerRef.current = null;
     sampleRef.current?.cancel();
     sampleRef.current = null;
     setSamplePreparing(false);
     abort();
-  }, [abort, clearRestartTimer]);
+  }, [abort, clearRestartTimer, discardRecognition]);
 
   useEffect(() => {
     return () => {
@@ -336,8 +359,11 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
    */
   const beginListening = useCallback(
     (resume = false) => {
-      if (recognitionRef.current) return;
       clearRestartTimer();
+      // 走っているものがあれば畳んでから開き直す。持っているだけで戻ると、`onend` が
+      // 返らなかった1回のせいでマイクが二度と開かなくなる（#155）。
+      discardRecognition();
+      const session = recognitionSessionRef.current;
 
       if (!resume) silentRestartsRef.current = 0;
       closedByUserRef.current = false;
@@ -349,26 +375,34 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
       finalRef.current = "";
       setStatus("listening");
 
+      /** この世代の聞き取りからのイベントか。畳んだぶんから遅れて届いたものは捨てる。 */
+      const current = () => recognitionSessionRef.current === session;
+
       const handle = startRecognition({
         onInterim: (text) => {
+          if (!current()) return;
           setHeard(text);
           if (text !== "") bump();
         },
         onFinal: (text) => {
+          if (!current()) return;
           finalRef.current += text;
         },
         onSpeechStart: () => {
+          if (!current()) return;
           // 声が届いた時点で開き直しの回数は仕切り直す。話し出すまでが長かっただけの
           // 往復で、次の番の待ち時間まで短くなっていくのを防ぐ。
           silentRestartsRef.current = 0;
           bump();
         },
         onError: (message) => {
-          if (!message) return;
+          if (!current() || !message) return;
           failedRef.current = true;
           setError(message);
         },
         onEnd: () => {
+          if (!current()) return;
+
           recognitionRef.current = null;
           setHeard("");
 
@@ -401,7 +435,7 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
 
       recognitionRef.current = handle;
     },
-    [bump, clearRestartTimer, retryListening],
+    [bump, clearRestartTimer, discardRecognition, retryListening],
   );
 
   useEffect(() => {

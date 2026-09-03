@@ -7,6 +7,7 @@ import { useTalkMode } from "@/components/chat/talk-mode-context";
 import { ToolCallNote } from "@/components/chat/tool-call-note";
 import type { ChatEntry, ChatToolCall } from "@/components/chat/types";
 import { useChatStream } from "@/components/chat/use-chat-stream";
+import { dayHeading } from "@/lib/day-key";
 import {
   isSpeechRecognitionSupported,
   startRecognition,
@@ -45,7 +46,8 @@ import { useBubbleLine } from "./use-notice";
 
 type Props = {
   /** 既存スレッドならそのID。新しい相談ならnull。 */
-  conversationId: string | null;
+  /** サーバー側で確定させた今日の日付（`2026-09-03`）。日付の区切りに使う（#157）。 */
+  todayKey: string;
   /** 発言と、書き込みの道具を使った記録（#81）を時刻順に混ぜたもの。 */
   initialEntries: ChatEntry[];
 };
@@ -82,7 +84,7 @@ const SILENT_CLOSE_HINT = "聞き取れませんでした。マイクを押し�
  * 音声で秘書と対話する画面（#27）。
  *
  * 聞き取りも読み上げもブラウザ内蔵の Web Speech API で行い、返答の生成は「書く」と同じ
- * `POST /api/chat` を使う。声で話した内容も同じ相談スレッドへ残るため、「書く」に
+ * `POST /api/chat` を使う。声で話した内容も同じ連続セッションへ残るため、「書く」に
  * 切り替えれば文字で読み返せる。
  *
  * ひと往復は idle → listening → thinking →（VOICEVOXの声なら preparing →）speaking → idle と
@@ -93,18 +95,15 @@ const SILENT_CLOSE_HINT = "聞き取れませんでした。マイクを押し�
  * 読み上げを止めて生成を打ち切り、thinking / speaking → listening へ飛ぶ。マイクを開くのは
  * 黙らせた後なので、自分の声を拾わないという前提はそのまま保たれる。
  *
- * **「話す」を開いている間は `/c/<ID>` へ移らない（#155）。** 新しい相談の1通目で作られた
- * スレッドのURLへは、「文字で送る」で「書く」へ切り替えるときにだけ移る（`flushNavigation()`）。
- * この移動はルートをまたぐのでこの画面がまるごと作り直され、**移動を頼んでから実際に
- * 切り替わるまでの間にマイクを押して話すと、聞き取りも送信中の問い合わせもまとめて
- * 捨てられる**——画面には何も残らず、話しかけたこと自体が無かったことになる。#67は移動を
- * 待機まで遅らせたが、待機のすぐ後は利用者が次に話しかける時点そのもので、いちばん
- * 当たりやすい。**「続けて話す」が入（既定）のときは待機に入らないため、そもそも一度も
- * 移動していなかった**ので、その振る舞いへ揃えている。
+ * **この画面は送信の前後で一度もルートをまたがない（#157）。** #67・#155で手当てして
+ * いた「新しい相談の1通目で `/c/<ID>` へ移る」経路は、書き込み先が利用者につき1本の
+ * 連続セッションになったことで消えた。移動が無いので、**移動を頼んでから切り替わるまでの
+ * 1〜2秒にマイクを押した往復が丸ごと捨てられる**という#155の失敗はもう起こらない。
+ * 移動を遅らせる仕掛け（`deferNavigation` / `flushNavigation()`）も一緒に消してある。
  */
-export function VoicePanel({ conversationId, initialEntries }: Props) {
+export function VoicePanel({ initialEntries, todayKey }: Props) {
   const { setMode } = useTalkMode();
-  const { send: sendMessage, abort, flushNavigation } = useChatStream(conversationId);
+  const { send: sendMessage, abort } = useChatStream();
 
   const [entries, setEntries] = useState<ChatEntry[]>(initialEntries);
   const [status, setStatus] = useState<RobotState>("idle");
@@ -268,7 +267,6 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
         mode: "voice",
         // 送信が終わった後も読み上げと聞き取りが続く。`/c/<ID>` への移動でこの画面が
         // 作り直されると、そこまで巻き添えで畳まれる（#67）。
-        deferNavigation: true,
         onDelta: (delta) => {
           answer += delta;
           setReply(answer);
@@ -849,11 +847,6 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
             type="button"
             onClick={() => {
               stopEverything();
-              // 遅らせていた移動をここで消化する。`/` のままだと「書く」が新しい相談として
-              // 開き、いま話した内容が消えたように見える（#67）。**移動するのはここだけ**
-              // ——利用者が「話す」を離れると決めた時点なので、画面を作り直しても失うものが
-              // 無い（#155）。
-              flushNavigation();
               setMode("write");
             }}
             className="flex w-[4.5rem] flex-col items-center gap-1.5 text-[0.6875rem] text-muted"
@@ -869,7 +862,7 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
       {/* 画面が広いときだけ、いまの相談のやり取りを右へ添える。声だけだと直前しか追えない。 */}
       <aside className="hidden w-[300px] shrink-0 flex-col border-l border-border bg-surface lg:flex">
         <h2 className="border-b border-border px-4 py-3 text-xs font-medium text-muted">
-          この相談の記録
+          今日の記録
         </h2>
         <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-3.5">
           {entries.length === 0 ? (
@@ -877,29 +870,45 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
               話しかけると、ここにやり取りが残ります。
             </p>
           ) : (
-            entries.map((entry) =>
-              entry.kind === "tool" ? (
-                <ToolCallNote key={entry.id} call={entry} compact />
-              ) : (
-                <div key={entry.id} className="flex flex-col gap-1">
-                  <span className="text-[0.625rem] font-bold tracking-[0.08em] text-muted">
-                    {entry.role === "USER" ? "わたし" : "秘書"}
-                  </span>
-                  <p
-                    className={cn(
-                      "whitespace-pre-wrap break-words text-xs leading-relaxed",
-                      entry.role === "USER" &&
-                        "rounded-[10px_10px_10px_3px] bg-accent-surface px-2.5 py-1.5",
-                    )}
-                  >
-                    {entry.content}
-                  </p>
-                  {entry.interrupted && (
-                    <p className="text-[0.625rem] text-muted">— ここで割り込みました</p>
+            /*
+              日付の区切りを挟む（#157）。今日まだ話していない朝はきのうの終わりから
+              続けて出るので、区切りが無いと「今日もう話した」ように見える。
+            */
+            entries.map((entry, index) => {
+              const day = entry.day ?? todayKey;
+              const previousDay = index === 0 ? null : (entries[index - 1].day ?? todayKey);
+
+              return (
+                <div key={entry.id} className="flex flex-col gap-3.5">
+                  {day !== previousDay && (
+                    <span className="text-[0.625rem] font-bold tracking-[0.08em] text-muted">
+                      {dayHeading(day, todayKey)}
+                    </span>
+                  )}
+                  {entry.kind === "tool" ? (
+                    <ToolCallNote call={entry} compact />
+                  ) : (
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[0.625rem] font-bold tracking-[0.08em] text-muted">
+                        {entry.role === "USER" ? "わたし" : "秘書"}
+                      </span>
+                      <p
+                        className={cn(
+                          "whitespace-pre-wrap break-words text-xs leading-relaxed",
+                          entry.role === "USER" &&
+                            "rounded-[10px_10px_10px_3px] bg-accent-surface px-2.5 py-1.5",
+                        )}
+                      >
+                        {entry.content}
+                      </p>
+                      {entry.interrupted && (
+                        <p className="text-[0.625rem] text-muted">— ここで割り込みました</p>
+                      )}
+                    </div>
                   )}
                 </div>
-              ),
-            )
+              );
+            })
           )}
         </div>
         <p className="flex items-center gap-1.5 border-t border-border px-4 py-2.5 text-[0.6875rem] text-muted">

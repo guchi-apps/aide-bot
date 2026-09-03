@@ -5,15 +5,12 @@ import { ChatShell } from "@/components/chat/chat-shell";
 import { TalkModeProvider } from "@/components/chat/talk-mode-context";
 import { APP_VERSION } from "@/lib/app-version";
 import { getCurrentUser } from "@/lib/auth-user";
-import { conversationGroupLabel } from "@/lib/conversation";
-import { db } from "@/lib/db";
+import { jstDayKey } from "@/lib/day-key";
+import { listDays, primaryConversation } from "@/lib/day-log";
 import { pendingNoticeCount } from "@/lib/notice-list";
 import { TALK_MODE_COOKIE, normalizeTalkMode } from "@/lib/talk-mode";
 import { recentTopicCount } from "@/lib/topics";
 import { formatUsd, startOfMonth, usageBreakdown, type UsageBreakdown } from "@/lib/usage";
-
-// 一覧に出す件数の上限。これより古いものは、いまのところ辿る導線を持たない。
-const CONVERSATION_LIMIT = 100;
 
 export default async function ChatLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
@@ -37,12 +34,10 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
   // 溜まっている話題の件数（#144）。こちらも `count` 1本なので同じく並行して流す。
   const topicCountPromise = recentTopicCount(user.id, now);
 
-  const conversations = await db.conversation.findMany({
-    where: { userId: user.id },
-    orderBy: { updatedAt: "desc" },
-    take: CONVERSATION_LIMIT,
-    select: { id: true, title: true, updatedAt: true },
-  });
+  // 左メニューに並べる日付（#157）。相談はテーマごとに分けなくなったので、一覧の元は
+  // スレッドではなく1本の連続セッションの発言になる。
+  const conversation = await primaryConversation(user.id);
+  const days = await listDays(conversation.id, now);
 
   // 最初の描画からモードを確定させたいのでCookieから読む。クライアント側で決めると、
   // 「書く」を選んでいる人にも一瞬だけ音声画面が出る。
@@ -56,11 +51,8 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
   return (
     <TalkModeProvider initialMode={mode}>
       <ChatShell
-        conversations={conversations.map((conversation) => ({
-          id: conversation.id,
-          title: conversation.title,
-          group: conversationGroupLabel(conversation.updatedAt, now),
-        }))}
+        days={days}
+        todayKey={jstDayKey(now)}
         monthlyUsageLabel={monthlyUsageLabel(monthlyUsage)}
         pendingNoticeCount={pendingNotices}
         topicCount={topicCount}

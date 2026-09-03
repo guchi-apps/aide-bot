@@ -70,12 +70,13 @@ const SILENT_RESTART_LIMIT = 10;
 const RESTART_DELAY_MS = 300;
 
 /**
- * 新しい相談で `/c/<ID>` へ移るまでの間（#67）。
+ * 何も聞き取れないままマイクが閉じたときに出す案内（#155）。
  *
- * この移動はルートをまたぐためこの画面が作り直される。待機に入った直後に利用者が
- * マイクを押すことがあるので、少しだけ様子を見てから移る（押されたら取り消す）。
+ * `no-speech` は文言を出さない扱い（#67）なので、開き直しを使い切って待機へ戻った回は
+ * 画面が「続けて話しかけてください。」のまま変わらない。マイクが開いているつもりで
+ * 話し続けている利用者からは、話しても何も起きない画面にしか見えない。
  */
-const NAVIGATION_DELAY_MS = 600;
+const SILENT_CLOSE_HINT = "聞き取れませんでした。マイクを押してから話しかけてください。";
 
 /**
  * 音声で秘書と対話する画面（#27）。
@@ -91,6 +92,15 @@ const NAVIGATION_DELAY_MS = 600;
  * 考えている・話している最中でも、マイクを押せばその場で割り込める（#48）。押した時点で
  * 読み上げを止めて生成を打ち切り、thinking / speaking → listening へ飛ぶ。マイクを開くのは
  * 黙らせた後なので、自分の声を拾わないという前提はそのまま保たれる。
+ *
+ * **「話す」を開いている間は `/c/<ID>` へ移らない（#155）。** 新しい相談の1通目で作られた
+ * スレッドのURLへは、「文字で送る」で「書く」へ切り替えるときにだけ移る（`flushNavigation()`）。
+ * この移動はルートをまたぐのでこの画面がまるごと作り直され、**移動を頼んでから実際に
+ * 切り替わるまでの間にマイクを押して話すと、聞き取りも送信中の問い合わせもまとめて
+ * 捨てられる**——画面には何も残らず、話しかけたこと自体が無かったことになる。#67は移動を
+ * 待機まで遅らせたが、待機のすぐ後は利用者が次に話しかける時点そのもので、いちばん
+ * 当たりやすい。**「続けて話す」が入（既定）のときは待機に入らないため、そもそも一度も
+ * 移動していなかった**ので、その振る舞いへ揃えている。
  */
 export function VoicePanel({ conversationId, initialEntries }: Props) {
   const { setMode } = useTalkMode();
@@ -104,6 +114,9 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
   const [error, setError] = useState<string | null>(null);
   // 失敗ではないが伝えておきたいこと（VOICEVOXが使えず端末の声で読んだ、など）。
   const [notice, setNotice] = useState<string | null>(null);
+  // 聞き取りの側の案内（#155）。`notice`（読み上げの側）と混ぜると、片方を出すたびに
+  // もう片方が消える。
+  const [hint, setHint] = useState<string | null>(null);
   const [reacting, setReacting] = useState(false);
   // 外部サービスを見に行っている間の表示（#46）。声だけだと無言の数秒が長く感じる。
   const [activity, setActivity] = useState<{ server: string; tool: string } | null>(null);
@@ -123,6 +136,13 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
   const [engineChecking, setEngineChecking] = useState(false);
 
   const recognitionRef = useRef<RecognitionHandle | null>(null);
+  /**
+   * 聞き取りの世代（#155）。
+   *
+   * 畳んだ聞き取りから遅れて届いたイベントで、開いたばかりの聞き取りを壊さないための印。
+   * `onend` が返ってこない実装（iOSで実際に起きる）でも、押し直せば必ず新しい世代で開き直せる。
+   */
+  const recognitionSessionRef = useRef(0);
   const readerRef = useRef<Reader | null>(null);
   const sampleRef = useRef<Reader | null>(null);
   const finalRef = useRef("");
@@ -167,20 +187,36 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
     restartTimerRef.current = null;
   }, []);
 
+  /**
+   * 走っている聞き取りを捨てる（#155）。
+   *
+   * **`recognitionRef` を持っているだけで何もしない、をやめるための関数。** 以前は
+   * `beginListening()` の先頭で「すでに持っていたら何もせず戻る」としていたが、
+   * **`onend` が返らない実装ではこの参照が居座り、以後どれだけマイクを押しても
+   * 黙って戻るだけになる**（画面は「続けて話しかけてください。」のまま変わらない）。
+   * 捨てたぶんから遅れて届くイベントは、世代の印で落とす。
+   */
+  const discardRecognition = useCallback(() => {
+    recognitionSessionRef.current += 1;
+
+    const handle = recognitionRef.current;
+    recognitionRef.current = null;
+    handle?.abort();
+  }, []);
+
   /** 動いているものを全部止める。画面を離れるときと、利用者が止めたとき。 */
   const stopEverything = useCallback(() => {
     // 開き直しの待ち合わせが残っていると、止めた直後にマイクが開き直す（#67）。
     closedByUserRef.current = true;
     clearRestartTimer();
-    recognitionRef.current?.abort();
-    recognitionRef.current = null;
+    discardRecognition();
     readerRef.current?.cancel();
     readerRef.current = null;
     sampleRef.current?.cancel();
     sampleRef.current = null;
     setSamplePreparing(false);
     abort();
-  }, [abort, clearRestartTimer]);
+  }, [abort, clearRestartTimer, discardRecognition]);
 
   useEffect(() => {
     return () => {
@@ -193,6 +229,7 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
     async (text: string) => {
       setError(null);
       setNotice(null);
+      setHint(null);
       setLastUser(text);
       setReply("");
       setActivity(null);
@@ -322,38 +359,50 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
    */
   const beginListening = useCallback(
     (resume = false) => {
-      if (recognitionRef.current) return;
       clearRestartTimer();
+      // 走っているものがあれば畳んでから開き直す。持っているだけで戻ると、`onend` が
+      // 返らなかった1回のせいでマイクが二度と開かなくなる（#155）。
+      discardRecognition();
+      const session = recognitionSessionRef.current;
 
       if (!resume) silentRestartsRef.current = 0;
       closedByUserRef.current = false;
       failedRef.current = false;
 
       setError(null);
+      setHint(null);
       setHeard("");
       finalRef.current = "";
       setStatus("listening");
 
+      /** この世代の聞き取りからのイベントか。畳んだぶんから遅れて届いたものは捨てる。 */
+      const current = () => recognitionSessionRef.current === session;
+
       const handle = startRecognition({
         onInterim: (text) => {
+          if (!current()) return;
           setHeard(text);
           if (text !== "") bump();
         },
         onFinal: (text) => {
+          if (!current()) return;
           finalRef.current += text;
         },
         onSpeechStart: () => {
+          if (!current()) return;
           // 声が届いた時点で開き直しの回数は仕切り直す。話し出すまでが長かっただけの
           // 往復で、次の番の待ち時間まで短くなっていくのを防ぐ。
           silentRestartsRef.current = 0;
           bump();
         },
         onError: (message) => {
-          if (!message) return;
+          if (!current() || !message) return;
           failedRef.current = true;
           setError(message);
         },
         onEnd: () => {
+          if (!current()) return;
+
           recognitionRef.current = null;
           setHeard("");
 
@@ -361,7 +410,12 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
           finalRef.current = "";
 
           if (text === "") {
-            if (!retryListening()) setStatus("idle");
+            if (retryListening()) return;
+
+            // 開き直しを使い切ったときだけ知らせる。利用者が自分で止めたとき・文言付きの
+            // エラーで終わったときは、すでに理由が画面に出ている。
+            if (!closedByUserRef.current && !failedRef.current) setHint(SILENT_CLOSE_HINT);
+            setStatus("idle");
             return;
           }
 
@@ -381,27 +435,12 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
 
       recognitionRef.current = handle;
     },
-    [bump, clearRestartTimer, retryListening],
+    [bump, clearRestartTimer, discardRecognition, retryListening],
   );
 
   useEffect(() => {
     beginListeningRef.current = beginListening;
   }, [beginListening]);
-
-  /**
-   * 新しい相談で遅らせておいた `/c/<ID>` への移動を、待機に入ってから行う（#67）。
-   *
-   * この移動はルートをまたぐのでこの画面は作り直される。往復の途中で起きると、読み上げも
-   * 「続けて話す」で開いたマイクも一緒に畳まれ、話しかけても何も起きなくなる。待機は
-   * 「失うものが無い」唯一の時点なので、そこまで待つ。待機に入った直後にマイクを押された
-   * 場合は `status` が変わって取り消される。
-   */
-  useEffect(() => {
-    if (status !== "idle") return;
-
-    const timer = setTimeout(flushNavigation, NAVIGATION_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [status, flushNavigation]);
 
   /** iOSは「画面を触った流れ」で一度鳴らしておかないと、以降が無音になる。 */
   function prime() {
@@ -740,6 +779,12 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
               </p>
             )}
 
+            {hint && (
+              <p className="rounded-xl border border-border bg-surface px-4 py-2.5 text-sm text-muted">
+                {hint}
+              </p>
+            )}
+
             {notice && (
               <p className="rounded-xl border border-border bg-surface px-4 py-2.5 text-sm text-muted">
                 {notice}
@@ -805,7 +850,9 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
             onClick={() => {
               stopEverything();
               // 遅らせていた移動をここで消化する。`/` のままだと「書く」が新しい相談として
-              // 開き、いま話した内容が消えたように見える（#67）。
+              // 開き、いま話した内容が消えたように見える（#67）。**移動するのはここだけ**
+              // ——利用者が「話す」を離れると決めた時点なので、画面を作り直しても失うものが
+              // 無い（#155）。
               flushNavigation();
               setMode("write");
             }}

@@ -7,6 +7,7 @@ import { useTalkMode } from "@/components/chat/talk-mode-context";
 import { ToolCallNote } from "@/components/chat/tool-call-note";
 import type { ChatEntry, ChatToolCall } from "@/components/chat/types";
 import { useChatStream } from "@/components/chat/use-chat-stream";
+import { dayHeading } from "@/lib/day-key";
 import {
   isSpeechRecognitionSupported,
   startRecognition,
@@ -45,7 +46,8 @@ import { useBubbleLine } from "./use-notice";
 
 type Props = {
   /** 既存スレッドならそのID。新しい相談ならnull。 */
-  conversationId: string | null;
+  /** サーバー側で確定させた今日の日付（`2026-09-03`）。日付の区切りに使う（#157）。 */
+  todayKey: string;
   /** 発言と、書き込みの道具を使った記録（#81）を時刻順に混ぜたもの。 */
   initialEntries: ChatEntry[];
 };
@@ -70,18 +72,19 @@ const SILENT_RESTART_LIMIT = 10;
 const RESTART_DELAY_MS = 300;
 
 /**
- * 新しい相談で `/c/<ID>` へ移るまでの間（#67）。
+ * 何も聞き取れないままマイクが閉じたときに出す案内（#155）。
  *
- * この移動はルートをまたぐためこの画面が作り直される。待機に入った直後に利用者が
- * マイクを押すことがあるので、少しだけ様子を見てから移る（押されたら取り消す）。
+ * `no-speech` は文言を出さない扱い（#67）なので、開き直しを使い切って待機へ戻った回は
+ * 画面が「続けて話しかけてください。」のまま変わらない。マイクが開いているつもりで
+ * 話し続けている利用者からは、話しても何も起きない画面にしか見えない。
  */
-const NAVIGATION_DELAY_MS = 600;
+const SILENT_CLOSE_HINT = "聞き取れませんでした。マイクを押してから話しかけてください。";
 
 /**
  * 音声で秘書と対話する画面（#27）。
  *
  * 聞き取りも読み上げもブラウザ内蔵の Web Speech API で行い、返答の生成は「書く」と同じ
- * `POST /api/chat` を使う。声で話した内容も同じ相談スレッドへ残るため、「書く」に
+ * `POST /api/chat` を使う。声で話した内容も同じ連続セッションへ残るため、「書く」に
  * 切り替えれば文字で読み返せる。
  *
  * ひと往復は idle → listening → thinking →（VOICEVOXの声なら preparing →）speaking → idle と
@@ -91,10 +94,16 @@ const NAVIGATION_DELAY_MS = 600;
  * 考えている・話している最中でも、マイクを押せばその場で割り込める（#48）。押した時点で
  * 読み上げを止めて生成を打ち切り、thinking / speaking → listening へ飛ぶ。マイクを開くのは
  * 黙らせた後なので、自分の声を拾わないという前提はそのまま保たれる。
+ *
+ * **この画面は送信の前後で一度もルートをまたがない（#157）。** #67・#155で手当てして
+ * いた「新しい相談の1通目で `/c/<ID>` へ移る」経路は、書き込み先が利用者につき1本の
+ * 連続セッションになったことで消えた。移動が無いので、**移動を頼んでから切り替わるまでの
+ * 1〜2秒にマイクを押した往復が丸ごと捨てられる**という#155の失敗はもう起こらない。
+ * 移動を遅らせる仕掛け（`deferNavigation` / `flushNavigation()`）も一緒に消してある。
  */
-export function VoicePanel({ conversationId, initialEntries }: Props) {
+export function VoicePanel({ initialEntries, todayKey }: Props) {
   const { setMode } = useTalkMode();
-  const { send: sendMessage, abort, flushNavigation } = useChatStream(conversationId);
+  const { send: sendMessage, abort } = useChatStream();
 
   const [entries, setEntries] = useState<ChatEntry[]>(initialEntries);
   const [status, setStatus] = useState<RobotState>("idle");
@@ -104,6 +113,9 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
   const [error, setError] = useState<string | null>(null);
   // 失敗ではないが伝えておきたいこと（VOICEVOXが使えず端末の声で読んだ、など）。
   const [notice, setNotice] = useState<string | null>(null);
+  // 聞き取りの側の案内（#155）。`notice`（読み上げの側）と混ぜると、片方を出すたびに
+  // もう片方が消える。
+  const [hint, setHint] = useState<string | null>(null);
   const [reacting, setReacting] = useState(false);
   // 外部サービスを見に行っている間の表示（#46）。声だけだと無言の数秒が長く感じる。
   const [activity, setActivity] = useState<{ server: string; tool: string } | null>(null);
@@ -123,6 +135,13 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
   const [engineChecking, setEngineChecking] = useState(false);
 
   const recognitionRef = useRef<RecognitionHandle | null>(null);
+  /**
+   * 聞き取りの世代（#155）。
+   *
+   * 畳んだ聞き取りから遅れて届いたイベントで、開いたばかりの聞き取りを壊さないための印。
+   * `onend` が返ってこない実装（iOSで実際に起きる）でも、押し直せば必ず新しい世代で開き直せる。
+   */
+  const recognitionSessionRef = useRef(0);
   const readerRef = useRef<Reader | null>(null);
   const sampleRef = useRef<Reader | null>(null);
   const finalRef = useRef("");
@@ -167,20 +186,36 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
     restartTimerRef.current = null;
   }, []);
 
+  /**
+   * 走っている聞き取りを捨てる（#155）。
+   *
+   * **`recognitionRef` を持っているだけで何もしない、をやめるための関数。** 以前は
+   * `beginListening()` の先頭で「すでに持っていたら何もせず戻る」としていたが、
+   * **`onend` が返らない実装ではこの参照が居座り、以後どれだけマイクを押しても
+   * 黙って戻るだけになる**（画面は「続けて話しかけてください。」のまま変わらない）。
+   * 捨てたぶんから遅れて届くイベントは、世代の印で落とす。
+   */
+  const discardRecognition = useCallback(() => {
+    recognitionSessionRef.current += 1;
+
+    const handle = recognitionRef.current;
+    recognitionRef.current = null;
+    handle?.abort();
+  }, []);
+
   /** 動いているものを全部止める。画面を離れるときと、利用者が止めたとき。 */
   const stopEverything = useCallback(() => {
     // 開き直しの待ち合わせが残っていると、止めた直後にマイクが開き直す（#67）。
     closedByUserRef.current = true;
     clearRestartTimer();
-    recognitionRef.current?.abort();
-    recognitionRef.current = null;
+    discardRecognition();
     readerRef.current?.cancel();
     readerRef.current = null;
     sampleRef.current?.cancel();
     sampleRef.current = null;
     setSamplePreparing(false);
     abort();
-  }, [abort, clearRestartTimer]);
+  }, [abort, clearRestartTimer, discardRecognition]);
 
   useEffect(() => {
     return () => {
@@ -193,6 +228,7 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
     async (text: string) => {
       setError(null);
       setNotice(null);
+      setHint(null);
       setLastUser(text);
       setReply("");
       setActivity(null);
@@ -231,7 +267,6 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
         mode: "voice",
         // 送信が終わった後も読み上げと聞き取りが続く。`/c/<ID>` への移動でこの画面が
         // 作り直されると、そこまで巻き添えで畳まれる（#67）。
-        deferNavigation: true,
         onDelta: (delta) => {
           answer += delta;
           setReply(answer);
@@ -322,38 +357,50 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
    */
   const beginListening = useCallback(
     (resume = false) => {
-      if (recognitionRef.current) return;
       clearRestartTimer();
+      // 走っているものがあれば畳んでから開き直す。持っているだけで戻ると、`onend` が
+      // 返らなかった1回のせいでマイクが二度と開かなくなる（#155）。
+      discardRecognition();
+      const session = recognitionSessionRef.current;
 
       if (!resume) silentRestartsRef.current = 0;
       closedByUserRef.current = false;
       failedRef.current = false;
 
       setError(null);
+      setHint(null);
       setHeard("");
       finalRef.current = "";
       setStatus("listening");
 
+      /** この世代の聞き取りからのイベントか。畳んだぶんから遅れて届いたものは捨てる。 */
+      const current = () => recognitionSessionRef.current === session;
+
       const handle = startRecognition({
         onInterim: (text) => {
+          if (!current()) return;
           setHeard(text);
           if (text !== "") bump();
         },
         onFinal: (text) => {
+          if (!current()) return;
           finalRef.current += text;
         },
         onSpeechStart: () => {
+          if (!current()) return;
           // 声が届いた時点で開き直しの回数は仕切り直す。話し出すまでが長かっただけの
           // 往復で、次の番の待ち時間まで短くなっていくのを防ぐ。
           silentRestartsRef.current = 0;
           bump();
         },
         onError: (message) => {
-          if (!message) return;
+          if (!current() || !message) return;
           failedRef.current = true;
           setError(message);
         },
         onEnd: () => {
+          if (!current()) return;
+
           recognitionRef.current = null;
           setHeard("");
 
@@ -361,7 +408,12 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
           finalRef.current = "";
 
           if (text === "") {
-            if (!retryListening()) setStatus("idle");
+            if (retryListening()) return;
+
+            // 開き直しを使い切ったときだけ知らせる。利用者が自分で止めたとき・文言付きの
+            // エラーで終わったときは、すでに理由が画面に出ている。
+            if (!closedByUserRef.current && !failedRef.current) setHint(SILENT_CLOSE_HINT);
+            setStatus("idle");
             return;
           }
 
@@ -381,27 +433,12 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
 
       recognitionRef.current = handle;
     },
-    [bump, clearRestartTimer, retryListening],
+    [bump, clearRestartTimer, discardRecognition, retryListening],
   );
 
   useEffect(() => {
     beginListeningRef.current = beginListening;
   }, [beginListening]);
-
-  /**
-   * 新しい相談で遅らせておいた `/c/<ID>` への移動を、待機に入ってから行う（#67）。
-   *
-   * この移動はルートをまたぐのでこの画面は作り直される。往復の途中で起きると、読み上げも
-   * 「続けて話す」で開いたマイクも一緒に畳まれ、話しかけても何も起きなくなる。待機は
-   * 「失うものが無い」唯一の時点なので、そこまで待つ。待機に入った直後にマイクを押された
-   * 場合は `status` が変わって取り消される。
-   */
-  useEffect(() => {
-    if (status !== "idle") return;
-
-    const timer = setTimeout(flushNavigation, NAVIGATION_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [status, flushNavigation]);
 
   /** iOSは「画面を触った流れ」で一度鳴らしておかないと、以降が無音になる。 */
   function prime() {
@@ -740,6 +777,12 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
               </p>
             )}
 
+            {hint && (
+              <p className="rounded-xl border border-border bg-surface px-4 py-2.5 text-sm text-muted">
+                {hint}
+              </p>
+            )}
+
             {notice && (
               <p className="rounded-xl border border-border bg-surface px-4 py-2.5 text-sm text-muted">
                 {notice}
@@ -804,9 +847,6 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
             type="button"
             onClick={() => {
               stopEverything();
-              // 遅らせていた移動をここで消化する。`/` のままだと「書く」が新しい相談として
-              // 開き、いま話した内容が消えたように見える（#67）。
-              flushNavigation();
               setMode("write");
             }}
             className="flex w-[4.5rem] flex-col items-center gap-1.5 text-[0.6875rem] text-muted"
@@ -822,7 +862,7 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
       {/* 画面が広いときだけ、いまの相談のやり取りを右へ添える。声だけだと直前しか追えない。 */}
       <aside className="hidden w-[300px] shrink-0 flex-col border-l border-border bg-surface lg:flex">
         <h2 className="border-b border-border px-4 py-3 text-xs font-medium text-muted">
-          この相談の記録
+          今日の記録
         </h2>
         <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-3.5">
           {entries.length === 0 ? (
@@ -830,29 +870,45 @@ export function VoicePanel({ conversationId, initialEntries }: Props) {
               話しかけると、ここにやり取りが残ります。
             </p>
           ) : (
-            entries.map((entry) =>
-              entry.kind === "tool" ? (
-                <ToolCallNote key={entry.id} call={entry} compact />
-              ) : (
-                <div key={entry.id} className="flex flex-col gap-1">
-                  <span className="text-[0.625rem] font-bold tracking-[0.08em] text-muted">
-                    {entry.role === "USER" ? "わたし" : "秘書"}
-                  </span>
-                  <p
-                    className={cn(
-                      "whitespace-pre-wrap break-words text-xs leading-relaxed",
-                      entry.role === "USER" &&
-                        "rounded-[10px_10px_10px_3px] bg-accent-surface px-2.5 py-1.5",
-                    )}
-                  >
-                    {entry.content}
-                  </p>
-                  {entry.interrupted && (
-                    <p className="text-[0.625rem] text-muted">— ここで割り込みました</p>
+            /*
+              日付の区切りを挟む（#157）。今日まだ話していない朝はきのうの終わりから
+              続けて出るので、区切りが無いと「今日もう話した」ように見える。
+            */
+            entries.map((entry, index) => {
+              const day = entry.day ?? todayKey;
+              const previousDay = index === 0 ? null : (entries[index - 1].day ?? todayKey);
+
+              return (
+                <div key={entry.id} className="flex flex-col gap-3.5">
+                  {day !== previousDay && (
+                    <span className="text-[0.625rem] font-bold tracking-[0.08em] text-muted">
+                      {dayHeading(day, todayKey)}
+                    </span>
+                  )}
+                  {entry.kind === "tool" ? (
+                    <ToolCallNote call={entry} compact />
+                  ) : (
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[0.625rem] font-bold tracking-[0.08em] text-muted">
+                        {entry.role === "USER" ? "わたし" : "秘書"}
+                      </span>
+                      <p
+                        className={cn(
+                          "whitespace-pre-wrap break-words text-xs leading-relaxed",
+                          entry.role === "USER" &&
+                            "rounded-[10px_10px_10px_3px] bg-accent-surface px-2.5 py-1.5",
+                        )}
+                      >
+                        {entry.content}
+                      </p>
+                      {entry.interrupted && (
+                        <p className="text-[0.625rem] text-muted">— ここで割り込みました</p>
+                      )}
+                    </div>
                   )}
                 </div>
-              ),
-            )
+              );
+            })
           )}
         </div>
         <p className="flex items-center gap-1.5 border-t border-border px-4 py-2.5 text-[0.6875rem] text-muted">

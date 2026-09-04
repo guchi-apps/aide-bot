@@ -34,6 +34,36 @@ function getConstructor(): typeof SpeechRecognition | null {
   return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
 }
 
+/**
+ * 使い回す聞き取りの実体（#155）。
+ *
+ * **1回ごとに `new` しない。** iOSのWebKitには、`webkitSpeechRecognition` を作り直すと
+ * 2回目以降が `start()` しても何も起きずに終わる（`onresult` が一度も来ないまま `onend` だけが
+ * 返る）事象が知られている。**「話す」で最初の1往復だけ通り、その後は何を話しても画面に
+ * 何も出ない**という報告（#155。iPhoneのホーム画面PWA・「続けて話す」入）の形と一致する。
+ *
+ * 1つを持ち回してハンドラだけ差し替えれば、`start()` / `stop()` の繰り返しになる。
+ * `continuous = false` で1発話ごとに終わる使い方は変えていないので、呼ぶ側からは同じに見える。
+ */
+let shared: SpeechRecognition | null = null;
+
+function getRecognition(): SpeechRecognition | null {
+  const Constructor = getConstructor();
+  if (!Constructor) return null;
+
+  if (!shared) {
+    shared = new Constructor();
+    shared.lang = RECOGNITION_LANG;
+    // `continuous` を false にしているのは、黙ったところで自動的に終わらせるため。true にすると
+    // 生活音を拾い続けて終わらず、いつ送られるのかが利用者から分からなくなる。
+    shared.continuous = false;
+    shared.interimResults = true;
+    shared.maxAlternatives = 1;
+  }
+
+  return shared;
+}
+
 export function isSpeechRecognitionSupported(): boolean {
   return getConstructor() !== null;
 }
@@ -66,22 +96,16 @@ function describeError(code: string): string | null {
 /**
  * 聞き取りを1回ぶん始める。始められなかった場合は `null`。
  *
- * `continuous` を false にしているのは、黙ったところで自動的に終わらせるため。true にすると
- * 生活音を拾い続けて終わらず、いつ送られるのかが利用者から分からなくなる。
- *
  * **`null` を返したときは `onError` も `onEnd` も呼ばない。** 直前の聞き取りがまだ畳まれて
  * いないだけのこともあり、そこで赤字を出して終わらせると、少し待てば開けた場面まで失敗に
  * なる。開き直すか諦めるかは呼ぶ側が決める（#67）。
+ *
+ * 実体は使い回す（`getRecognition()`）。呼ぶたびにハンドラを差し替えるので、**前の回の
+ * ハンドラは残らない。**
  */
 export function startRecognition(handlers: RecognitionHandlers): RecognitionHandle | null {
-  const Constructor = getConstructor();
-  if (!Constructor) return null;
-
-  const recognition = new Constructor();
-  recognition.lang = RECOGNITION_LANG;
-  recognition.continuous = false;
-  recognition.interimResults = true;
-  recognition.maxAlternatives = 1;
+  const recognition = getRecognition();
+  if (!recognition) return null;
 
   recognition.onspeechstart = () => handlers.onSpeechStart();
 
@@ -109,7 +133,26 @@ export function startRecognition(handlers: RecognitionHandlers): RecognitionHand
   }
 
   return {
+    // 「話し終わった」。確定した本文を `onEnd` で受け取るので、ハンドラは付けたままにする。
     stop: () => recognition.stop(),
-    abort: () => recognition.abort(),
+    /**
+     * 結果を捨てて終える。**実体を使い回すため、先にハンドラを外す。**
+     *
+     * 外さずに畳むと、遅れて届く `onend` が——そのころには次の聞き取り用に差し替わっている
+     * ——**次の回のハンドラへ入る。** 開いたばかりの聞き取りが「何も聞こえないまま終わった」
+     * ことにされてしまう（#155）。
+     */
+    abort: () => {
+      clearHandlers(recognition);
+      recognition.abort();
+    },
   };
+}
+
+/** 使い回す実体からハンドラを外す。 */
+function clearHandlers(recognition: SpeechRecognition): void {
+  recognition.onspeechstart = null;
+  recognition.onresult = null;
+  recognition.onerror = null;
+  recognition.onend = null;
 }

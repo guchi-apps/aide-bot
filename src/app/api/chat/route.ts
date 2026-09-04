@@ -1,11 +1,13 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 
 import { INTERRUPTED_NOTE, historyWindowSkip, secretarySystemPrompt } from "@/lib/anthropic";
 import { getCurrentUser } from "@/lib/auth-user";
 import type { ReplyStyle } from "@/lib/chat-model";
 import { selectedChatModels } from "@/lib/chat-model-server";
 import { runCodexExec } from "@/lib/codex";
-import { MAX_MESSAGE_LENGTH, buildConversationTitle } from "@/lib/conversation";
+import { compactIfNeeded } from "@/lib/compact";
+import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
+import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { topicsForChat } from "@/lib/topics";
 import { recordApiUsage } from "@/lib/usage";
@@ -24,13 +26,16 @@ import { recordApiUsage } from "@/lib/usage";
  * **`codex exec` はトークン単位でストリーミングしない**（`@/lib/codex`）。応答が完結して
  * から `delta` イベントを1回だけ送るため、届いた端から文字が増えていく従来の見え方はしない。
  * **割り込み（#48）ても、そこまでの本文は保存できない**（本文は完了時にしか届かないため）。
+ *
+ * **#157で書き込み先が「利用者につき1本の連続セッション」に固定された。** リクエストは
+ * スレッドのIDを送らず、ここで `primaryConversation()` を引く。長くなった記録は、返答を
+ * 返した後に `compactIfNeeded()` が要約へ畳む。
  */
 
 // 返答を逐次流すため、実行のたびに動的に扱わせる。
 export const dynamic = "force-dynamic";
 
 type ChatRequestBody = {
-  conversationId?: string | null;
   message?: unknown;
   /** `voice` なら音声モード。返答の体裁だけが変わり、保存の仕方は同じ（#27）。 */
   mode?: unknown;
@@ -113,9 +118,14 @@ function buildConversationText(
  * **最近の話題（#144）は履歴の後ろに置く。** 仕入れは1時間に1回まで変わるので、前に置くと
  * そのたびにプレフィックスの先頭側が変わり、履歴ぶんのキャッシュ（#56・#128）が丸ごと外れる。
  * 後ろなら履歴までは前方一致のまま乗る。
+ *
+ * **要約（#157）は逆に履歴の前へ置く。** 畳んだ発言の代わりを務めるものなので、順番どおりで
+ * ないと「要約より前の話」と「要約に含まれる話」が入れ替わって読める。畳んだ回だけ
+ * プレフィックスの先頭側が変わりキャッシュが外れるが、40発言に一度なので受け入れる。
  */
 function buildCodexPrompt(
   style: ReplyStyle,
+  summary: string | null,
   history: { role: "USER" | "ASSISTANT"; content: string; interrupted: boolean }[],
   topics: string,
 ): string {
@@ -124,6 +134,14 @@ function buildCodexPrompt(
 
   return [
     system,
+    ...(summary === null
+      ? []
+      : [
+          "---",
+          "これより前のやり取りの要約（あなた自身が畳んでおいた覚え書き。ここに書かれていない" +
+            "細部は残っていないので、聞かれたら分からないと言う）:",
+          summary,
+        ]),
     "---",
     "これまでの会話:",
     conversation,
@@ -168,32 +186,19 @@ export async function POST(request: Request) {
     return fail(`一度に送れるのは${MAX_MESSAGE_LENGTH.toLocaleString()}文字までです。`, 400);
   }
 
+  // 書き込み先は利用者につき1本の連続セッション（#157）。リクエストにIDは載らないので、
+  // 他人のスレッドへ書き込む余地がそもそも無くなった。
+  const conversation = await primaryConversation(user.id);
+
   // 割り込みで打ち切られた生成が、そこまでの返答を保存し終えるのを待つ（#48）。
   // 待たずに進めると、遮られた返答が今回の発言より後ろの時刻で入り、並びが入れ替わる。
-  if (body.conversationId) {
-    await waitForPendingGeneration(body.conversationId);
-  }
-
-  // 他人のスレッドへ書き込めないよう、必ずuserIdとの組で引く。
-  const conversation = body.conversationId
-    ? await db.conversation.findFirst({
-        where: { id: body.conversationId, userId: user.id },
-        select: { id: true, title: true },
-      })
-    : await db.conversation.create({
-        data: { userId: user.id, title: buildConversationTitle(message) },
-        select: { id: true, title: true },
-      });
-
-  if (!conversation) {
-    return fail("その相談は見つかりませんでした。", 404);
-  }
+  await waitForPendingGeneration(conversation.id);
 
   await db.$transaction([
     db.message.create({
       data: { conversationId: conversation.id, role: "USER", content: message },
     }),
-    // 一覧の並び順はこの列だけを見ている。発言を足しただけでは動かないので明示的に触る。
+    // 最後に話した時刻（#101のひとりごとが読む）。発言を足しただけでは動かないので明示的に触る。
     db.conversation.update({
       where: { id: conversation.id },
       data: { updatedAt: new Date() },
@@ -203,14 +208,18 @@ export async function POST(request: Request) {
   // 窓の先頭は `HISTORY_WINDOW_STEP` の刻みでしか動かさない。1発言ずつ滑らせると
   // 往復のたびにプレフィックスの先頭が変わり、Codex側のキャッシュ（実測で確認済み。
   // `turn.completed` の `usage.cached_input_tokens`）が効きにくくなる。
+  //
+  // **数えるのは「要約へ畳んでいない発言」だけ**（#157）。畳んだぶんは要約が代わりを
+  // 務めるので、窓に入れると同じ話を二重に送ることになる。
   const messageCount = await db.message.count({ where: { conversationId: conversation.id } });
+  const pendingCount = messageCount - conversation.summarizedCount;
 
   const history = await db.message.findMany({
     where: { conversationId: conversation.id },
     // 並びが揺れればプレフィックスも揺れる。`createdAt` が同じ発言があっても毎回同じ順で
     // 並ぶよう、第2のキーにidを置く。
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    skip: historyWindowSkip(messageCount),
+    skip: conversation.summarizedCount + historyWindowSkip(pendingCount),
     select: { role: true, content: true, interrupted: true },
   });
 
@@ -223,7 +232,7 @@ export async function POST(request: Request) {
   // 仕入れてある話題（#144）。DBを引くだけで、無ければ空文字（プロンプトの形は変わらない）。
   const topics = await topicsForChat(user.id);
 
-  const prompt = buildCodexPrompt(style, history, topics);
+  const prompt = buildCodexPrompt(style, conversation.summary, history, topics);
 
   // 次に割り込んでくるリクエストへ「この生成の後片付けが終わった」と伝えるための錠（#48）。
   // ストリームの外で作るのは、`start` が動くより先にMapへ載せておく必要があるため。
@@ -233,13 +242,15 @@ export async function POST(request: Request) {
   });
   pendingGenerations.set(conversation.id, pending);
 
+  // 保存できた返答。`finally` の中（compactの判定）からも読むため、tryの外で持つ。
+  let answer = "";
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        // 新規スレッドのIDは、これを受け取るまでクライアント側が知らない。最初に流す。
-        controller.enqueue(sse("meta", { conversationId: conversation.id, title: conversation.title }));
+        // 画面側は相談のIDを持たなくなったが（#157）、イベントの形は変えずに流す。
+        controller.enqueue(sse("meta", { conversationId: conversation.id }));
 
-        let answer = "";
         let errorMessage: string | null = null;
         // 利用者に遮られたか。割り込んだ側の発言に答えられるよう、保存時に印を付ける（#48）。
         let interrupted = false;
@@ -309,6 +320,20 @@ export async function POST(request: Request) {
           pendingGenerations.delete(conversation.id);
         }
         releasePending();
+
+        // 長くなった記録を要約へ畳む（#157）。**返答を返し終えてから走らせる**——往復の中で
+        // 待たせると、数十発言に一度だけ返事が数十秒遅れる相談ができる。畳めなかった回は
+        // `summarizedCount` が進まないので、次の往復でやり直せる。
+        const totalMessages = messageCount + (answer.trim() === "" ? 0 : 1);
+        after(() =>
+          compactIfNeeded({
+            userId: user.id,
+            conversationId: conversation.id,
+            summary: conversation.summary,
+            summarizedCount: conversation.summarizedCount,
+            totalMessages,
+          }),
+        );
       }
     },
   });

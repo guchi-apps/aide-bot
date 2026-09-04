@@ -3,26 +3,27 @@
 import { ArrowUp, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { AppIcon } from "@/components/brand/app-icon";
 import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
 import { cn } from "@/lib/utils";
 
+import { CompactedNote, EntryList, SecretaryAvatar, SecretaryLabel } from "./entry-list";
 import { Markdown } from "./markdown";
-import { ToolCallNote } from "./tool-call-note";
 import type { ChatEntry, ChatToolCall } from "./types";
 import { useChatStream } from "./use-chat-stream";
 
 type Props = {
-  /** 既存スレッドならそのID。新しい相談ならnull。 */
-  conversationId: string | null;
   /** 発言と、書き込みの道具を使った記録（#81）を時刻順に混ぜたもの。 */
   initialEntries: ChatEntry[];
+  /** サーバー側で確定させた今日の日付（`2026-09-03`）。日付の区切りに使う（#157）。 */
+  todayKey: string;
+  /** 要約へ畳んである発言の数（#157）。0なら印を出さない。 */
+  compactedCount: number;
 };
 
 type Status = "idle" | "thinking" | "streaming";
 
-export function ChatPanel({ conversationId, initialEntries }: Props) {
-  const { send: sendMessage, abort } = useChatStream(conversationId);
+export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
+  const { send: sendMessage, abort } = useChatStream();
 
   const [entries, setEntries] = useState<ChatEntry[]>(initialEntries);
   const [input, setInput] = useState("");
@@ -180,34 +181,17 @@ export function ChatPanel({ conversationId, initialEntries }: Props) {
         >
           {isEmpty && (
             <div className="text-center">
-              <p className="text-lg font-medium">今日はどんなご相談でしょうか。</p>
+              <p className="text-lg font-medium">今日はどんな一日でしたか。</p>
               <p className="mt-2 text-sm leading-relaxed text-muted">
-                思いついたことをそのまま書いてください。話題が変わるときは「新しい相談」で分けると、
-                あとから探しやすくなります。
+                思いついたことをそのまま書いてください。やり取りは1本の記録として続いていて、
+                左の日付から読み返せます。
               </p>
             </div>
           )}
 
-          {entries.map((entry) =>
-            entry.kind === "tool" ? (
-              <ToolCallNote key={entry.id} call={entry} />
-            ) : entry.role === "USER" ? (
-              <div key={entry.id} className="flex justify-end">
-                <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-[16px_16px_4px_16px] border border-accent/25 bg-accent-surface px-4 py-2.5 text-sm md:max-w-[30rem]">
-                  {entry.content}
-                </div>
-              </div>
-            ) : (
-              <div key={entry.id} className="flex gap-3">
-                <SecretaryAvatar />
-                <div className="min-w-0 flex-1">
-                  <SecretaryLabel />
-                  <Markdown>{entry.content}</Markdown>
-                  {entry.interrupted && <InterruptedNote />}
-                </div>
-              </div>
-            ),
-          )}
+          {compactedCount > 0 && !isEmpty && <CompactedNote count={compactedCount} />}
+
+          <EntryList entries={entries} todayKey={todayKey} />
 
           {busy && (
             <div className="flex gap-3">
@@ -278,7 +262,7 @@ export function ChatPanel({ conversationId, initialEntries }: Props) {
                 send();
               }}
               rows={1}
-              placeholder={busy ? "割り込んで話しかける" : "相談したいことを入力"}
+              placeholder={busy ? "割り込んで話しかける" : "話しかける"}
               aria-label="相談したいこと"
               className="max-h-[200px] flex-1 resize-none bg-transparent py-1 text-sm outline-none placeholder:text-muted"
             />
@@ -327,26 +311,3 @@ export function ChatPanel({ conversationId, initialEntries }: Props) {
   );
 }
 
-function SecretaryAvatar() {
-  return <AppIcon className="mt-0.5 size-[26px] shrink-0" />;
-}
-
-function SecretaryLabel() {
-  return (
-    <div className="mb-1 text-[0.6875rem] font-bold tracking-[0.08em] text-muted">秘書</div>
-  );
-}
-
-/**
- * 割り込まれた返答であることの印（#48）。
- *
- * 途中で切れた文はそれだけ見ると尻切れの返答に見え、あとから読み返したときに秘書が
- * 言い損ねたのか自分が遮ったのかが分からない。
- */
-function InterruptedNote() {
-  return (
-    <p className="mt-1.5 text-[0.6875rem] text-muted">
-      — ここで割り込んだため、返答は途中で止まっています
-    </p>
-  );
-}

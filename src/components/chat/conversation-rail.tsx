@@ -1,18 +1,25 @@
 "use client";
 
-import { BarChart3, Bell, Newspaper, Plus, Settings, X } from "lucide-react";
+import { BarChart3, Bell, CalendarDays, Newspaper, Settings, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { AppIcon } from "@/components/brand/app-icon";
+import { dayHeading, monthLabel } from "@/lib/day-key";
 import { cn } from "@/lib/utils";
 
-import type { ConversationSummary } from "./types";
+import type { DayRow } from "./types";
 
 type Props = {
-  conversations: ConversationSummary[];
-  activeId: string | null;
+  /** 発言のある日を新しい順に並べたもの（#157）。 */
+  days: DayRow[];
+  /** いま開いている過去の日（`2026-09-01`）。今日の記録を開いているときはnull。 */
+  activeDate: string | null;
+  /** 今日の記録（`/`）を開いているか。 */
+  isTodayActive: boolean;
+  /** 今日の日付（`2026-09-03`）。一覧に無くても「今日」の行を出すために使う。 */
+  todayKey: string;
   /** 使用量の画面を開いているか。相談は選ばれていない状態になる。 */
   isUsageActive: boolean;
   /** 設定の画面を開いているか。使用量と同じく、相談は選ばれていない状態になる（#46）。 */
@@ -34,11 +41,17 @@ type Props = {
 };
 
 /**
- * 相談の一覧。PCでは常に見えている左の帯、スマホではドロワーの中身として同じものを使う。
+ * 日付の一覧（#157）。PCでは常に見えている左の帯、スマホではドロワーの中身として同じものを使う。
+ *
+ * **相談はテーマごとに分けなくなったので、並ぶのはスレッドではなく日付。** 押すとその日の
+ * 記録（`/d/<date>`）が開く。今日の行だけは `/` を指す——話しかけられるのはそこだけで、
+ * 同じ内容を2つのURLで出すと入力欄の有無が説明できなくなる。
  */
 export function ConversationRail({
-  conversations,
-  activeId,
+  days,
+  activeDate,
+  isTodayActive,
+  todayKey,
   isUsageActive,
   isSettingsActive,
   isNoticesActive,
@@ -54,8 +67,8 @@ export function ConversationRail({
   const router = useRouter();
   const headingId = useId();
 
-  // 削除の確認（#102）。押した相談を持っておき、確認を通った時点で初めて消す。
-  const [pending, setPending] = useState<ConversationSummary | null>(null);
+  // 削除の確認（#102）。押した日を持っておき、確認を通った時点で初めて消す。
+  const [pending, setPending] = useState<DayRow | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -93,7 +106,7 @@ export function ConversationRail({
     setError(null);
 
     try {
-      const response = await fetch(`/api/conversations/${encodeURIComponent(pending.id)}`, {
+      const response = await fetch(`/api/days/${encodeURIComponent(pending.date)}`, {
         method: "DELETE",
       });
 
@@ -104,11 +117,11 @@ export function ConversationRail({
         return;
       }
 
-      const wasActive = pending.id === activeId;
+      const wasActive = pending.date === activeDate;
       setPending(null);
       setDeleting(false);
 
-      // 開いていた相談を消したら、消えたページに取り残されないよう新しい相談へ戻す。
+      // 開いていた日を消したら、空になったページに取り残されないよう今日へ戻す。
       // それ以外は見ている画面のままで、一覧だけを取り直す。
       if (wasActive) {
         onNavigate?.();
@@ -121,7 +134,20 @@ export function ConversationRail({
     }
   };
 
-  let lastGroup: string | null = null;
+  // 今日の行は一覧に無くても必ず出す。一覧の元は発言なので、まだ何も話していない日は
+  // 行が作られない——「今日」が消えると、続きを話す場所が左メニューから見えなくなる。
+  const rows: DayRow[] =
+    days[0]?.date === todayKey
+      ? days
+      : [
+          {
+            date: todayKey,
+            heading: dayHeading(todayKey, todayKey),
+            month: monthLabel(todayKey),
+            count: 0,
+          },
+          ...days,
+        ];
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-rail">
@@ -131,81 +157,93 @@ export function ConversationRail({
           秘書アプリ
         </div>
 
+        {/*
+          #157で「新しい相談」から「今日の記録」へ変わった。押しても新しいスレッドは
+          作られず、続きを話す場所へ戻るだけ（`/` を開いている間は何も起きない）。
+        */}
         <Link
           href="/"
           onClick={onNavigate}
+          aria-current={isTodayActive ? "page" : undefined}
           className="flex items-center justify-center gap-1.5 rounded-[10px] bg-accent px-3 py-2.5 text-[0.8125rem] font-medium text-accent-foreground transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         >
-          <Plus className="size-3.5" aria-hidden="true" />
-          新しい相談
+          <CalendarDays className="size-3.5" aria-hidden="true" />
+          今日の記録
         </Link>
       </div>
 
-      <nav aria-label="過去の相談" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 pb-3">
-        {conversations.length === 0 ? (
-          <p className="px-2 py-3 text-xs leading-relaxed text-muted">
-            まだ相談がありません。下の入力欄から話しかけてください。
-          </p>
-        ) : (
-          conversations.map((conversation) => {
-            // 同じ見出しが続く間は出さない。並びは更新が新しい順なので、グループも順に切り替わる。
-            const heading = conversation.group === lastGroup ? null : conversation.group;
-            lastGroup = conversation.group;
+      <nav aria-label="日付ごとの記録" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 pb-3">
+        {rows.map((day, index) => {
+          // 同じ月が続く間は見出しを出さない。並びは新しい順なので、月も順に切り替わる。
+          const previousMonth = index === 0 ? null : rows[index - 1].month;
+          const heading = day.month === previousMonth ? null : day.month;
 
-            return (
-              <div key={conversation.id}>
-                {heading && (
-                  <div className="px-1.5 pb-1 pt-3.5 text-[0.6875rem] font-bold tracking-[0.1em] text-muted">
-                    {heading}
-                  </div>
+          const isToday = day.date === todayKey;
+          const isActive = isToday ? isTodayActive : day.date === activeDate;
+
+          return (
+            <div key={day.date}>
+              {heading && (
+                <div className="px-1.5 pb-1 pt-3.5 text-[0.6875rem] font-bold tracking-[0.1em] text-muted">
+                  {heading}
+                </div>
+              )}
+              {/*
+                リンクと消すボタンは入れ子にできない（リンクの中にボタンは置けない）ので、
+                同じ行の中に並べる。地の色と選択中の印は、行そのものへ移してある。
+              */}
+              <div
+                className={cn(
+                  "group flex items-center rounded-[9px] pr-0.5 transition-colors hover:bg-rail-active",
+                  isActive && "bg-rail-active shadow-[inset_2px_0_0_var(--accent)]",
                 )}
-                {/*
-                  リンクと消すボタンは入れ子にできない（リンクの中にボタンは置けない）ので、
-                  同じ行の中に並べる。地の色と選択中の印は、行そのものへ移してある。
-                */}
-                <div
+              >
+                <Link
+                  href={isToday ? "/" : `/d/${day.date}`}
+                  onClick={onNavigate}
+                  aria-current={isActive ? "page" : undefined}
                   className={cn(
-                    "group flex items-center rounded-[9px] pr-0.5 transition-colors hover:bg-rail-active",
-                    conversation.id === activeId &&
-                      "bg-rail-active shadow-[inset_2px_0_0_var(--accent)]",
+                    "flex min-w-0 flex-1 items-center gap-2 rounded-[9px] py-2 pl-2.5 pr-1 text-[0.8125rem] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+                    isActive && "font-medium",
                   )}
                 >
-                  <Link
-                    href={`/c/${conversation.id}`}
-                    onClick={onNavigate}
-                    aria-current={conversation.id === activeId ? "page" : undefined}
-                    className={cn(
-                      "min-w-0 flex-1 truncate rounded-[9px] py-2 pl-2.5 pr-1 text-[0.8125rem] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-                      conversation.id === activeId && "font-medium",
-                    )}
-                  >
-                    {conversation.title}
-                  </Link>
+                  <span className="min-w-0 flex-1 truncate">{day.heading}</span>
+                  {day.count > 0 && (
+                    <span className="shrink-0 text-[0.6875rem] tabular-nums text-muted">
+                      {day.count}
+                    </span>
+                  )}
+                </Link>
 
-                  {/*
-                    指で触る端末には「乗せる」操作が無いので常に出す。PCでは行に乗せたとき・
-                    キーボードで送ったときだけ出し、並んだ相談の見た目を普段は変えない。
+                {/*
+                  指で触る端末には「乗せる」操作が無いので常に出す。PCでは行に乗せたとき・
+                  キーボードで送ったときだけ出し、並んだ日付の見た目を普段は変えない。
 
-                    **隠すかどうかは幅ではなくホバーの有無で決める。** Tailwindの
-                    `group-hover:` は `@media (hover: hover)` の中にしか出ないので、
-                    `md:` で隠すとiPad（幅1180px・ホバー無し）でバツが永久に出なくなる。
-                  */}
+                  **隠すかどうかは幅ではなくホバーの有無で決める。** Tailwindの
+                  `group-hover:` は `@media (hover: hover)` の中にしか出ないので、
+                  `md:` で隠すとiPad（幅1180px・ホバー無し）でバツが永久に出なくなる。
+
+                  記録の無い日（まだ話していない今日）には出さない。消すものが無い。
+                */}
+                {day.count > 0 ? (
                   <button
                     type="button"
                     onClick={() => {
                       setError(null);
-                      setPending(conversation);
+                      setPending(day);
                     }}
-                    aria-label={`「${conversation.title}」を消す`}
+                    aria-label={`${day.heading}の記録を消す`}
                     className="grid size-[26px] shrink-0 place-items-center rounded-[7px] text-muted transition-opacity hover:bg-surface hover:text-danger focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:hover)]:opacity-0"
                   >
                     <X className="size-3.5" aria-hidden="true" />
                   </button>
-                </div>
+                ) : (
+                  <span className="size-[26px] shrink-0" aria-hidden="true" />
+                )}
               </div>
-            );
-          })
-        )}
+            </div>
+          );
+        })}
       </nav>
 
       <div className="border-t border-border">
@@ -319,11 +357,11 @@ export function ConversationRail({
             className="fixed left-1/2 top-1/2 z-[70] w-[min(340px,calc(100vw_-_2rem))] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-border bg-surface p-5 shadow-2xl"
           >
             <h2 id={headingId} className="text-[0.9375rem] font-bold">
-              この相談を消しますか？
+              この日の記録を消しますか？
             </h2>
             <p className="mt-2.5 text-[0.8125rem] leading-relaxed text-muted">
-              <span className="font-medium text-foreground">「{pending.title}」</span>
-              のやり取りがすべて消えます。元には戻せません。
+              <span className="font-medium text-foreground">{pending.heading}</span>
+              のやり取り{pending.count}件が消えます。元には戻せません。
             </p>
 
             {error && (

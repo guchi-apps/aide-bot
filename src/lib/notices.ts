@@ -3,6 +3,7 @@ import { NoticePriority, type Notice } from "@prisma/client";
 import { NOTICE_SKIP_TOKEN, NOTICE_URGENT_MARK, noticeSystemPrompt } from "@/lib/anthropic";
 import { NOTICE_MODEL } from "@/lib/chat-model";
 import { runCodexExec } from "@/lib/codex";
+import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { safeNoticeUrl } from "@/lib/notice-url";
 import { sendPushToUser } from "@/lib/push/subscriptions";
@@ -179,13 +180,13 @@ export async function ingestNotice(userId: string, input: NoticeInput): Promise<
  *   何度も届く運用ではないため許容している）
  * - **押した先は、リンクがあればそのページ（#137）。** 積む側が `url` を付けた用件では、その
  *   ページを開く方が用が足りる（「支払期限が近い」を押して支払いの画面が出る）。**リンクが
- *   無い用件だけ、これまでどおり相談を開く**
- * - **リンクの有無によらず相談は作る。** 押した先が外のアプリでも、届いた文面と時刻は左の
- *   メニューから辿れるようにしておく（`NotificationLog.conversationId` もそこを指す）
- * - **相談の中身は変えない。** 1通目はUSER（`toPromptMessages()` の制約を満たす固定文言）、
- *   2通目はASSISTANTとして `body` をそのまま置く。モデルを呼ばずに「秘書からのお知らせ」として
- *   自然に見せるための構成で、朝の見通し（#79）の「USER=依頼・ASSISTANT=生成物」とは違い、
- *   ASSISTANT側も積んだ側の文面そのもの
+ *   無い用件だけ、今日の記録を開く**
+ * - **リンクの有無によらず記録には残す。** 押した先が外のアプリでも、届いた文面と時刻は
+ *   左のメニューの日付から辿れるようにしておく
+ * - **#157から、新しい相談は作らず連続セッションへ追記する。** 1通目はUSER（履歴の先頭が
+ *   USERである必要がある。#79と同じ制約）、2通目はASSISTANTとして `body` をそのまま置く。
+ *   モデルを呼ばずに「秘書からのお知らせ」として自然に見せるための構成で、朝の見通し
+ *   （#79）の「USER=依頼・ASSISTANT=生成物」とは違い、ASSISTANT側も積んだ側の文面そのもの
  * - **1日あたりの上限は設けない。** 同じ用件の二重送信だけを防ぐ
  * - **`showAt` / `expiresAt` は吹き出し側（`pendingNotices()`）と同じ条件で絞る。** ここを
  *   見ないと、まだ早い用件が積まれた瞬間に飛んだり、届く前に意味を失った用件までPushして
@@ -206,26 +207,29 @@ async function notifyUrgentNotice(userId: string, notice: Notice): Promise<void>
   });
   if (existing) return;
 
-  const conversation = await db.conversation.create({
-    data: {
-      userId,
-      title: notice.title,
-      messages: {
-        create: [
-          { role: "USER", content: URGENT_NOTICE_REQUEST },
-          // 同じ時刻だと並び順が不定になる。1秒ずらして返答を後ろに固定する（#79と同じ手当て）。
-          { role: "ASSISTANT", content: notice.body, createdAt: new Date(now.getTime() + 1000) },
-        ],
-      },
-    },
-    select: { id: true },
-  });
+  const conversation = await primaryConversation(userId);
+
+  await db.$transaction([
+    db.message.createMany({
+      data: [
+        { conversationId: conversation.id, role: "USER", content: URGENT_NOTICE_REQUEST, createdAt: now },
+        // 同じ時刻だと並び順が不定になる。1秒ずらして返答を後ろに固定する（#79と同じ手当て）。
+        {
+          conversationId: conversation.id,
+          role: "ASSISTANT",
+          content: notice.body,
+          createdAt: new Date(now.getTime() + 1000),
+        },
+      ],
+    }),
+    db.conversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } }),
+  ]);
 
   const delivered = await sendPushToUser(userId, {
     title: notice.title,
     body: notice.body,
-    // 積む側が付けたリンクがあればそこへ、無ければいま作った相談へ（#137）。
-    url: safeNoticeUrl(notice.url) ?? `/c/${conversation.id}`,
+    // 積む側が付けたリンクがあればそこへ、無ければ今日の記録へ（#137・#157）。
+    url: safeNoticeUrl(notice.url) ?? "/",
     tag: URGENT_NOTICE_KIND,
   });
 

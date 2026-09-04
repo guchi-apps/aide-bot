@@ -10,6 +10,7 @@ import {
   getAnthropicClient,
 } from "@/lib/anthropic";
 import { BRIEFING_MODEL } from "@/lib/chat-model";
+import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { listConnectedServers, toMcpRequestParts } from "@/lib/mcp/connections";
 import { ingestNotice } from "@/lib/notices";
@@ -89,17 +90,6 @@ function jstMinuteOfDay(now: Date): number {
 
   // `hour` は24時制で深夜に "24" を返すことがある環境差があるため丸めておく（`jstParts()` と同じ）。
   return (value("hour") % 24) * 60 + value("minute");
-}
-
-/** 相談のタイトル。「8月26日の見通し」の形。 */
-function briefingConversationTitle(now: Date): string {
-  const formatted = new Intl.DateTimeFormat("ja-JP", {
-    timeZone: "Asia/Tokyo",
-    month: "long",
-    day: "numeric",
-  }).format(now);
-
-  return `${formatted}の見通し`;
 }
 
 /** 1人ぶんの結果。呼び出し元（Route Handler）がそのまま応答に載せる。 */
@@ -243,29 +233,37 @@ async function runFor({ id: userId, briefingHour, briefingMinute }: BriefingUser
     return { userId, status: "silent", delivered: 0 };
   }
 
-  // 通知を押したときに開く相談。**1通目は実際にモデルへ渡した依頼そのもの**にしてある。
-  // 秘書の返答を1通目にすると、続きを話しかけたときに履歴の先頭がassistantになり、
-  // `/api/chat` が先頭を落として渡す（Messages APIはuserから始まる必要がある）ため、
-  // 肝心の見通しがモデルから見えなくなる。
-  const conversation = await db.conversation.create({
-    data: {
-      userId,
-      title: briefingConversationTitle(now),
-      messages: {
-        create: [
-          { role: "USER", content: MORNING_BRIEFING_REQUEST },
-          // 同じ時刻だと並び順が不定になる。1秒ずらして返答を後ろに固定する。
-          { role: "ASSISTANT", content: text, createdAt: new Date(now.getTime() + 1000) },
-        ],
-      },
-    },
-    select: { id: true },
-  });
+  // **#157から、新しい相談は作らず連続セッションへ追記する。** 秘書とのやり取りは1本に
+  // 続いているので、朝の見通しだけ別のスレッドになっていると、続きを話しかけたときに
+  // きのうまでの流れがモデルから見えない。
+  //
+  // **1通目は実際にモデルへ渡した依頼そのもの**にしてある。秘書の返答だけを積むと、
+  // 履歴を読み返したときに秘書が突然しゃべり出したように見える（#79）。
+  const conversation = await primaryConversation(userId);
+
+  await db.$transaction([
+    db.message.createMany({
+      data: [
+        { conversationId: conversation.id, role: "USER", content: MORNING_BRIEFING_REQUEST, createdAt: now },
+        // 同じ時刻だと並び順が不定になる。1秒ずらして返答を後ろに固定する。
+        {
+          conversationId: conversation.id,
+          role: "ASSISTANT",
+          content: text,
+          createdAt: new Date(now.getTime() + 1000),
+        },
+      ],
+    }),
+    // 最後に話した時刻（#101のひとりごとが読む）。発言を足しただけでは動かない。
+    db.conversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } }),
+  ]);
 
   const delivered = await sendPushToUser(userId, {
     title: BRIEFING_TITLE,
+    // 押した先は今日の記録。**追記した先がそこ**なので、開けば見通しがいちばん下にある
+    // （#157で `/c/<ID>` を指さなくなった。古い通知の受け皿は残してある）。
     body: text,
-    url: `/c/${conversation.id}`,
+    url: "/",
     tag: MORNING_BRIEFING_KIND,
   });
 
@@ -286,7 +284,7 @@ async function runFor({ id: userId, briefingHour, briefingMinute }: BriefingUser
       kind: MORNING_BRIEFING_KIND,
       dedupeKey,
       body: text,
-      url: `/c/${conversation.id}`,
+      url: "/",
       expiresAt: new Date(now.getTime() + BRIEFING_NOTICE_LIFETIME_MS),
     });
   } catch (error) {

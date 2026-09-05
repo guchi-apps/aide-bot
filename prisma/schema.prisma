@@ -29,6 +29,14 @@ model User {
   // 利用者の画面とは別のタイミング（応答後のバックグラウンド）で走り、そこで読む必要があるため。
   topicCategories String @default("general,life,tech") @db.VarChar(120)
 
+  /// Notionから取り込んだ「自宅・暮らしの前提」の覚え書き（#167）。nullなら一度も取り込めていない。
+  /// 相談のプロンプトへ毎回そのまま載る（`src/lib/home-profile.ts`）。道具として引かせないのは、
+  /// 呼ぶたびに返事が約9秒遅れるため（#131）。
+  homeProfile String? @db.Text
+  /// 最後に取り込んだ時刻。1日あいていなければ取り込み直さない歯止めに使う。
+  /// **本文がnullでもここは進む**——取り込みを試して見つからなかった回も間隔を空けるため。
+  homeProfileFetchedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

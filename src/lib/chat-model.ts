@@ -56,6 +56,16 @@ export const TOPIC_MODEL = "gpt-5.6-luna";
 export const COMPACT_MODEL = "gpt-5.6-terra";
 
 /**
+ * Notionから「自宅・暮らしの前提」を取り込むモデル（#167）。
+ *
+ * `COMPACT_MODEL` と同じ理由で中位のTerraにしてある。**取り込んだ覚え書きは相談の
+ * プロンプトへ毎回載り、次に取り込み直すまで（最短でも1日）使われ続ける**ので、
+ * 探し損ね・読み違いが1日ぶんそのまま効く。走るのは1日1回＋設定の画面のボタンだけで、
+ * 利用枠への影響も小さい。設定の画面からは選べない（選ぶ主体が居ない場面で走る）。
+ */
+export const HOME_PROFILE_MODEL = "gpt-5.6-terra";
+
+/**
  * `/usage` 画面の単価表。**Anthropic（Claude）の単価だけを載せる。**
  *
  * チャット（#128）とお知らせ選定（#132）はCodexへ移り、ChatGPTのサブスク定額制で動くため

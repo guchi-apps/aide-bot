@@ -1,7 +1,7 @@
-import { CircleAlert, CircleCheck, Plug } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleSlash, Plug } from "lucide-react";
 
 import type { ConnectionView } from "@/lib/mcp/connections";
-import { MCP_PRESETS } from "@/lib/mcp/presets";
+import { MCP_PRESETS, findPreset } from "@/lib/mcp/presets";
 import { cn } from "@/lib/utils";
 
 /**
@@ -83,6 +83,8 @@ export function ConnectionList({ connections, error, connected }: Props) {
                 />
                 <ActionButton action="delete" id={connection.id} label="削除" danger />
               </div>
+
+              <Capabilities url={connection.url} />
             </div>
           ))
         )}
@@ -160,6 +162,43 @@ export function ConnectionList({ connections, error, connected }: Props) {
         </form>
       </div>
     </section>
+  );
+}
+
+/**
+ * その接続で聞けること・いまは取れないこと（#167）。
+ *
+ * **プリセットに無い接続（利用者が自分でURLを入れて繋いだもの）では何も出さない。**
+ * 把握していないものを「できること」として並べると、繋げば何でも聞けるように読める。
+ */
+function Capabilities({ url }: { url: string }) {
+  const preset = findPreset(url);
+  if (!preset || (preset.provides.length === 0 && preset.missing.length === 0)) return null;
+
+  return (
+    <div className="basis-full border-t border-border pt-2.5">
+      {preset.provides.length > 0 && (
+        <ul className="flex flex-col gap-1">
+          {preset.provides.map((item) => (
+            <li key={item} className="flex items-start gap-1.5 text-[0.6875rem] leading-relaxed text-muted">
+              <CircleCheck className="mt-0.5 size-3 shrink-0 text-accent" aria-hidden="true" />
+              <span className="min-w-0">{item}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {preset.missing.length > 0 && (
+        <ul className="mt-1 flex flex-col gap-1">
+          {preset.missing.map((item) => (
+            <li key={item} className="flex items-start gap-1.5 text-[0.6875rem] leading-relaxed text-muted">
+              <CircleSlash className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+              <span className="min-w-0">まだ取れない: {item}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

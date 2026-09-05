@@ -186,6 +186,7 @@ function buildConversationText(
  */
 function buildCodexPrompt(
   style: ReplyStyle,
+  homeProfile: string | null,
   summary: string | null,
   history: { role: "USER" | "ASSISTANT"; content: string; interrupted: boolean }[],
   topics: string,
@@ -199,6 +200,17 @@ function buildCodexPrompt(
 
   return [
     system,
+    // 自宅と暮らしの前提（#167）。**要約より前・体裁の指示の直後に置く。** 取り込み直すのは
+    // 1日1回までなので、ここが変わってキャッシュ（#56）が切れるのもその頻度に収まる。
+    ...(homeProfile === null || homeProfile === ""
+      ? []
+      : [
+          "---",
+          "利用者について分かっていること（利用者のNotionから取り込んだ覚え書き。" +
+            "場所や暮らしの話では、どこの話かを聞き返さずにここを前提にしてよい。" +
+            "取り込んだ時点の内容なので、手続きや金額に関わる判断で使うときは本人に確かめる）:",
+          homeProfile,
+        ]),
     ...(summary === null
       ? []
       : [
@@ -321,6 +333,9 @@ export async function POST(request: Request) {
 
   const prompt = buildCodexPrompt(
     style,
+    // 自宅と暮らしの前提（#167）。`getCurrentUser()` が引いた行にもう載っているので、
+    // ここでDBを引き直さない（相談1往復の待ち時間を増やさない）。
+    user.homeProfile,
     conversation.summary,
     history,
     topics,

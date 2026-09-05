@@ -917,6 +917,13 @@ Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として
   軸に動く（`librsvg` はこの指定を解釈しないので、見た目の確認はブラウザで行う）
 - 音声モードは `mode: "voice"` を送り、`VOICE_STYLE_INSTRUCTION` と `VOICE_MAX_OUTPUT_TOKENS`
   （1200）が効く。**聞くだけの返答は戻って読み直せない**ため、文字のときと同じ上限にしない
+- **入力欄・選択欄の文字を16px未満にしない**（#166）。iOSのSafariは、フォントサイズが16px未満の
+  `input` / `textarea` / `select` へフォーカスすると**画面を自動で拡大する**（拡大したままになり、
+  利用者が指で戻すことになる）。本文は `text-sm`（14px）で揃えているので、素直に書くとこの条件に
+  当たる。`src/app/globals.css` の `@media (pointer: coarse)` で、ホバー・細かいポインタの無い
+  端末（スマホ・iPad）にかぎり `font-size: 16px` を当てて塞いである。**viewportに
+  `maximum-scale=1` / `user-scalable=no` を足して塞がないこと**——指での拡大そのものができなくなり、
+  小さい文字を読む手段を奪う。PC側の見た目は変えていない
 - **localStorageの値をuseStateの初期値やuseEffectで入れない。** ESLintの
   `react-hooks/set-state-in-effect` に掛かり、ハイドレーションもずれる。
   `useSyncExternalStore`（`src/lib/speech/voice-settings.ts`）で外部ストアとして扱う
@@ -1219,6 +1226,14 @@ chrome-headless-shell --headless --disable-gpu --no-sandbox --remote-debugging-p
 ホバー中の見た目はCDPの `CSS.forcePseudoState`（`forcedPseudoClasses: ["hover"]`）で作る。
 `Input.dispatchMouseEvent` で座標へ動かすより確実。**ホバーの無い端末（iPad・スマホ）は
 既定のまま起こせばよい**ので、この2つを起こし分ければ「乗せたときだけ出る」を両側から確かめられる。
+
+**ただし「ホバーが無い」と「ポインタが粗い」は別で、既定では `pointer: coarse` が立たない**（#166）。
+既定のまま起こすと `matchMedia("(hover: hover)").matches` も `matchMedia("(pointer: coarse)").matches`
+も `false` になるため、`@media (pointer: coarse)` だけで書いた出し分けは**既定の起動では一度も
+当たらない**（当たらないまま「効いている」と読み違える）。タッチ端末を再現するときは
+`--blink-settings=primaryHoverType=1,availableHoverTypes=1,primaryPointerType=2,availablePointerTypes=2`
+を明示する（HoverTypeは `1=none` / `2=hover`、PointerTypeは `1=none` / `2=coarse` / `4=fine`）。
+スタイル側も片方だけに頼らず、`@media (hover: none), (pointer: coarse)` のように両方並べること。
 
 **検証用に一時的なページを足して消したら、`rm -rf .next` してから型チェックする。**
 `next dev` が生成する `.next/dev/types/validator.ts` は消したルートを参照したまま残り、

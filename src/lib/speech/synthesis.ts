@@ -16,8 +16,8 @@ import {
   getVoicevoxAudio,
   isVoicevoxPlaybackSupported,
   parseVoicevoxSpeaker,
-  releaseVoicevoxAudio,
   resolveVoicevoxSource,
+  stopVoicevoxAudio,
   type VoicevoxAudio,
   type VoicevoxSource,
   type VoicevoxSpeaker,
@@ -101,9 +101,9 @@ export function primeSpeechSynthesis(): void {
  * **マイクを押した流れの中では呼ばない。** `primeSpeechSynthesis()` が許可を取るために
  * 積んだ発話まで取り消してしまい、iOSで以降の読み上げが無音になる。
  */
-export function releaseAudioForRecognition(): void {
+export function silenceBeforeListening(): void {
   if (isSpeechSynthesisSupported()) window.speechSynthesis.cancel();
-  releaseVoicevoxAudio();
+  stopVoicevoxAudio();
 }
 
 /**
@@ -365,7 +365,7 @@ class VoicevoxReader implements Reader {
     this.fallback?.cancel();
     this.fallback = null;
 
-    releaseVoicevoxAudio();
+    stopVoicevoxAudio();
   }
 
   /**

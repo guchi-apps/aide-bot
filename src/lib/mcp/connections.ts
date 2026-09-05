@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { McpConnection } from "@prisma/client";
 
+import type { CodexMcpServer } from "@/lib/codex";
 import { db } from "@/lib/db";
 import {
   McpOAuthError,
@@ -295,7 +296,37 @@ export async function listConnectedServers(userId: string): Promise<ConnectedSer
 }
 
 /**
- * Messages APIへ渡す2点セットを組み立てる。
+ * Codex（相談。#131）へ渡す形に均す。
+ *
+ * `-c mcp_servers.<slug>.…` の組み立てそのものは `runCodexExec()` の仕事で、ここでは
+ * 「どの接続を・どの道具を止めて」渡すかだけを決める。止め方は `toMcpRequestParts()` と
+ * 同じ名指し（`MCP_PRESETS` の `writeTools`）で、**挙げ漏らした道具はそのまま渡る**（#78）。
+ * 止めた道具の名前は `withheldTools` で返し、システムプロンプトで「渡っていない」と伝える。
+ */
+export function toCodexMcpServers(
+  servers: ConnectedServer[],
+  allowWriteTools: boolean,
+): { mcpServers: CodexMcpServer[]; withheldTools: string[] } {
+  const withheldTools: string[] = [];
+
+  const mcpServers = servers.map((server) => {
+    const withheld = allowWriteTools ? [] : writeToolsFor(server.url);
+    withheldTools.push(...withheld);
+
+    return {
+      name: server.slug,
+      url: server.url,
+      accessToken: server.accessToken,
+      disabledTools: withheld,
+    };
+  });
+
+  return { mcpServers, withheldTools };
+}
+
+/**
+ * Messages APIへ渡す2点セットを組み立てる。**使っているのは朝の見通し（#79）だけになった**
+ * （相談は#131で `toCodexMcpServers()` を使う）。
  *
  * **`mcp_servers` だけでは400になる。** サーバーの定義と、それを指す `mcp_toolset` が
  * `tools` 側にも要る（1サーバーにつきちょうど1つ）。

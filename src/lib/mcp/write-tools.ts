@@ -12,6 +12,9 @@ import type { ReplyStyle } from "@/lib/chat-model";
  * 聞き間違いが取り消せない記録になりうるため、**既定では渡さない**ことにし、渡すかどうかを
  * ここで選べるようにしてある。
  *
+ * **#128でCodexへ移ってから#131までは、この設定は何にも効いていなかった**（相談が接続を
+ * 読み出していなかった）。#131からはCodexの `disabled_tools` として再び効く。
+ *
  * **このモジュールはクライアントコンポーネントからimportする。** Prisma・Anthropic SDK・
  * `next/headers` に触れるものを持ち込まないこと。Cookieの読み出しは
  * `@/lib/mcp/write-tools-server` にある。

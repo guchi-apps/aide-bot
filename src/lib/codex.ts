@@ -21,9 +21,107 @@ import { tmpdir } from "node:os";
  * **使ったトークン数は `turn.completed` の `usage` に載る（#133）。** 取れないのは
  * ChatGPTサブスクの利用枠（5時間ローリング・週次）の消費率だけで、トークン量は取れる。
  * 呼び出し側はこれを `ApiUsage` の1行として残す（`recordApiUsage()`。`@/lib/usage`）。
+ *
+ * **繋いだ外部サービス（MCP）の道具は `-c mcp_servers.<名前>.…` で1回ごとに渡す（#131）。**
+ * `--ignore-user-config` は `~/.codex/config.toml` を読まないだけで、`-c` の明示オーバーライドは
+ * 独立に効く。実測（サブPC・`codex-cli 0.152.1`・2026-09-05）で確かめた点:
+ *
+ * - **`default_tools_approval_mode="approve"` が無いと道具を呼べない。** 非対話の `exec` は
+ *   承認ポリシーが `never` で、道具の呼び出しが「MCP tool call requires approval, but approval
+ *   policy is never」で失敗する
+ * - **`disabled_tools=[…]` で名指しした道具はモデルに見えない**（`tools/list` の結果から落とされ、
+ *   `tools/call` も飛ばない。スタブへの実測で0回）。Issue #131のコメントにある「道具ごとの
+ *   enabled/disabledが無い」は見落としで、`enabled_tools` / `disabled_tools` がある
+ * - **`features.apps=false` を必ず付ける。** 付けないと、利用者のChatGPTアカウントに繋いである
+ *   コネクタが `codex_apps` というMCPサーバーとして勝手に混ざり、**AIDEの全道具（書き込みを
+ *   含む）がどの経路のモデルにも見える。** 承認ポリシーで止まってはいたが、モデルがそちらを
+ *   試して往復を無駄にする（実測）。`-c mcp_servers.codex_apps.enabled=false` は
+ *   「invalid transport」で起動ごと落ちる
+ * - **接続を付けるだけなら所要は伸びない**（付けない3.4〜4.0秒／付けて3.5〜3.9秒。`gpt-5.6-luna`）。
+ *   伸びるのは道具を実際に呼んだ回だけ（＋約9秒＝モデルがもう1回考えるぶん）
+ * - **落ちている接続先があっても相談は止まらない**（`startup_timeout_sec`。実測3.9秒で通常の返答）
+ * - 道具の呼び出しは `item.started` / `item.completed`（`item.type === "mcp_tool_call"`）で届く。
+ *   `arguments`・`result.content[].text`・`error.message`・`status` がそのまま載る
  */
 
 const CODEX_BIN = process.env.CODEX_BIN ?? "codex";
+
+/**
+ * 接続先へ繋ぐまでの上限（秒）。落ちている接続先で相談ごと固まらないための値。
+ * 同一VPS内のAIDEなら1秒かからない。
+ */
+const MCP_STARTUP_TIMEOUT_SEC = 10;
+
+/** 道具1回の上限（秒）。AIDEの道具は数秒で返る。これを超える回は諦めて本文へ進ませる。 */
+const MCP_TOOL_TIMEOUT_SEC = 30;
+
+/**
+ * Codexへ渡すリモートMCPサーバー1つぶん（#131）。
+ *
+ * `name` は `-c mcp_servers.<name>` のキーになるので、英小文字・数字・ハイフンだけ
+ * （`McpConnection.slug` がその形で作られている）。
+ */
+export type CodexMcpServer = {
+  name: string;
+  url: string;
+  accessToken: string;
+  /** モデルに見せない道具の名前（#78の書き込みの道具）。 */
+  disabledTools: string[];
+};
+
+/** 道具の呼び出し1回ぶんの出来事（#131）。`onToolCall` で呼び出し側へ渡す。 */
+export type CodexToolCallEvent = {
+  /** JSONLの `item.id`。始まりと終わりを突き合わせる鍵。 */
+  id: string;
+  /** `CodexMcpServer.name`。 */
+  server: string;
+  tool: string;
+  /** モデルが渡した引数。 */
+  arguments: unknown;
+  status: "started" | "completed" | "failed";
+  /** 接続先が返した内容（`content` のテキストを連結）。始まりの時点・失敗の回は`null`。 */
+  resultText: string | null;
+  /** 失敗の理由。成功の回は`null`。 */
+  errorMessage: string | null;
+};
+
+/** アクセストークンを載せる環境変数の名前。引数にも設定ファイルにも出さないため。 */
+function tokenEnvVar(name: string): string {
+  return `AIDE_BOT_MCP_TOKEN_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+}
+
+/**
+ * `-c mcp_servers.<名前>.…` の並びと、トークンを載せる環境変数を組み立てる。
+ *
+ * 値はTOMLとして読まれる。文字列はJSONの文字列リテラルと同じ書き方で通る（URLと英数字しか
+ * 入れない前提）。
+ */
+function mcpOverrides(servers: CodexMcpServer[]): { args: string[]; env: Record<string, string> } {
+  const args: string[] = [];
+  const env: Record<string, string> = {};
+
+  for (const server of servers) {
+    const key = `mcp_servers.${server.name}`;
+    const envVar = tokenEnvVar(server.name);
+    env[envVar] = server.accessToken;
+
+    args.push(
+      "-c", `${key}.url=${JSON.stringify(server.url)}`,
+      "-c", `${key}.bearer_token_env_var=${JSON.stringify(envVar)}`,
+      "-c", `${key}.default_tools_approval_mode="approve"`,
+      // 複数の道具が要る問いを1回でまとめて呼ばせる。順に呼ぶと道具の数だけ往復が増える。
+      "-c", `${key}.supports_parallel_tool_calls=true`,
+      "-c", `${key}.startup_timeout_sec=${MCP_STARTUP_TIMEOUT_SEC}`,
+      "-c", `${key}.tool_timeout_sec=${MCP_TOOL_TIMEOUT_SEC}`,
+    );
+
+    if (server.disabledTools.length > 0) {
+      args.push("-c", `${key}.disabled_tools=${JSON.stringify(server.disabledTools)}`);
+    }
+  }
+
+  return { args, env };
+}
 
 /**
  * 1回の`codex exec`で使ったトークン数（#133）。
@@ -45,6 +143,14 @@ export type CodexUsage = {
 export type CodexResult = {
   /** 受け取れた返答の全文（`agent_message` を届いた順に連結したもの）。中断・失敗のときは空文字。 */
   text: string;
+  /**
+   * 利用者へ返す本文（#131）。**道具を呼んだ回は、最後の道具より後ろに届いた `agent_message` だけ。**
+   *
+   * 道具を呼ぶ前に「確認します」のような前置きが別の `agent_message` として先に届く（`--search` と
+   * 同じ形）。`text` はそれも連結するので、相談の返答に混ぜると道具の名前が本文に出たり、
+   * 読み上げが前置きから始まったりする。道具を呼ばなかった回は `text` と同じ。
+   */
+  reply: string;
   /**
    * 届いた `agent_message` を1件ずつ持ったもの（#144）。
    *
@@ -69,7 +175,18 @@ export type CodexResult = {
 /** `codex exec --json` が出すJSONLの1行。実際に使う項目だけを緩く宣言する。 */
 type CodexEvent = {
   type: string;
-  item?: { type?: string; text?: string };
+  item?: {
+    id?: string;
+    type?: string;
+    text?: string;
+    // `mcp_tool_call` のとき（#131）。
+    server?: string;
+    tool?: string;
+    arguments?: unknown;
+    result?: { content?: { type?: string; text?: string }[] } | null;
+    error?: { message?: string } | null;
+    status?: string;
+  };
   error?: { message?: string };
   message?: string;
   usage?: {
@@ -96,14 +213,21 @@ type CodexEvent = {
  * - `search` を立てると `--search`（ウェブ検索）を付ける（#144）。**このフラグは `exec` の
  *   サブコマンドではなく `codex` 本体の引数**なので、`exec` より前に置く（`codex exec --help`
  *   には出ず、`codex --help` にだけ出る）。読み取り専用のサンドボックスと両立する（実測）
+ * - `mcpServers` を渡すと、その接続を `-c mcp_servers.…` で付ける（#131。上のモジュールコメント）。
+ *   道具の呼び出しは届いた端から `onToolCall` へ渡す——本文は完了時にしか届かないので、
+ *   「いま調べています」を画面に出せるのはこの経路だけ
+ * - `features.apps=false` は接続の有無によらず常に付ける（上のモジュールコメント）
  */
 export async function runCodexExec(params: {
   model: string;
   prompt: string;
   signal: AbortSignal;
   search?: boolean;
+  mcpServers?: CodexMcpServer[];
+  onToolCall?: (event: CodexToolCallEvent) => void;
 }): Promise<CodexResult> {
-  const { model, prompt, signal, search = false } = params;
+  const { model, prompt, signal, search = false, mcpServers = [], onToolCall } = params;
+  const mcp = mcpOverrides(mcpServers);
 
   return new Promise((resolve) => {
     // `CODEX_BIN` は動的な文字列（環境変数）で、ファイルパスではなくPATH解決されるコマンド名。
@@ -122,15 +246,21 @@ export async function runCodexExec(params: {
         "read-only",
         "--ephemeral",
         "--ignore-user-config",
+        "-c",
+        "features.apps=false",
+        ...mcp.args,
         "-C",
         tmpdir(),
         prompt,
       ],
-      { stdio: ["ignore", "pipe", "pipe"] },
+      // トークンは環境変数で渡す。引数に載せると `ps` や起動ログに出る。
+      { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...mcp.env } },
     );
 
     let text = "";
     const messages: string[] = [];
+    // 最後の道具より後ろに届いた本文（`reply`）。道具が完了するたびに空にする。
+    let replyParts: string[] = [];
     let errorMessage: string | null = null;
     let interrupted = false;
     let settled = false;
@@ -171,6 +301,24 @@ export async function runCodexExec(params: {
         if (event.type === "item.completed" && event.item?.type === "agent_message") {
           text += event.item.text ?? "";
           messages.push(event.item.text ?? "");
+          replyParts.push(event.item.text ?? "");
+        } else if (
+          (event.type === "item.started" || event.type === "item.completed") &&
+          event.item?.type === "mcp_tool_call"
+        ) {
+          const item = event.item;
+          const completed = event.type === "item.completed";
+          if (completed) replyParts = [];
+
+          onToolCall?.({
+            id: item.id ?? "",
+            server: item.server ?? "",
+            tool: item.tool ?? "",
+            arguments: item.arguments,
+            status: !completed ? "started" : item.status === "completed" ? "completed" : "failed",
+            resultText: completed ? toolResultText(item.result) : null,
+            errorMessage: completed ? (item.error?.message ?? null) : null,
+          });
         } else if (event.type === "turn.completed" && event.usage) {
           usage = addUsage(usage, event.usage);
         } else if (event.type === "turn.failed" || event.type === "error") {
@@ -189,6 +337,7 @@ export async function runCodexExec(params: {
       console.error("[aide-bot] codex exec の起動に失敗した", error);
       finish({
         text: "",
+        reply: "",
         messages: [],
         interrupted: false,
         errorMessage: "返答の生成に必要な設定がサーバー側にありません。管理者に連絡してください。",
@@ -198,7 +347,7 @@ export async function runCodexExec(params: {
 
     child.on("close", (code) => {
       if (interrupted) {
-        finish({ text: "", messages: [], interrupted: true, errorMessage: null, usage: null });
+        finish({ text: "", reply: "", messages: [], interrupted: true, errorMessage: null, usage: null });
         return;
       }
 
@@ -207,9 +356,19 @@ export async function runCodexExec(params: {
         errorMessage = "返答の生成に失敗しました。少し待ってからもう一度お試しください。";
       }
 
-      finish({ text, messages, interrupted: false, errorMessage, usage });
+      finish({ text, reply: replyParts.join(""), messages, interrupted: false, errorMessage, usage });
     });
   });
+}
+
+/** `mcp_tool_call` の `result` を、そのまま残せる文字列に均す。`content` が無ければ`null`。 */
+function toolResultText(result: NonNullable<CodexEvent["item"]>["result"]): string | null {
+  if (!result?.content) return null;
+
+  return result.content
+    .filter((block) => typeof block.text === "string")
+    .map((block) => block.text)
+    .join("\n");
 }
 
 /**

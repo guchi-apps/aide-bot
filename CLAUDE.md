@@ -121,7 +121,8 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 動く）へ移した。**朝の見通し（#79）・お知らせ選定（#93）・MCP接続によるデータ取得・使用量
 （`/usage`）の記録は対象外**で、引き続きClaudeを使う段階移行（Issue #128の計画を参照）。
 **その後#132でお知らせ選定もCodexへ移した**（下記「お知らせの選定をCodexへ移した（#132）」）。
-**残っているのは朝の見通しだけ**で、そちらは#131（MCP接続のCodex対応）待ち。
+**残っているのは朝の見通しだけ**で、そちらは#151待ち（MCP接続のCodex対応そのものは#131で
+相談側に入った。下記「外部サービスとの接続（MCP）」）。
 
 - **`turn.completed` の `usage` にトークン数が載る**（#133）。取れないのはChatGPTサブスクの
   利用枠（5時間ローリング・週次）の消費率だけ。`runCodexExec()` はこれを `CodexResult.usage` で
@@ -502,7 +503,8 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
 **候補から1件選んで言い直すのを、Anthropic ClaudeからCodex CLIへ移した**（チャットの#128に続く
 2本目）。プロンプト（`noticeSystemPrompt()`）も返させる形も読み取り（`parseChoice()`）も変えていない。
 **朝の見通し（#79）はまだClaudeのまま**——本文の材料をすべてAIDEのMCP接続から取る設計で、
-Codex側のMCPの扱いが決まる#131より先に移すと届く通知が空になる。
+Codex側のMCPの扱いが決まる前に移すと届く通知が空になる。扱いは#131で決まった（相談側で
+`-c mcp_servers` を渡す形）ので、移すのは#151。
 
 - **`noticeSystemPrompt()` は `src/lib/anthropic.ts` に置いたまま。** ファイル名に反するが、
   ここは秘書としての振る舞い（`SECRETARY_INTRO`）の置き場で、**Anthropic SDKを使うかどうかとは
@@ -721,14 +723,14 @@ Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として
 - **記録の要約（#157のcompact）もこのテーブルへ入る。** `COMPACT_MODEL`（`gpt-5.6-terra`）で
   1行、`conversationId` 付き。定額の節に混ざるだけで金額は付かない（単価表を引かないため）
 - **画面は課金の形で2節に割る**（#133）。「相談・お知らせ（Codex）」は回数とトークン量だけ、
-  「朝の見通し（Claude）」は費用・グラフ・表。**記録が0件の節は見出しごと畳む**ので、#131で
+  「朝の見通し（Claude）」は費用・グラフ・表。**記録が0件の節は見出しごと畳む**ので、#151で
   朝の見通しもCodexへ移ったとき、この画面を作り直さずに済む
 - **利用枠の残量は出せないと画面に明記してある。** `codex exec --json` にも
   `codex doctor --json` にも消費率は載らず、非対話で取る口が無い（`codex-cli 0.151.0` /
   `0.152.1` で確認）。端末で `codex` を起動して `/status` を見る案内に留めている。
   **Codex CLIを上げたときはここを見直す**——取れるようになったら画面に出せる
 - **左メニューの数字は「従量課金ぶんの費用があれば金額、無ければ定額ぶんの回数」**
-  （`monthlyUsageLabel()`。`src/app/(chat)/layout.tsx`）。金額だけを出し続けると、#131の後に
+  （`monthlyUsageLabel()`。`src/app/(chat)/layout.tsx`）。金額だけを出し続けると、#151の後に
   毎日使っているのに「今月 $0.00」が並ぶ
 - **注記の単価は「いま選んでいるモデル」ではなく、その集計に実際に入っているモデル**から
   引く（`UsageSummary.models`）。モデルを切り替えた前後の記録は同じ期間に混ざるため、
@@ -907,16 +909,60 @@ Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として
 ## 外部サービスとの接続（MCP）
 
 秘書が相談の中でAIDEやNotionのデータを引けるようにする仕組み（#46）。**MCPクライアントは
-実装していない。** Messages APIのMCPコネクタがAnthropic側でリモートMCPサーバーへ繋ぎ、
-ツールも向こうで実行する。aide-botが持つのは「どこへ・どの資格情報で繋ぐか」だけ
-（`src/lib/mcp/`・`prisma` の `McpConnection`）。
+実装していない。** 繋ぐのも道具を実行するのもモデルの提供元側——相談（#131から）はCodex CLIが、
+朝の見通し（#79）はMessages APIのMCPコネクタがAnthropic側で、リモートMCPサーバーへ繋ぐ。
+aide-botが持つのは「どこへ・どの資格情報で繋ぐか」だけ（`src/lib/mcp/`・`prisma` の
+`McpConnection`）。認可（OAuth・トークンの更新）は両方で同じ `listConnectedServers()` を通る。
 
-**#128でチャット（書く・話す）の返答生成をCodex CLIへ移してから、この節の仕組みはチャットの
-中では使われていない。** 接続の設定画面（`ConnectionList`・`WriteToolPicker`）とDB
-（`McpConnection`）はそのまま残っており、認可・書き込みの絞り込みロジックも壊していないが、
-`/api/chat` は接続を読み出さず、道具を一切渡さない。Codex CLI自身のMCP対応
-（`~/.codex/config.toml`）は仕組みが異なり、この節の設計を単純に載せ替えられないため、
-対応は別Issueで検討する（Issue #128の計画を参照）。
+**#128でチャットをCodexへ移したときに一度外れ、#131で戻した。** 戻し方は下記
+「Codexから繋ぐ（#131）」。以下の箇条書きのうちMessages API固有のもの（`mcp_toolset`・ベータ指定・
+`max_tokens`・`pause_turn`）は、いまは朝の見通しにだけ当てはまる。
+
+### Codexから繋ぐ（#131）
+
+`/api/chat` は接続を `toCodexMcpServers()` で均し、`runCodexExec()` が `-c mcp_servers.<slug>.url=…` と
+`bearer_token_env_var` で1回ごとに渡す（`src/lib/codex.ts`。**`--ignore-user-config` は
+`~/.codex/config.toml` を読まないだけで、`-c` の明示オーバーライドは独立に効く**）。
+実測はサブPC・`codex-cli 0.152.1`・2026-09-05。
+
+- **`default_tools_approval_mode="approve"` が無いと道具を呼べない。** 非対話の `exec` は承認
+  ポリシーが `never` で、呼び出しが「MCP tool call requires approval, but approval policy is
+  never」で失敗する。付ければ承認なしで通る
+- **道具ごとの絞り込みは `disabled_tools=[…]` でできる。** Issue #131のコメント（#151の調査）に
+  「道具ごとのenabled/disabledが無い」とあるのは見落としで、バイナリの設定キーに `enabled_tools` /
+  `disabled_tools` がある。名指しした道具は `tools/list` の結果から落とされ、モデルには見えず
+  `tools/call` も飛ばない（スタブMCPへの実測で0回）。#78の絞り込み（`MCP_PRESETS` の
+  `writeTools`）はこれで再び効く——**挙げ漏らした道具はそのまま渡る**のは同じ
+- **`features.apps=false` を全 `codex exec` に付ける**（接続の有無によらず）。付けないと、利用者の
+  ChatGPTアカウントに繋いであるコネクタが `codex_apps` というMCPサーバーとして勝手に混ざり、
+  **AIDEの全道具（`aide_zaim_payment` を含む）がどの経路のモデルにも見える。** 承認ポリシーで
+  止まってはいたが、モデルがそちらを試して往復を無駄にする。`-c mcp_servers.codex_apps.enabled=false`
+  は「invalid transport」で起動ごと落ちる
+- **接続を付けるだけなら待ち時間は伸びない**（`gpt-5.6-luna`。付けない3.4〜4.0秒／付けて3.5〜3.9秒。
+  `initialize`＋`tools/list` は同じ回の中で済む）。**伸びるのは道具を実際に呼んだ回だけ**（＋約9秒＝
+  モデルがもう1回考えるぶん）。`supports_parallel_tool_calls=true` で複数の道具を1回にまとめさせ、
+  システムプロンプトで「会話にある情報や事実を要しない話では呼ばない」と釘を刺してある
+  （`connectedServiceRules()`）
+- **落ちている接続先があっても相談は止まらない**（`startup_timeout_sec`。実測3.9秒で通常の返答）。
+  `tool_timeout_sec` も付けてあり、返らない道具で往復ごと固まらない
+- **道具の呼び出しはJSONLの `item.started` / `item.completed`（`item.type === "mcp_tool_call"`）で届く。**
+  `server`（＝slug）・`tool`・`arguments`・`result.content[].text`・`error.message`・`status` が載る。
+  引数は始まりの時点で丸ごと届く（Anthropicの `input_json_delta` のような刻みは無い）。
+  `/api/chat` はこれで「いま調べています」（SSEの `tool`）と書き込みの記録（#81。`ToolCall`・
+  SSEの `record`）を組み立てる。**本文は完了時にしか届かない**ので、生成中に画面へ出せるのはこれだけ
+- **道具を呼ぶ前に「確認します」の前置きが別の `agent_message` として先に届く**（`--search` と同じ形）。
+  `CodexResult.reply` は最後の道具より後ろの本文だけを繋ぐ。`text`（全部の連結）を返答にすると
+  道具の名前が本文に出る・読み上げが前置きから始まる
+- **アクセストークンは子プロセスの環境変数（`AIDE_BOT_MCP_TOKEN_<SLUG>`）で渡す。** 引数に載せると
+  `ps` や起動ログに出る。`--ephemeral` なのでセッションのログにも残らない
+- **手元で確かめるときは、`CODEX_BIN` を偽のスクリプトに差し替える経路と、実Codex＋ローカルの
+  スタブMCPサーバー（httpのlocalhostで繋がる）の2つを使い分ける。** 前者は `-c` の引数・環境変数・
+  記録の配線を、後者はCodex側の実際の振る舞い（承認・絞り込み・イベントの形）を確かめる。
+  スタブのURLは `MCP_PRESETS` に無いので、絞り込みと記録は前者でしか通らない
+- **開発DBのシードは「未来の時刻」の発言を作る**（`0日前の2件目の相談です` が当日の10:00で入り、
+  UTCで動くDBでは午後まで未来）。**その状態で相談を送ると、自分の発言より後ろにダミーの往復が
+  並び、モデルはダミーの返答（「承知しました。要点だけお伝えします。」）を真似る。** 相談の
+  動作確認をするときは、`createdAt > utc_timestamp()` の行を先に消す
 
 - **繋ぎ先は「公式のリモートMCPサーバーがあるものは直接、無いものはAIDE経由」で分ける。**
   Googleカレンダー・GmailはClaudeアプリ側のコネクタで、APIから叩ける公開URLが存在しない。

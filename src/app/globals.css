@@ -632,3 +632,21 @@ body {
     animation: none !important;
   }
 }
+
+/*
+ * iOSのSafariは、フォントサイズが16px未満の入力欄へフォーカスすると画面を自動で拡大する（#166）。
+ * 「書く」の入力欄も設定の選択欄も `text-sm`（14px）なので、触るたびに拡大されていた。
+ * viewportへ `maximum-scale` / `user-scalable=no` を足すと指での拡大そのものができなくなるため、
+ * ホバーの無い・またはポインタが粗い端末（スマホ・iPad）でだけ16pxにして、拡大の条件から外す。
+ * 条件を2つ並べるのは、どちらか片方では取りこぼすため——ヘッドレスChromeの既定は
+ * `hover: none` だが `pointer: coarse` は立たず、外付けのポインタを繋いだ端末はその逆になる。
+ * Tailwindのユーティリティは `@layer utilities` の中にあり、レイヤー外のこの規則が上書きする
+ * （`.chat-md` と同じ効き方）。
+ */
+@media (hover: none), (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}

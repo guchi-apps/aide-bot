@@ -814,6 +814,30 @@ Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として
   （`SILENT_CLOSE_HINT`。#155）——出さないと画面が「続けて話しかけてください。」のまま
   変わらず、マイクが開いているつもりで話し続けることになる。**自分で止めた回・文言付きの
   エラーで終わった回には出さない**（理由がすでに画面にある）
+- **読み上げが終わってからマイクを開くまでに、鳴らしていたものを手放して少し待つ**（#164、
+  `releaseAudioForRecognition()`（`src/lib/speech/synthesis.ts`）と
+  `RESUME_AFTER_SPEECH_MS`（400ms））。iOSでは読み終えても音声の扱いが「再生中」のまま
+  居座ることがあり、間を置かずに開いたマイクへ音が回ってこない——**iPhoneのPWAで
+  「1往復目だけ通り、続けて話しても認識されない」**（#164。読み上げはVOICEVOX＝`<audio>`）の
+  いちばん疑わしい形。内蔵の声（`speechSynthesis.cancel()`）とVOICEVOX（`releaseVoicevoxAudio()`）で
+  持ち主が違うので両方を手放す。**マイクを押した流れの中では呼ばないこと**——
+  `primeSpeechSynthesis()` が許可を取るために積んだ発話まで取り消し、以降の読み上げが無音になる
+- **#155の「実体を使い回す」は、それだけでは直らなかった**（#164）。作り直しと使い回しの
+  どちらが正しいかを手元で確かめる術が無いので、**ふだんは使い回し、何も聞こえないまま
+  閉じた回が続いたときだけ捨てる**（`resetRecognition()`）。捨てる合図は
+  `SILENT_HINT_AFTER`（2回）で、**開き直しの上限（`SILENT_RESTART_LIMIT`）は減らしていない**
+  ——減らすと、返事を聞いてから話し出すまでが長い往復（#67）でマイクが早く閉じる
+- **案内（`SILENT_CLOSE_HINT`）は、開き直しを使い切る前に出す**（#164）。使い切ってからでは
+  1分近く「お話しください…」のまま無反応に見える。**出している間は中央のボタンの役割を
+  「話し終わった」からマイク（「聞き取り直す」）へ戻し、押されたら畳まずに開き直す。**
+  畳むと、案内どおりに押した利用者はもう一度押さないと話せない。**この「案内が出ている」
+  という状態は `hint === SILENT_CLOSE_HINT` で判定する**——別のstateを足すと、消す場所が
+  1つ増えて「案内は出ているのにボタンは畳む役割のまま」というずれが生まれる
+- **聞き取りの節目は記録して声の設定から読めるようにしてある**（#164、`recognitionLog()`）。
+  **iOSの実機でしか起きない不具合を、手元で再現せずに追うための唯一の手掛かり。**
+  「マイクを開いた」が並ぶのに「声が届いた」が一度も無ければ、マイクは開いているのに音が
+  回ってきていない。文言を出さない `no-speech` も記録には残す。途中経過（interim）は入れない
+  ——1回の聞き取りで何十行も積むと肝心の節目が流れる
 - **#157で、この画面はルートを一度もまたがなくなった。** 書き込み先が利用者につき1本の
   連続セッションになり、#67・#155で手当てしていた「新しい相談の1通目で `/c/<ID>` へ移る」
   経路そのものが消えた（`deferNavigation` / `flushNavigation()`・`@/lib/new-conversation` も
@@ -893,6 +917,13 @@ Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として
   軸に動く（`librsvg` はこの指定を解釈しないので、見た目の確認はブラウザで行う）
 - 音声モードは `mode: "voice"` を送り、`VOICE_STYLE_INSTRUCTION` と `VOICE_MAX_OUTPUT_TOKENS`
   （1200）が効く。**聞くだけの返答は戻って読み直せない**ため、文字のときと同じ上限にしない
+- **入力欄・選択欄の文字を16px未満にしない**（#166）。iOSのSafariは、フォントサイズが16px未満の
+  `input` / `textarea` / `select` へフォーカスすると**画面を自動で拡大する**（拡大したままになり、
+  利用者が指で戻すことになる）。本文は `text-sm`（14px）で揃えているので、素直に書くとこの条件に
+  当たる。`src/app/globals.css` の `@media (pointer: coarse)` で、ホバー・細かいポインタの無い
+  端末（スマホ・iPad）にかぎり `font-size: 16px` を当てて塞いである。**viewportに
+  `maximum-scale=1` / `user-scalable=no` を足して塞がないこと**——指での拡大そのものができなくなり、
+  小さい文字を読む手段を奪う。PC側の見た目は変えていない
 - **localStorageの値をuseStateの初期値やuseEffectで入れない。** ESLintの
   `react-hooks/set-state-in-effect` に掛かり、ハイドレーションもずれる。
   `useSyncExternalStore`（`src/lib/speech/voice-settings.ts`）で外部ストアとして扱う
@@ -1196,6 +1227,14 @@ chrome-headless-shell --headless --disable-gpu --no-sandbox --remote-debugging-p
 `Input.dispatchMouseEvent` で座標へ動かすより確実。**ホバーの無い端末（iPad・スマホ）は
 既定のまま起こせばよい**ので、この2つを起こし分ければ「乗せたときだけ出る」を両側から確かめられる。
 
+**ただし「ホバーが無い」と「ポインタが粗い」は別で、既定では `pointer: coarse` が立たない**（#166）。
+既定のまま起こすと `matchMedia("(hover: hover)").matches` も `matchMedia("(pointer: coarse)").matches`
+も `false` になるため、`@media (pointer: coarse)` だけで書いた出し分けは**既定の起動では一度も
+当たらない**（当たらないまま「効いている」と読み違える）。タッチ端末を再現するときは
+`--blink-settings=primaryHoverType=1,availableHoverTypes=1,primaryPointerType=2,availablePointerTypes=2`
+を明示する（HoverTypeは `1=none` / `2=hover`、PointerTypeは `1=none` / `2=coarse` / `4=fine`）。
+スタイル側も片方だけに頼らず、`@media (hover: none), (pointer: coarse)` のように両方並べること。
+
 **検証用に一時的なページを足して消したら、`rm -rf .next` してから型チェックする。**
 `next dev` が生成する `.next/dev/types/validator.ts` は消したルートを参照したまま残り、
 `pnpm typecheck` と `pnpm build:ci` が `TS2307: Cannot find module '../../../src/app/<消した名前>/page.js'`
@@ -1222,6 +1261,11 @@ Supabase の Redirect URLs に、開発で使うオリジンの `/auth/callback`
 - **Next.js 16の `next dev` は同じディレクトリで2つ起動できない**（`Another next dev server is
   already running.` で終了する）。ポートを変えても回避できないので、環境変数を変えて起動し直す
   検証では、先に動いているサーバーを落とす
+- **落とす相手を `lsof -ti :<ポート>` で選ばない**（#164）。`lsof` はそのポートを**listenして
+  いるもの**だけでなく、**繋いでいる側**も返す。ヘッドレスChromeで画面を確かめている最中は
+  そのネットワークプロセスが混ざり、`kill` するとブラウザごと落ちる（実際に落とした）。
+  listenしているものだけを見るには `ss -ltnp | grep <ポート>` を使う。**`pkill` は禁止**
+  （他セッションのClaude Code本体を落とす）ので、PIDを1つずつ確かめて止める
 - **`next start` も `.env.local` を読む。** 本番相当（`NODE_ENV=production`）での無効化を
   確かめるときは、開発用の値が読み込まれていることを `/proc/<pid>/environ` で確認したうえで
   試す。読み込まれていないだけなら「シークレット未設定」側の錠が効いただけで、確認にならない

@@ -368,6 +368,22 @@ export function getVoicevoxAudio(): HTMLAudioElement | null {
   return sharedAudio;
 }
 
+/**
+ * 鳴らし終えた音声を手放す（#164）。
+ *
+ * **要素そのものは捨てない。** `primeVoicevoxAudio()` で許可を通したこの1つを使い回すのが
+ * iOSで鳴らせる前提なので、捨てると次の返答が無音になる。手放すのは再生中の音の方で、
+ * 読み上げが終わってもiOSの音声の扱いが「再生中」のまま居座り、続けて開いたマイクへ音が
+ * 回ってこない——というのが#164でいちばん疑わしい形。要素が無いなら作らずに戻る。
+ */
+export function releaseVoicevoxAudio(): void {
+  if (!sharedAudio) return;
+
+  sharedAudio.pause();
+  sharedAudio.removeAttribute("src");
+  sharedAudio.load();
+}
+
 /** iOSで後から鳴らせるようにする。マイクを押した流れの中で呼ぶ。 */
 export function primeVoicevoxAudio(): void {
   const audio = getVoicevoxAudio();

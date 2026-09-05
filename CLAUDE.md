@@ -893,6 +893,13 @@ Messages APIを1回呼ぶごとにトークン数を `ApiUsage` の1行として
   軸に動く（`librsvg` はこの指定を解釈しないので、見た目の確認はブラウザで行う）
 - 音声モードは `mode: "voice"` を送り、`VOICE_STYLE_INSTRUCTION` と `VOICE_MAX_OUTPUT_TOKENS`
   （1200）が効く。**聞くだけの返答は戻って読み直せない**ため、文字のときと同じ上限にしない
+- **入力欄・選択欄の文字を16px未満にしない**（#166）。iOSのSafariは、フォントサイズが16px未満の
+  `input` / `textarea` / `select` へフォーカスすると**画面を自動で拡大する**（拡大したままになり、
+  利用者が指で戻すことになる）。本文は `text-sm`（14px）で揃えているので、素直に書くとこの条件に
+  当たる。`src/app/globals.css` の `@media (pointer: coarse)` で、ホバー・細かいポインタの無い
+  端末（スマホ・iPad）にかぎり `font-size: 16px` を当てて塞いである。**viewportに
+  `maximum-scale=1` / `user-scalable=no` を足して塞がないこと**——指での拡大そのものができなくなり、
+  小さい文字を読む手段を奪う。PC側の見た目は変えていない
 - **localStorageの値をuseStateの初期値やuseEffectで入れない。** ESLintの
   `react-hooks/set-state-in-effect` に掛かり、ハイドレーションもずれる。
   `useSyncExternalStore`（`src/lib/speech/voice-settings.ts`）で外部ストアとして扱う

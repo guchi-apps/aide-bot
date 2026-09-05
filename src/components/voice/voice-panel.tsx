@@ -23,7 +23,7 @@ import {
   canSpeakWith,
   createReader,
   primeSpeechSynthesis,
-  releaseAudioForRecognition,
+  silenceBeforeListening,
   speakSample,
   watchJapaneseVoices,
 } from "@/lib/speech/synthesis";
@@ -80,20 +80,45 @@ const RESTART_DELAY_MS = 300;
  *
  * iOSでは読み上げが終わっても音声の扱いが「再生中」のまま居座ることがあり、間を置かずに
  * 開いたマイクへ音が回ってこない——iPhoneのPWAで「1往復目だけ通り、続けて話しても
- * 認識されない」の、いちばん疑わしい形。手放し（`releaseAudioForRecognition()`）だけでは
+ * 認識されない」の、いちばん疑わしい形。手放し（`silenceBeforeListening()`）だけでは
  * 切り替えが間に合わないことがあるので、わずかに待ってから開く。
  */
 const RESUME_AFTER_SPEECH_MS = 400;
 
 /**
- * 何も聞こえないまま閉じた回が続いたときに、手を打ち始める回数（#164）。
+ * 何も聞こえないまま閉じた回が続いたときに、案内を出し始める回数（#164）。
  *
- * ここに達したら**聞き取りの実体を作り直し**（`resetRecognition()`）、あわせて画面にも
- * 案内を出す。**開き直しそのものは今までどおり `SILENT_RESTART_LIMIT` 回まで続ける**
- * ——返事を聞いてから話し出すまでに時間がかかる往復（#67）で、マイクが早く閉じるように
- * なっては元も子もない。「まだ聞き取れていない」と伝えるだけにして、待つのはやめない。
+ * **開き直しそのものは今までどおり `SILENT_RESTART_LIMIT` 回まで続ける**——返事を聞いてから
+ * 話し出すまでに時間がかかる往復（#67）で、マイクが早く閉じるようになっては元も子もない。
+ * 「まだ聞き取れていない」と伝えるだけにして、待つのはやめない。
+ *
+ * **ここで聞き取りの実体を作り直してはいけない。** 報告された症状では開き直しのたびに
+ * この条件が真になるため、実質「毎回作り直す」になり、#155が名指しで潰した振る舞いへ
+ * 丸ごと戻る。作り直すのは `onend` すら返らなくなったときだけ（`LISTEN_WATCHDOG_MS`）。
  */
 const SILENT_HINT_AFTER = 2;
+
+/**
+ * 開いた聞き取りが黙り込んだと見なすまでの間（#164）。
+ *
+ * **`onend` が返ってこない場合に備えた唯一の逃げ道。** 開き直し（#67）も案内も
+ * `onEnd` の中からしか動かないので、実体が開いたまま死ぬと**どれも一度も評価されない**
+ * ——画面は「お話しください…」のまま無反応になり、「話し終わった」を押しても
+ * `stop()` が何も起こさず、待機へ戻る手段がなくなる（#164の報告と同じ見え方）。
+ *
+ * 声が届く・文字が届くたびに数え直すので、これは「何の音沙汰も無いまま経った時間」。
+ * 1回の聞き取りは黙っていれば5〜8秒で `no-speech` を返して閉じるため、そこまで待てば
+ * ふつうの往復には掛からない。
+ */
+const LISTEN_WATCHDOG_MS = 15_000;
+
+/**
+ * 「話し終わった」を押してから、`onend` を待つ間（#164）。
+ *
+ * 実体が死んでいると `stop()` を呼んでも何も返らない。押したのに画面が変わらないまま
+ * 取り残されるので、返らなければこちらで畳む。聞き取れていた文はそのまま送る。
+ */
+const STOP_WATCHDOG_MS = 2_000;
 
 /**
  * 何も聞き取れないまま開き直しが続いているときに出す案内（#155・#164）。
@@ -182,6 +207,10 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
   // 無音のまま閉じた聞き取りを開き直すための状態（#67）。
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const silentRestartsRef = useRef(0);
+  // 開いたまま黙り込んだ聞き取りを見張る（#164）。`onend` に頼らない唯一の経路。
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** いま開いている聞き取りを畳む手。見張りと「話し終わった」から呼ぶ（#164）。 */
+  const finishTurnRef = useRef<(stuck: boolean) => void>(() => {});
   /** 利用者の操作で閉じた聞き取りは開き直さない。 */
   const closedByUserRef = useRef(false);
   /** 文言を出して終わった聞き取りは開き直さない（マイクが許可されていない、など）。 */
@@ -217,6 +246,27 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
     restartTimerRef.current = null;
   }, []);
 
+  /** 見張りを解く（#164）。 */
+  const clearWatchdog = useCallback(() => {
+    if (!watchdogRef.current) return;
+    clearTimeout(watchdogRef.current);
+    watchdogRef.current = null;
+  }, []);
+
+  /**
+   * 見張りを掛け直す（#164）。声や文字が届くたびに数え直すので、掛け直しで上書きする。
+   */
+  const armWatchdog = useCallback(
+    (ms: number) => {
+      clearWatchdog();
+      watchdogRef.current = setTimeout(() => {
+        watchdogRef.current = null;
+        finishTurnRef.current(true);
+      }, ms);
+    },
+    [clearWatchdog],
+  );
+
   /**
    * 走っている聞き取りを捨てる（#155）。
    *
@@ -228,11 +278,12 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
    */
   const discardRecognition = useCallback(() => {
     recognitionSessionRef.current += 1;
+    clearWatchdog();
 
     const handle = recognitionRef.current;
     recognitionRef.current = null;
     handle?.abort();
-  }, []);
+  }, [clearWatchdog]);
 
   /** 動いているものを全部止める。画面を離れるときと、利用者が止めたとき。 */
   const stopEverything = useCallback(() => {
@@ -376,17 +427,14 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
     silentRestartsRef.current += 1;
 
     /*
-     * 何も聞こえないまま閉じた回が続いたら、使い回している実体を捨てて開き直す（#164）。
-     * #155で入れた「作り直さない」は、この状況では逆に効かない側へ働く——実体が声を
-     * 拾わなくなっていた場合、同じものを開き直しても結果は変わらない。
+     * 何も聞こえない回が続いたら案内を出す（#164）。開き直しは続けるので画面は
+     * 「お話しください…」のままだが、聞き取れていないことだけは伝わる——出さないと、
+     * 話しても何も起きない画面が1分近く続く。
      *
-     * あわせて案内も出す。開き直しは続けるので画面は「お話しください…」のままだが、
-     * 聞き取れていないことだけは伝わる（出さないと、話しても何も起きない画面が1分近く続く）。
+     * **ここで実体を作り直さないこと。** この条件は報告された症状では毎回真になるため、
+     * 作り直すと#155で潰した振る舞いへ丸ごと戻る（`resetRecognition()` の注記を参照）。
      */
-    if (silentRestartsRef.current >= SILENT_HINT_AFTER) {
-      resetRecognition();
-      setHint(SILENT_CLOSE_HINT);
-    }
+    if (silentRestartsRef.current >= SILENT_HINT_AFTER) setHint(SILENT_CLOSE_HINT);
 
     clearRestartTimer();
     restartTimerRef.current = setTimeout(() => {
@@ -426,18 +474,63 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
       /** この世代の聞き取りからのイベントか。畳んだぶんから遅れて届いたものは捨てる。 */
       const current = () => recognitionSessionRef.current === session;
 
+      /** この回はもう畳んだか。`onend` と見張りの両方から呼ばれるので、二重に畳まない。 */
+      let settled = false;
+
+      /**
+       * 1回の聞き取りを畳む（#164）。
+       *
+       * `stuck` は「`onend` が返ってこないまま見張りに掛かった」という意味。**この経路が
+       * 唯一、実体を作り直してよい場面**——`no-speech` で正しく閉じているうちは実体は
+       * 生きており、そこで作り直すと#155で潰した振る舞いへ戻る。
+       */
+      const finishTurn = (stuck: boolean) => {
+        if (!current() || settled) return;
+        settled = true;
+        clearWatchdog();
+
+        if (stuck) {
+          // 開いたきり黙り込んだ。実体が死んでいると見て捨てる。
+          discardRecognition();
+          resetRecognition();
+        } else {
+          recognitionRef.current = null;
+        }
+
+        setHeard("");
+
+        const text = finalRef.current.trim();
+        finalRef.current = "";
+
+        if (text === "") {
+          if (retryListening()) return;
+
+          // 開き直しを使い切ったときだけ知らせる。利用者が自分で止めたとき・文言付きの
+          // エラーで終わったときは、すでに理由が画面に出ている。
+          if (!closedByUserRef.current && !failedRef.current) setHint(SILENT_CLOSE_HINT);
+          setStatus("idle");
+          return;
+        }
+
+        sendRef.current(text);
+      };
+
       const handle = startRecognition({
         onInterim: (text) => {
           if (!current()) return;
+          // 届いているうちは生きている。見張りを数え直す（#164）。
+          armWatchdog(LISTEN_WATCHDOG_MS);
           setHeard(text);
           if (text !== "") bump();
         },
         onFinal: (text) => {
           if (!current()) return;
+          armWatchdog(LISTEN_WATCHDOG_MS);
           finalRef.current += text;
         },
         onSpeechStart: () => {
           if (!current()) return;
+          armWatchdog(LISTEN_WATCHDOG_MS);
           // 声が届いた時点で開き直しの回数は仕切り直す。話し出すまでが長かっただけの
           // 往復で、次の番の待ち時間まで短くなっていくのを防ぐ。
           silentRestartsRef.current = 0;
@@ -452,24 +545,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
         },
         onEnd: () => {
           if (!current()) return;
-
-          recognitionRef.current = null;
-          setHeard("");
-
-          const text = finalRef.current.trim();
-          finalRef.current = "";
-
-          if (text === "") {
-            if (retryListening()) return;
-
-            // 開き直しを使い切ったときだけ知らせる。利用者が自分で止めたとき・文言付きの
-            // エラーで終わったときは、すでに理由が画面に出ている。
-            if (!closedByUserRef.current && !failedRef.current) setHint(SILENT_CLOSE_HINT);
-            setStatus("idle");
-            return;
-          }
-
-          sendRef.current(text);
+          finishTurn(false);
         },
       });
 
@@ -484,8 +560,11 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
       }
 
       recognitionRef.current = handle;
+      // 開いたきり黙り込んだときの逃げ道を掛ける（#164）。畳む手は「話し終わった」からも使う。
+      finishTurnRef.current = finishTurn;
+      armWatchdog(LISTEN_WATCHDOG_MS);
     },
-    [bump, clearRestartTimer, discardRecognition, retryListening],
+    [armWatchdog, bump, clearRestartTimer, clearWatchdog, discardRecognition, retryListening],
   );
 
   /**
@@ -497,7 +576,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
    * ここで待機へ落とすと、ロボットが一瞬だけ待ちの姿になってから聞き取りへ移る。
    */
   const resumeAfterSpeaking = useCallback(() => {
-    releaseAudioForRecognition();
+    silenceBeforeListening();
     clearRestartTimer();
 
     restartTimerRef.current = setTimeout(() => {
@@ -603,8 +682,14 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
 
       // 開き直す合間（マイクが閉じている数百ミリ秒）に押されることがある。そこで
       // 何もしないと、押したのに開き直してしまう（#67）。
-      if (recognitionRef.current) recognitionRef.current.stop();
-      else setStatus("idle");
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+        // 実体が死んでいると `stop()` は何も返さない。押したのに画面が変わらないまま
+        // 取り残されるので、返らなければこちらで畳む（#164）。
+        armWatchdog(STOP_WATCHDOG_MS);
+      } else {
+        setStatus("idle");
+      }
       return;
     }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { Keyboard, Mic, Play, Repeat, Settings2, Square, Volume2, VolumeX, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { useTalkMode } from "@/components/chat/talk-mode-context";
 import { ToolCallNote } from "@/components/chat/tool-call-note";
@@ -10,7 +10,10 @@ import { useChatStream } from "@/components/chat/use-chat-stream";
 import { dayHeading } from "@/lib/day-key";
 import {
   isSpeechRecognitionSupported,
+  recognitionLog,
+  resetRecognition,
   startRecognition,
+  subscribeRecognitionLog,
   type RecognitionHandle,
 } from "@/lib/speech/recognition";
 import {
@@ -20,6 +23,7 @@ import {
   canSpeakWith,
   createReader,
   primeSpeechSynthesis,
+  releaseAudioForRecognition,
   speakSample,
   watchJapaneseVoices,
 } from "@/lib/speech/synthesis";
@@ -72,13 +76,33 @@ const SILENT_RESTART_LIMIT = 10;
 const RESTART_DELAY_MS = 300;
 
 /**
- * 何も聞き取れないままマイクが閉じたときに出す案内（#155）。
+ * 返答を読み終えてから、マイクを開くまでの間（#164）。
  *
- * `no-speech` は文言を出さない扱い（#67）なので、開き直しを使い切って待機へ戻った回は
- * 画面が「続けて話しかけてください。」のまま変わらない。マイクが開いているつもりで
+ * iOSでは読み上げが終わっても音声の扱いが「再生中」のまま居座ることがあり、間を置かずに
+ * 開いたマイクへ音が回ってこない——iPhoneのPWAで「1往復目だけ通り、続けて話しても
+ * 認識されない」の、いちばん疑わしい形。手放し（`releaseAudioForRecognition()`）だけでは
+ * 切り替えが間に合わないことがあるので、わずかに待ってから開く。
+ */
+const RESUME_AFTER_SPEECH_MS = 400;
+
+/**
+ * 何も聞こえないまま閉じた回が続いたときに、手を打ち始める回数（#164）。
+ *
+ * ここに達したら**聞き取りの実体を作り直し**（`resetRecognition()`）、あわせて画面にも
+ * 案内を出す。**開き直しそのものは今までどおり `SILENT_RESTART_LIMIT` 回まで続ける**
+ * ——返事を聞いてから話し出すまでに時間がかかる往復（#67）で、マイクが早く閉じるように
+ * なっては元も子もない。「まだ聞き取れていない」と伝えるだけにして、待つのはやめない。
+ */
+const SILENT_HINT_AFTER = 2;
+
+/**
+ * 何も聞き取れないまま開き直しが続いているときに出す案内（#155・#164）。
+ *
+ * `no-speech` は文言を出さない扱い（#67）なので、出さなければ画面は「お話しください…」
+ * または「続けて話しかけてください。」のまま1分近く変わらない。マイクが開いているつもりで
  * 話し続けている利用者からは、話しても何も起きない画面にしか見えない。
  */
-const SILENT_CLOSE_HINT = "聞き取れませんでした。マイクを押してから話しかけてください。";
+const SILENT_CLOSE_HINT = "聞き取れていないようです。マイクを押し直してから話しかけてください。";
 
 /**
  * 音声で秘書と対話する画面（#27）。
@@ -126,6 +150,12 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
 
   const settings = useVoiceSettings();
   const supported = useRecognitionSupported();
+  // 聞き取りの節目の記録（#164）。iOSの実機でしか起きない不具合を、画面から報告できるようにする。
+  const recognitionEvents = useSyncExternalStore(
+    subscribeRecognitionLog,
+    recognitionLog,
+    recognitionLog,
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   // 試し聞きの合成待ち。VOICEVOXは数秒かかるので、押しても無反応に見えないようにする（#52）。
@@ -168,6 +198,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
   // 「読み上げ終わり → また聞き取り」と「聞き取り終わり → 送信」で互いを呼ぶため、
   // 実体はrefに置いて参照だけを渡す。
   const beginListeningRef = useRef<(resume?: boolean) => void>(() => {});
+  const resumeAfterSpeakingRef = useRef<() => void>(() => {});
   const sendRef = useRef<(text: string) => void>(() => {});
 
   // 選べる声は端末が非同期に用意する。揃った時点で入れ直す。
@@ -253,7 +284,8 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
               onStart: () => setStatus("speaking"),
               onDrain: () => {
                 readerRef.current = null;
-                if (settingsRef.current.continuous) beginListeningRef.current();
+                // 読み終えた直後に開くと、iOSでは声が届かないことがある（#164）。
+                if (settingsRef.current.continuous) resumeAfterSpeakingRef.current();
                 else setStatus("idle");
               },
               onNotice: setNotice,
@@ -309,7 +341,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
       reader?.cancel();
       readerRef.current = null;
       // 失敗したときに聞き取りへ戻すと、同じ失敗を繰り返しかねない。待機で止める。
-      if (!result.failed && settingsRef.current.continuous) beginListeningRef.current();
+      if (!result.failed && settingsRef.current.continuous) resumeAfterSpeakingRef.current();
       else setStatus("idle");
     },
     [sendMessage],
@@ -342,6 +374,20 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
     if (silentRestartsRef.current >= SILENT_RESTART_LIMIT) return false;
 
     silentRestartsRef.current += 1;
+
+    /*
+     * 何も聞こえないまま閉じた回が続いたら、使い回している実体を捨てて開き直す（#164）。
+     * #155で入れた「作り直さない」は、この状況では逆に効かない側へ働く——実体が声を
+     * 拾わなくなっていた場合、同じものを開き直しても結果は変わらない。
+     *
+     * あわせて案内も出す。開き直しは続けるので画面は「お話しください…」のままだが、
+     * 聞き取れていないことだけは伝わる（出さないと、話しても何も起きない画面が1分近く続く）。
+     */
+    if (silentRestartsRef.current >= SILENT_HINT_AFTER) {
+      resetRecognition();
+      setHint(SILENT_CLOSE_HINT);
+    }
+
     clearRestartTimer();
     restartTimerRef.current = setTimeout(() => {
       restartTimerRef.current = null;
@@ -363,12 +409,16 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
       discardRecognition();
       const session = recognitionSessionRef.current;
 
-      if (!resume) silentRestartsRef.current = 0;
+      if (!resume) {
+        silentRestartsRef.current = 0;
+        // 開き直しの途中では消さない（#164）。出したそばから次の開き直しが消してしまい、
+        // 「聞き取れていないようです」が一度も読めないまま点滅する。
+        setHint(null);
+      }
       closedByUserRef.current = false;
       failedRef.current = false;
 
       setError(null);
-      setHint(null);
       setHeard("");
       finalRef.current = "";
       setStatus("listening");
@@ -391,6 +441,8 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
           // 声が届いた時点で開き直しの回数は仕切り直す。話し出すまでが長かっただけの
           // 往復で、次の番の待ち時間まで短くなっていくのを防ぐ。
           silentRestartsRef.current = 0;
+          // 届いたのだから「聞き取れていないようです」は下げる（#164）。
+          setHint(null);
           bump();
         },
         onError: (message) => {
@@ -436,9 +488,31 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
     [bump, clearRestartTimer, discardRecognition, retryListening],
   );
 
+  /**
+   * 読み終えてからマイクへ譲る（#164）。
+   *
+   * 鳴らしていたものを先に手放し、わずかに待ってから開く。iOSでは読み上げが終わっても
+   * 音声の扱いが「再生中」のまま居座ることがあり、間を置かずに開いたマイクへ音が
+   * 回ってこない。**待っているあいだ状態は「話しています」のままにしてある**——
+   * ここで待機へ落とすと、ロボットが一瞬だけ待ちの姿になってから聞き取りへ移る。
+   */
+  const resumeAfterSpeaking = useCallback(() => {
+    releaseAudioForRecognition();
+    clearRestartTimer();
+
+    restartTimerRef.current = setTimeout(() => {
+      restartTimerRef.current = null;
+      beginListeningRef.current();
+    }, RESUME_AFTER_SPEECH_MS);
+  }, [clearRestartTimer]);
+
   useEffect(() => {
     beginListeningRef.current = beginListening;
   }, [beginListening]);
+
+  useEffect(() => {
+    resumeAfterSpeakingRef.current = resumeAfterSpeaking;
+  }, [resumeAfterSpeaking]);
 
   /** iOSは「画面を触った流れ」で一度鳴らしておかないと、以降が無音になる。 */
   function prime() {
@@ -510,6 +584,19 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
     setSamplePreparing(false);
 
     if (status === "listening") {
+      /*
+       * 何も聞き取れないまま開き直しが続いているあいだは、押されても畳まない（#164）。
+       *
+       * ここで「話し終わった」として待機へ落とすと、案内どおりに押した利用者は
+       * もう一度押してからでないと話せない。実際に聞こえていないのだから、押したら
+       * その場で開き直すのが素直な意味になる。
+       */
+      if (stalled) {
+        resetRecognition();
+        beginListening();
+        return;
+      }
+
       // 聞き取り中は「話し終わった」の合図。確定して送信へ進む。
       closedByUserRef.current = true;
       clearRestartTimer();
@@ -530,8 +617,22 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
   }
 
   const answering = status === "thinking" || status === "preparing" || status === "speaking";
-  const primaryLabel =
-    status === "listening" ? "話し終わった" : answering ? "割り込んで話す" : "話しかける";
+  /**
+   * 聞き取りは開いているのに、何も聞こえないまま開き直しが続いている（#164）。
+   *
+   * 案内（`hint`）そのものを印として使う。別の状態を足すと、消す場所を1つ増やすことになり、
+   * 「案内は出ているのにボタンは畳む役割のまま」というずれが生まれる。
+   */
+  const stalled = status === "listening" && hint === SILENT_CLOSE_HINT;
+  /** 中央のボタンを「話し終わった」（四角）として出すか。聞こえていない間はマイクへ戻す。 */
+  const showStop = status === "listening" && !stalled;
+  const primaryLabel = stalled
+    ? "聞き取り直す"
+    : status === "listening"
+      ? "話し終わった"
+      : answering
+        ? "割り込んで話す"
+        : "話しかける";
   const speakable = canSpeakWith(settings.voiceURI);
   const voicevoxSpeaker = parseVoicevoxSpeaker(settings.voiceURI);
   const engineConfigured = normalizeEngineUrl(settings.engineUrl) !== null;
@@ -696,6 +797,29 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
                 このブラウザは端末の声での読み上げに対応していません。VOICEVOXの声を選ぶと読み上げられます。
               </p>
             )}
+
+            {/*
+              聞き取りの節目の記録（#164）。iPhoneでしか起きない不具合は手元で再現できないため、
+              「マイクを開いた」までは出ているのか・「声が届いた」が一度も無いのかを、その端末の
+              画面から読めるようにしてある。開いた回が並ぶだけで声が届いていなければ、マイクは
+              開いているのに音が回ってきていない。
+            */}
+            {recognitionEvents.length > 0 && (
+              <div className="mt-3 border-t border-border pt-3">
+                <p className="text-xs font-medium">聞き取りの記録</p>
+                <p className="mt-1 text-[0.6875rem] leading-relaxed text-muted">
+                  うまく聞き取れないときに、何が起きていたかを見るための記録です。
+                </p>
+                <ul className="mt-1.5 max-h-32 space-y-0.5 overflow-y-auto text-[0.6875rem] leading-relaxed text-muted">
+                  {recognitionEvents.map((entry, index) => (
+                    <li key={`${entry.at}-${index}`} className="flex gap-2">
+                      <span className="tabular-nums">{entry.at}</span>
+                      <span>{entry.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
 
@@ -830,12 +954,12 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
             disabled={!supported && status !== "listening"}
             className={cn(
               "grid size-[76px] place-items-center rounded-full transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40",
-              status === "listening"
+              showStop
                 ? "border border-border bg-surface text-foreground"
                 : "bg-accent text-accent-foreground shadow-[0_0_0_8px_color-mix(in_oklab,var(--accent)_16%,transparent)]",
             )}
           >
-            {status === "listening" ? (
+            {showStop ? (
               <Square className="size-6 fill-current" aria-hidden="true" />
             ) : (
               <Mic className="size-7" aria-hidden="true" />

@@ -1203,6 +1203,14 @@ chrome-headless-shell --headless --disable-gpu --no-sandbox --remote-debugging-p
 `Input.dispatchMouseEvent` で座標へ動かすより確実。**ホバーの無い端末（iPad・スマホ）は
 既定のまま起こせばよい**ので、この2つを起こし分ければ「乗せたときだけ出る」を両側から確かめられる。
 
+**ただし「ホバーが無い」と「ポインタが粗い」は別で、既定では `pointer: coarse` が立たない**（#166）。
+既定のまま起こすと `matchMedia("(hover: hover)").matches` も `matchMedia("(pointer: coarse)").matches`
+も `false` になるため、`@media (pointer: coarse)` だけで書いた出し分けは**既定の起動では一度も
+当たらない**（当たらないまま「効いている」と読み違える）。タッチ端末を再現するときは
+`--blink-settings=primaryHoverType=1,availableHoverTypes=1,primaryPointerType=2,availablePointerTypes=2`
+を明示する（HoverTypeは `1=none` / `2=hover`、PointerTypeは `1=none` / `2=coarse` / `4=fine`）。
+スタイル側も片方だけに頼らず、`@media (hover: none), (pointer: coarse)` のように両方並べること。
+
 **検証用に一時的なページを足して消したら、`rm -rf .next` してから型チェックする。**
 `next dev` が生成する `.next/dev/types/validator.ts` は消したルートを参照したまま残り、
 `pnpm typecheck` と `pnpm build:ci` が `TS2307: Cannot find module '../../../src/app/<消した名前>/page.js'`

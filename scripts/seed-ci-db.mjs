@@ -359,13 +359,25 @@ const TOPIC_SEEDS = [
 ];
 
 async function main() {
+  // 自宅の情報（#167）。**実際の取り込みはNotionへ繋がないと走らない**ので、開発では
+  // ここで入れたダミーを見て画面と相談のプロンプトを確かめる。実物と同じく箇条書きの
+  // 素の文で、住所は実在しない値にしてある。
+  const homeProfile = [
+    "- 住まい: 〒000-0000 どこか県ダミー市さんぷる町1-2-3 サンプルコーポ101（最寄り駅: ダミー駅）",
+    "- ゴミ: 燃えるゴミは火・金、資源ゴミは水曜",
+    "- 電気とガス: ダミー電力、水道: ダミー市水道局、固定回線: ダミーネット",
+    "- 通勤: 平日はダミー駅から電車で約1時間",
+  ].join("\n");
+
   const user = await db.user.upsert({
     where: { supabaseUserId: CI_BYPASS_SUPABASE_USER_ID },
-    update: {},
+    update: { homeProfile, homeProfileFetchedAt: new Date() },
     create: {
       supabaseUserId: CI_BYPASS_SUPABASE_USER_ID,
       email: "ci-screenshot-bot@example.com",
       name: "開発用ダミーユーザー",
+      homeProfile,
+      homeProfileFetchedAt: new Date(),
     },
   });
 

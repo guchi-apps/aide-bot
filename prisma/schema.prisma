@@ -160,7 +160,8 @@ model McpConnection {
 
   /// 画面に出す名前。
   label String @db.VarChar(60)
-  /// Messages APIへ渡すサーバー名。返答の中で「どのサーバーのツールか」を指す識別子にもなる。
+  /// モデルへ渡すサーバー名（相談ではCodexの `mcp_servers.<slug>`、朝の見通しではMessages APIの
+  /// `mcp_servers[].name`。#131）。返答の中で「どのサーバーのツールか」を指す識別子にもなる。
   slug  String @db.VarChar(40)
   /// MCPサーバーのURL（末尾の `/mcp` まで含む）。
   url   String @db.VarChar(500)

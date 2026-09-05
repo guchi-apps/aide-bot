@@ -4,11 +4,16 @@ import { INTERRUPTED_NOTE, historyWindowSkip, secretarySystemPrompt } from "@/li
 import { getCurrentUser } from "@/lib/auth-user";
 import type { ReplyStyle } from "@/lib/chat-model";
 import { selectedChatModels } from "@/lib/chat-model-server";
-import { runCodexExec } from "@/lib/codex";
+import { runCodexExec, type CodexToolCallEvent } from "@/lib/codex";
 import { compactIfNeeded } from "@/lib/compact";
 import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
 import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
+import { listConnectedServers, toCodexMcpServers, type ConnectedServer } from "@/lib/mcp/connections";
+import { writeToolsFor } from "@/lib/mcp/presets";
+import { writeToolsAllowed } from "@/lib/mcp/write-tools";
+import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
+import { TOOL_CALL_INPUT_LIMIT, TOOL_CALL_OUTPUT_LIMIT, truncateToolText } from "@/lib/tool-call";
 import { topicsForChat } from "@/lib/topics";
 import { recordApiUsage } from "@/lib/usage";
 
@@ -16,7 +21,10 @@ import { recordApiUsage } from "@/lib/usage";
  * 相談（チャット）の返答生成（#128）。
  *
  * **返答の生成元はAnthropic ClaudeからCodex（ChatGPTサブスク経由）に変わった。**
- * MCP接続によるデータ取得と書き込みの道具は、このスコープでは対象外（Issue #128の計画を参照）。
+ * 繋いだ外部サービス（MCP）の道具は#131で戻した——`listConnectedServers()` で引いた接続を
+ * `runCodexExec()` に渡し、Codex自身がリモートMCPへ繋ぐ（`-c mcp_servers.…`。`@/lib/codex`）。
+ * 書き込みの道具の絞り込み（#78）はCodexの `disabled_tools`、記録（#81）はJSONLの
+ * `mcp_tool_call` から取る。**朝の見通し（#79）はまだAnthropic側のMCPコネクタのまま**（#151）。
  *
  * **使用量（`ApiUsage`）の記録は#133で戻した。** Codexはサブスク定額で費用が付かないが、
  * `codex exec --json` の `turn.completed` がトークン数を返すため、`/usage` の「相談・お知らせ」
@@ -45,6 +53,59 @@ const encoder = new TextEncoder();
 
 function sse(event: string, data: unknown): Uint8Array {
   return encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+/**
+ * 書き込みの道具を1回呼んだ記録（#81）。`ToolCall` の1行として残す。
+ *
+ * 残すのは**書き込みだと把握している道具**（`MCP_PRESETS` の `writeTools`）だけ。取得系まで
+ * 残すと、相談のたびに数行ずつ増えて肝心の書き込みが埋もれる。**挙げ漏らした道具は絞り込みと
+ * 同じくここにも残らない**ので、「記録に無い＝書き込んでいない」とは読めない（#78）。
+ *
+ * #131からはCodexのJSONL（`item.started` / `item.completed` の `mcp_tool_call`）から作る。
+ * 引数は始まりの時点で丸ごと届く（Anthropicの `input_json_delta` のような刻みは無い）。
+ */
+type WriteToolCall = {
+  /** JSONLの `item.id`。始まりと終わりを突き合わせる鍵。 */
+  itemId: string;
+  serverSlug: string;
+  serverLabel: string;
+  toolName: string;
+  /** モデルが渡した引数のJSON。 */
+  input: string;
+  /** 結果を受け取る前に打ち切られた往復ではnullのまま残る。 */
+  output: string | null;
+  failed: boolean;
+  /**
+   * 呼んだ時刻。
+   *
+   * 行を作るのは返答を保存した後なので、`createdAt` を既定のnow()に任せると、相談の画面で
+   * 秘書の返答より後ろに並ぶ。呼んだ時点の時刻をここで押さえ、そのまま列へ入れる。
+   */
+  occurredAt: Date;
+};
+
+/** 画面へ流す形（`ChatToolCall`）。DBの行と同じ内容を、保存を待たずに送る。 */
+function toRecordEvent(call: WriteToolCall) {
+  return {
+    id: call.itemId,
+    server: call.serverLabel,
+    tool: call.toolName,
+    input: call.input,
+    output: call.output,
+    failed: call.failed,
+  };
+}
+
+/** 引数をそのまま残せる文字列に均す。JSONにできない値でも「何を渡したか」を捨てない。 */
+function toolInputText(value: unknown): string {
+  let text: string;
+  try {
+    text = value === undefined ? "" : JSON.stringify(value);
+  } catch {
+    text = String(value);
+  }
+  return truncateToolText(text, TOOL_CALL_INPUT_LIMIT);
 }
 
 function fail(message: string, status: number) {
@@ -128,8 +189,12 @@ function buildCodexPrompt(
   summary: string | null,
   history: { role: "USER" | "ASSISTANT"; content: string; interrupted: boolean }[],
   topics: string,
+  connectedLabels: string[],
+  writeToolsWithheld: boolean,
 ): string {
-  const system = secretarySystemPrompt(style);
+  // 繋いでいる接続の名前と「書き込みの道具を止めている」ことを体裁の指示に含める（#46・#78）。
+  // 接続の増減はまれなので、プレフィックスの先頭側が変わることは受け入れる。
+  const system = secretarySystemPrompt(style, connectedLabels, writeToolsWithheld);
   const conversation = buildConversationText(history);
 
   return [
@@ -232,7 +297,36 @@ export async function POST(request: Request) {
   // 仕入れてある話題（#144）。DBを引くだけで、無ければ空文字（プロンプトの形は変わらない）。
   const topics = await topicsForChat(user.id);
 
-  const prompt = buildCodexPrompt(style, conversation.summary, history, topics);
+  // 繋いでいる外部サービス（#46・#131）。読み出しに失敗しても相談そのものは通す。
+  // 繋がっていないぶんは答えられないだけで、送信ごと弾くより実害が小さい。
+  let servers: ConnectedServer[] = [];
+  try {
+    servers = await listConnectedServers(user.id);
+  } catch (error) {
+    console.error("[aide-bot] 接続の読み出しに失敗した", error);
+  }
+
+  // 書き込みの道具を渡すかどうか（#78）。既定は渡さない。モデルの選択と同じくCookieに
+  // 持たせてあり、知らない値は「渡さない」へ落ちる。
+  const allowWriteTools = writeToolsAllowed(await selectedWriteToolPolicy(), style);
+  const { mcpServers, withheldTools } = toCodexMcpServers(servers, allowWriteTools);
+
+  // 道具の実行を画面へ出すとき、利用者に見せるのはslugではなく付けた名前。
+  const labelBySlug = new Map(servers.map((server) => [server.slug, server.label]));
+  // 記録に残す対象（#81）。絞り込みと同じ名前の表を引く——止める側と残す側で表が分かれると、
+  // 片方だけに足したときに「渡っているのに記録されない」道具ができる。
+  const writeToolsBySlug = new Map(
+    servers.map((server) => [server.slug, new Set(writeToolsFor(server.url))]),
+  );
+
+  const prompt = buildCodexPrompt(
+    style,
+    conversation.summary,
+    history,
+    topics,
+    servers.map((server) => server.label),
+    withheldTools.length > 0,
+  );
 
   // 次に割り込んでくるリクエストへ「この生成の後片付けが終わった」と伝えるための錠（#48）。
   // ストリームの外で作るのは、`start` が動くより先にMapへ載せておく必要があるため。
@@ -245,8 +339,55 @@ export async function POST(request: Request) {
   // 保存できた返答。`finally` の中（compactの判定）からも読むため、tryの外で持つ。
   let answer = "";
 
+  // 書き込みの道具を呼んだ記録（#81）。返答の保存が済んでから `ToolCall` へ入れる。
+  const writeCalls = new Map<string, WriteToolCall>();
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      // 相手が既にいない場合、enqueueは例外になる。道具の途中経過は伝える相手がいなければ
+      // 落としてよい（記録は別に残す）。
+      const push = (chunk: Uint8Array) => {
+        try {
+          controller.enqueue(chunk);
+        } catch {
+          // 何もしない
+        }
+      };
+
+      // 道具の呼び出しが届くたび（#131）。本文は完了時にしか届かないので、「いま調べています」を
+      // 出せるのはここだけ。書き込みの道具は記録として持ち、終わった時点で画面へも流す。
+      const onToolCall = (event: CodexToolCallEvent) => {
+        const serverLabel = labelBySlug.get(event.server) ?? event.server;
+        const isWriteTool = writeToolsBySlug.get(event.server)?.has(event.tool) ?? false;
+
+        if (event.status === "started") {
+          push(sse("tool", { server: serverLabel, tool: event.tool }));
+
+          if (isWriteTool && !writeCalls.has(event.id)) {
+            writeCalls.set(event.id, {
+              itemId: event.id,
+              serverSlug: event.server,
+              serverLabel,
+              toolName: event.tool,
+              input: toolInputText(event.arguments),
+              output: null,
+              failed: false,
+              occurredAt: new Date(),
+            });
+          }
+          return;
+        }
+
+        const call = writeCalls.get(event.id);
+        if (!call) return;
+
+        // 結果が届いた。失敗の理由は接続先の返答ではないが、「何が起きたか」として残す。
+        const output = event.resultText ?? event.errorMessage;
+        call.output = output === null ? null : truncateToolText(output, TOOL_CALL_OUTPUT_LIMIT);
+        call.failed = event.status === "failed";
+        push(sse("record", toRecordEvent(call)));
+      };
+
       try {
         // 画面側は相談のIDを持たなくなったが（#157）、イベントの形は変えずに流す。
         controller.enqueue(sse("meta", { conversationId: conversation.id }));
@@ -256,8 +397,15 @@ export async function POST(request: Request) {
         let interrupted = false;
 
         try {
-          const result = await runCodexExec({ model, prompt, signal: request.signal });
-          answer = result.text;
+          const result = await runCodexExec({
+            model,
+            prompt,
+            signal: request.signal,
+            mcpServers,
+            onToolCall,
+          });
+          // 道具を呼んだ回は、道具より後ろに届いた本文だけを返答にする（前置きを混ぜない）。
+          answer = result.reply;
           interrupted = result.interrupted;
           errorMessage = result.errorMessage;
 
@@ -303,6 +451,32 @@ export async function POST(request: Request) {
           } catch (error) {
             console.error("[aide-bot] 返答の保存に失敗した", error);
             errorMessage ??= "返答を保存できませんでした。この内容は再読み込みで消えます。";
+          }
+        }
+
+        // 書き込みの道具を呼んだ記録（#81）。`ApiUsage` と同じく、**失敗しても相談は止めない**
+        // ——記録できないことより、返答が返らないことの方が重い。
+        //
+        // 返答を保存した後に書いているが、並びは崩れない。`createdAt` には呼んだ時点の時刻を
+        // 明示的に入れてあり、画面はその時刻で発言と混ぜて並べる。**結果が届く前に打ち切られた
+        // ぶんも残す**（`output` がnull）——書けていないのではなく、確かめられていない。
+        for (const call of writeCalls.values()) {
+          try {
+            await db.toolCall.create({
+              data: {
+                userId: user.id,
+                conversationId: conversation.id,
+                serverLabel: call.serverLabel,
+                serverSlug: call.serverSlug,
+                toolName: call.toolName,
+                input: call.input,
+                output: call.output,
+                failed: call.failed,
+                createdAt: call.occurredAt,
+              },
+            });
+          } catch (error) {
+            console.error("[aide-bot] 書き込みの記録に失敗した", error);
           }
         }
 

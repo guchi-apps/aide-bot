@@ -16,6 +16,7 @@ import {
   getVoicevoxAudio,
   isVoicevoxPlaybackSupported,
   parseVoicevoxSpeaker,
+  releaseVoicevoxAudio,
   resolveVoicevoxSource,
   type VoicevoxAudio,
   type VoicevoxSource,
@@ -88,6 +89,21 @@ export function primeSpeechSynthesis(): void {
   const utterance = new SpeechSynthesisUtterance(" ");
   utterance.volume = 0;
   window.speechSynthesis.speak(utterance);
+}
+
+/**
+ * 鳴らしていたものを手放して、マイクへ譲る（#164）。
+ *
+ * **読み上げが終わってから聞き取りを開くまでのあいだに必ず通す。** iOSでは、読み終えた後も
+ * 音声の扱いが「再生中」のまま居座り、続けて開いたマイクへ音が回ってこないことがある。
+ * 内蔵の声（`speechSynthesis`）とVOICEVOX（`<audio>`）で持ち主が違うので、両方を手放す。
+ *
+ * **マイクを押した流れの中では呼ばない。** `primeSpeechSynthesis()` が許可を取るために
+ * 積んだ発話まで取り消してしまい、iOSで以降の読み上げが無音になる。
+ */
+export function releaseAudioForRecognition(): void {
+  if (isSpeechSynthesisSupported()) window.speechSynthesis.cancel();
+  releaseVoicevoxAudio();
 }
 
 /**
@@ -349,12 +365,7 @@ class VoicevoxReader implements Reader {
     this.fallback?.cancel();
     this.fallback = null;
 
-    const audio = getVoicevoxAudio();
-    if (audio) {
-      audio.pause();
-      audio.removeAttribute("src");
-      audio.load();
-    }
+    releaseVoicevoxAudio();
   }
 
   /**

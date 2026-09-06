@@ -81,14 +81,18 @@ export const MCP_PRESETS: McpPreset[] = [
     missing: [
       "電車の遅延・乗換（交通のコネクタが未実装。guchi-apps/aide#33）",
       "今日・明日より先の天気、自宅以外の地域の天気",
-      "予定の変更・削除（作成のみ。guchi-apps/aide#243の時点では作成専用）",
+      // guchi-apps/aide#243の時点では新規作成のみ。既存予定の更新・削除に当たる道具は無い。
+      "予定の変更・取り消し（登録は aide_create_event でできる。入れ直しは DaySpan から）",
     ],
     hints: [
       // `aide_schedule` の説明文には「今日の予定は」で呼ぶとあり、`aide_daily_briefing` にも
       // 同じ聞き方が書いてある。どちらを呼ぶかを聞き方ではなく欲しいもので決めさせる。
       "予定・空いている時間・何時なら入れられるかを聞かれたら aide_schedule を呼ぶ。起点の日付（date）と日数（days）を、今日の日付から数えて YYYY-MM-DD で渡す。今日の見通し全体（予定に加えて天気・交通）が欲しいときだけ aide_daily_briefing を呼ぶ",
       "aide_schedule が返す時刻は日本時間の HH:MM なので、時差を足し引きせずそのまま伝える。configured や complete が false のときは「予定が無い」ではなく「取れなかった」と言う",
-      "予定の登録を頼まれたら aide_create_event を呼ぶ。作成できたら返る url を「入れました」の案内に添える。予定の変更・削除はできない（作成専用）ので、頼まれたら DaySpan で直接直してほしいと伝える",
+      // hints は書き込みの許可状態に関わらず常にプロンプトへ入る（既定は書き込みoff）ので、
+      // aide_create_event が渡っていない回でも矛盾しない書き方にする。「渡っていません」の
+      // 一般則自体は connectedServiceRules() の writeToolsWithheld 分岐が別に伝える。
+      "予定の登録を頼まれたら aide_create_event を呼ぶ（道具の一覧に無ければ書き込みが許可されていないので、設定の画面で許可すれば使えると伝える）。作成できたら返る url を「入れました」の案内に添える。予定の変更・取り消しはできない（新規作成専用）ので、頼まれたら DaySpan で直接直してほしいと伝える",
     ],
     // `guchi-apps/aide` のMCP層が出している、あとから取り消せない結果が残る道具。
     // `aide_zaim_payment` は説明文に「この経路から取り消し・修正はできない」と明記されている。

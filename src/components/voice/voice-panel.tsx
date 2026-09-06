@@ -101,6 +101,19 @@ const RESTART_DELAY_MS = 300;
 const RESUME_AFTER_SPEECH_MS = 400;
 
 /**
+ * VOICEVOX（`<audio>` 要素）で読み終えてから、マイクを開くまでの間（#210）。
+ *
+ * #210の実機確認で、**端末の声（`speechSynthesis`）なら2往復目以降も聞き取れるのに、
+ * VOICEVOXだと聞き取れない**という結果になった。違いは鳴らす経路で、`speechSynthesis` は
+ * iOS側の音声セッションを変えないが、`<audio>` の再生はセッションを「再生」へ切り替え、
+ * 止めた後も戻るまでに間がある。400msでは、開いたばかりの聞き取りがその切り替えに
+ * 巻き込まれる形になるので、こちらだけ長く待つ。**待っている間は「話しています」のまま**
+ * （`resumeAfterSpeaking()`）。効いたかどうかは記録の「読み上げを終えた」から
+ * 「マイクを開いた」までの間隔と、その後に「声が届いた」が続くかで読む。
+ */
+const RESUME_AFTER_AUDIO_ELEMENT_MS = 2_500;
+
+/**
  * 何も聞こえないまま閉じた回が続いたときに、案内を出し始める回数（#164）。
  *
  * **開き直しそのものは今までどおり `SILENT_RESTART_LIMIT` 回まで続ける**——返事を聞いてから
@@ -329,7 +342,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
   // 「読み上げ終わり → また聞き取り」と「聞き取り終わり → 送信」で互いを呼ぶため、
   // 実体はrefに置いて参照だけを渡す。
   const beginListeningRef = useRef<(resume?: boolean, reason?: ListenReason) => void>(() => {});
-  const resumeAfterSpeakingRef = useRef<() => void>(() => {});
+  const resumeAfterSpeakingRef = useRef<(afterAudioElement: boolean) => void>(() => {});
   const sendRef = useRef<(text: string) => void>(() => {});
 
   // 選べる声は端末が非同期に用意する。揃った時点で入れ直す。
@@ -472,8 +485,11 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
               onDrain: () => {
                 noteRecognition("読み上げを終えた");
                 readerRef.current = null;
-                // 読み終えた直後に開くと、iOSでは声が届かないことがある（#164）。
-                if (settingsRef.current.continuous) resumeAfterSpeakingRef.current();
+                // 読み終えた直後に開くと、iOSでは声が届かないことがある（#164）。VOICEVOX
+                // （`<audio>`）の後はさらに長く待つ（#210）。端末の声へ落ちた回も同じ扱いに
+                // なるが、その回は `onNotice` の案内が出るので記録と突き合わせられる。
+                if (settingsRef.current.continuous)
+                  resumeAfterSpeakingRef.current(voiceKind === "VOICEVOX");
                 else setStatus("idle");
               },
               onNotice: setNotice,
@@ -529,7 +545,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
       reader?.cancel();
       readerRef.current = null;
       // 失敗したときに聞き取りへ戻すと、同じ失敗を繰り返しかねない。待機で止める。
-      if (!result.failed && settingsRef.current.continuous) resumeAfterSpeakingRef.current();
+      if (!result.failed && settingsRef.current.continuous) resumeAfterSpeakingRef.current(false);
       else setStatus("idle");
     },
     [sendMessage],
@@ -832,18 +848,24 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
    * 回ってこない。**待っているあいだ状態は「話しています」のままにしてある**——
    * ここで待機へ落とすと、ロボットが一瞬だけ待ちの姿になってから聞き取りへ移る。
    */
-  const resumeAfterSpeaking = useCallback(() => {
-    silenceBeforeListening();
-    // 保っている接続もここで手放し、開くまでの間を空ける（#210）。`beginListening()` でも
-    // 手放すが、そちらは `start()` の直前で間が無い。
-    releaseMicStream();
-    clearRestartTimer();
+  const resumeAfterSpeaking = useCallback(
+    (afterAudioElement: boolean) => {
+      silenceBeforeListening();
+      // 保っている接続もここで手放し、開くまでの間を空ける（#210）。`beginListening()` でも
+      // 手放すが、そちらは `start()` の直前で間が無い。
+      releaseMicStream();
+      clearRestartTimer();
 
-    restartTimerRef.current = setTimeout(() => {
-      restartTimerRef.current = null;
-      beginListeningRef.current(false, LISTEN_REASON.afterSpeech);
-    }, RESUME_AFTER_SPEECH_MS);
-  }, [clearRestartTimer]);
+      restartTimerRef.current = setTimeout(
+        () => {
+          restartTimerRef.current = null;
+          beginListeningRef.current(false, LISTEN_REASON.afterSpeech);
+        },
+        afterAudioElement ? RESUME_AFTER_AUDIO_ELEMENT_MS : RESUME_AFTER_SPEECH_MS,
+      );
+    },
+    [clearRestartTimer],
+  );
 
   useEffect(() => {
     beginListeningRef.current = beginListening;

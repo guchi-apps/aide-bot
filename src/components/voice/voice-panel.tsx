@@ -39,6 +39,7 @@ import {
   primeSpeechSynthesis,
   silenceBeforeListening,
   speakSample,
+  speakSilentHandoff,
   watchJapaneseVoices,
 } from "@/lib/speech/synthesis";
 import {
@@ -100,18 +101,17 @@ const RESTART_DELAY_MS = 300;
  */
 const RESUME_AFTER_SPEECH_MS = 400;
 
-/**
- * VOICEVOX（`<audio>` 要素）で読み終えてから、マイクを開くまでの間（#210）。
+/*
+ * VOICEVOX（`<audio>` 要素）で読み終えた後の扱い（#210）。
  *
  * #210の実機確認で、**端末の声（`speechSynthesis`）なら2往復目以降も聞き取れるのに、
- * VOICEVOXだと聞き取れない**という結果になった。違いは鳴らす経路で、`speechSynthesis` は
- * iOS側の音声セッションを変えないが、`<audio>` の再生はセッションを「再生」へ切り替え、
- * 止めた後も戻るまでに間がある。400msでは、開いたばかりの聞き取りがその切り替えに
- * 巻き込まれる形になるので、こちらだけ長く待つ。**待っている間は「話しています」のまま**
- * （`resumeAfterSpeaking()`）。効いたかどうかは記録の「読み上げを終えた」から
- * 「マイクを開いた」までの間隔と、その後に「声が届いた」が続くかで読む。
+ * VOICEVOXだと聞き取れない**という結果になった。違いは鳴らす経路だけ。まず「マイクを開くまでの
+ * 間を2.5秒に伸ばす」を試したが、開いた聞き取りには何も届かないまま（`no-speech` すら無く15秒）
+ * だった——時間では戻らない。次に、**読み終えた後に端末の声を音量0で一言鳴らしてから開く**
+ * （`speakSilentHandoff()`）。端末の声の経路が通る理由が「`speechSynthesis` を鳴らしたこと」に
+ * あるならこれで通り、通らなければ `<audio>` そのものを避ける方向に絞れる。
+ * **待っている間は「話しています」のまま**（`resumeAfterSpeaking()`）。
  */
-const RESUME_AFTER_AUDIO_ELEMENT_MS = 2_500;
 
 /**
  * 何も聞こえないまま閉じた回が続いたときに、案内を出し始める回数（#164）。
@@ -486,8 +486,8 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
                 noteRecognition("読み上げを終えた");
                 readerRef.current = null;
                 // 読み終えた直後に開くと、iOSでは声が届かないことがある（#164）。VOICEVOX
-                // （`<audio>`）の後はさらに長く待つ（#210）。端末の声へ落ちた回も同じ扱いに
-                // なるが、その回は `onNotice` の案内が出るので記録と突き合わせられる。
+                // （`<audio>`）の後は端末の声を空で鳴らしてから開く（#210）。端末の声へ落ちた
+                // 回も同じ扱いになるが、その回は `onNotice` の案内が出るので記録と突き合わせられる。
                 if (settingsRef.current.continuous)
                   resumeAfterSpeakingRef.current(voiceKind === "VOICEVOX");
                 else setStatus("idle");
@@ -856,13 +856,30 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
       releaseMicStream();
       clearRestartTimer();
 
-      restartTimerRef.current = setTimeout(
-        () => {
+      const open = () => {
+        restartTimerRef.current = setTimeout(() => {
           restartTimerRef.current = null;
           beginListeningRef.current(false, LISTEN_REASON.afterSpeech);
-        },
-        afterAudioElement ? RESUME_AFTER_AUDIO_ELEMENT_MS : RESUME_AFTER_SPEECH_MS,
-      );
+        }, RESUME_AFTER_SPEECH_MS);
+      };
+
+      if (!afterAudioElement) {
+        open();
+        return;
+      }
+
+      /*
+       * VOICEVOXの後は、端末の声を音量0で一言鳴らしてから開く（#210。上の注記）。待っている
+       * あいだにマイクが押される（割り込み）・画面を離れることがあるので、世代の印が進んで
+       * いたら開かない——進めるのは `discardRecognition()` で、どちらの経路も通る。
+       */
+      const session = recognitionSessionRef.current;
+      noteRecognition("端末の声を空で鳴らす（VOICEVOXのあと）");
+      void speakSilentHandoff().then(() => {
+        if (recognitionSessionRef.current !== session) return;
+        noteRecognition("端末の声を空で鳴らし終えた");
+        open();
+      });
     },
     [clearRestartTimer],
   );

@@ -127,6 +127,50 @@ export function silenceBeforeListening(): void {
 }
 
 /**
+ * 空で鳴らした端末の声が終わるのを待つ上限（#210）。iOSは `onend` を返さないことがある
+ * （#205）ので、返らなくても先へ進める。
+ */
+const SILENT_HANDOFF_TIMEOUT_MS = 2_000;
+
+/**
+ * 端末の声を音量0で一言だけ鳴らし、終わるまで待つ（#210）。
+ *
+ * **VOICEVOX（`<audio>`）で読み終えた後、マイクを開く前にだけ使う。** iPhoneのホーム画面PWAでは、
+ * `<audio>` で鳴らした後に開いた聞き取りには何も届かない（`no-speech` すら無く15秒黙る）のに、
+ * 端末の声（`speechSynthesis`）で読んだ後なら届く——という実機の記録（#210）から、`speechSynthesis` を
+ * 通すことがiOS側の音声の扱いを聞き取りへ渡せる状態へ戻すのではないか、という仮説を試すもの。
+ * 2.5秒待つだけでは戻らなかった（同じ記録）。
+ *
+ * 空白1文字は実装によっては鳴らさずに終わる（`primeSpeechSynthesis()` の注記）ので、短い1音を
+ * 音量0で渡す。**利用者の操作の外から呼ぶ**が、`primeSpeechSynthesis()` で許可を通した後なら
+ * iOSでも鳴らせる（返答の読み上げと同じ前提）。
+ */
+export function speakSilentHandoff(): Promise<void> {
+  return new Promise((resolve) => {
+    if (!isSpeechSynthesisSupported()) {
+      resolve();
+      return;
+    }
+
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, SILENT_HANDOFF_TIMEOUT_MS);
+
+    const utterance = new SpeechSynthesisUtterance("ん");
+    utterance.lang = "ja-JP";
+    utterance.volume = 0;
+    utterance.onend = finish;
+    utterance.onerror = finish;
+    window.speechSynthesis.speak(utterance);
+  });
+}
+
+/**
  * 読み上げ向けに文字を均す。
  *
  * 音声モードでは記号の少ない返答を求めているが、モデルが見出しや箇条書きを混ぜてくることは

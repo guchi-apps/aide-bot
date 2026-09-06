@@ -1,6 +1,17 @@
 "use client";
 
-import { Keyboard, Mic, Play, Repeat, Settings2, Square, Volume2, VolumeX, X } from "lucide-react";
+import {
+  Copy,
+  Keyboard,
+  Mic,
+  Play,
+  Repeat,
+  Settings2,
+  Square,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { useTalkMode } from "@/components/chat/talk-mode-context";
@@ -8,6 +19,7 @@ import { ToolCallNote } from "@/components/chat/tool-call-note";
 import type { ChatEntry, ChatToolCall } from "@/components/chat/types";
 import { useChatStream } from "@/components/chat/use-chat-stream";
 import { dayHeading } from "@/lib/day-key";
+import { holdMicStream, releaseMicStream } from "@/lib/speech/mic-stream";
 import {
   isSpeechRecognitionSupported,
   recognitionLog,
@@ -188,6 +200,8 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
   // 自前のVOICEVOX ENGINEへの疎通確認（#57）。
   const [engineCheck, setEngineCheck] = useState<EngineCheck | null>(null);
   const [engineChecking, setEngineChecking] = useState(false);
+  // 聞き取りの記録をコピーしたことの合図（#179）。実機の記録をそのまま報告してもらうため。
+  const [logCopied, setLogCopied] = useState(false);
 
   const recognitionRef = useRef<RecognitionHandle | null>(null);
   /**
@@ -296,6 +310,9 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
     sampleRef.current?.cancel();
     sampleRef.current = null;
     setSamplePreparing(false);
+    // 掴んだままのマイクを離す（#179）。もう聞かなくてよくなった合図なので、録音中の印を
+    // 出したままにしない。次にマイクを押せば、その操作の流れで取り直す。
+    releaseMicStream();
     abort();
   }, [abort, clearRestartTimer, discardRecognition]);
 
@@ -599,6 +616,13 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
     // 最初のひと声がそのぶん遅れる（#57）。
     warmVoicevoxSource(settingsRef.current.engineUrl);
 
+    /*
+     * マイクの接続を掴む（#179）。**`primedRef` の外に置く**——読み上げの許可取りと違って
+     * 1回きりではなく、`stopEverything()` で手放したぶんをここで取り直す。押した流れの中で
+     * 呼ぶ必要があるので、`beginListening()` の側ではなくここに置いてある。
+     */
+    if (settingsRef.current.holdMic) holdMicStream();
+
     if (primedRef.current) return;
     primeSpeechSynthesis();
     primeVoicevoxAudio();
@@ -617,6 +641,24 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
       onDone: () => setSamplePreparing(false),
       onNotice: setNotice,
     });
+  }
+
+  /**
+   * 聞き取りの記録を丸ごとコピーする（#179）。
+   *
+   * この記録はiPhoneでしか起きない不具合を追うための唯一の手掛かりなのに、読み上げるか
+   * 書き写すしか報告する手が無かった。失敗しても黙って戻す——記録そのものは画面から読める。
+   */
+  async function onCopyLog() {
+    const text = recognitionEvents.map((entry) => `${entry.at} ${entry.text}`).join("\n");
+
+    try {
+      await navigator.clipboard.writeText(text);
+      setLogCopied(true);
+      setTimeout(() => setLogCopied(false), 2_000);
+    } catch {
+      // クリップボードが使えない端末・文脈がある。
+    }
   }
 
   /** 入力したENGINEのURLへ実際に届くかを確かめる。 */
@@ -736,7 +778,14 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
         </button>
 
         {settingsOpen && (
-          <div className="absolute right-3 top-14 z-20 w-[min(320px,calc(100%-1.5rem))] rounded-2xl border border-border bg-surface p-4 shadow-xl md:right-6 md:top-16">
+          /*
+            縦に長くなったぶんはパネルの中でスクロールさせる（#179）。高さの上限を置かずに
+            いた結果、VOICEVOXの声を選んでいるiPhoneでは下端（＝聞き取りの記録）が画面外へ
+            出て**一度も読めなかった**——#164で入れた唯一の手掛かりが使えていなかった。
+            上限は画面ではなくこの入れ物（`relative` な親）を基準にする。上の余白（`top-14`）と
+            下に残す1remを引けば、ヘッダーの高さを当てにせずに収まる。
+          */
+          <div className="absolute right-3 top-14 z-20 max-h-[calc(100%-4.5rem)] w-[min(320px,calc(100%-1.5rem))] overflow-y-auto overscroll-contain rounded-2xl border border-border bg-surface p-4 shadow-xl md:right-6 md:top-16 md:max-h-[calc(100%-5rem)]">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-medium">声の設定</h2>
               <button
@@ -768,6 +817,30 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
                 className="size-4 accent-accent"
               />
             </label>
+
+            {/*
+              iPhoneのホーム画面PWAで、読み上げのあとにマイクが音を拾わなくなる症状の対策
+              （#179）。効いたかどうかは手元で確かめられないので、その場で切り戻せるように
+              画面へ出してある。押した流れの中で取り直す必要があるため、ここで直接呼ぶ。
+            */}
+            <label className="flex items-center justify-between gap-3 py-2 text-sm">
+              マイクの接続を保つ
+              <input
+                type="checkbox"
+                checked={settings.holdMic}
+                onChange={(event) => {
+                  const holdMic = event.target.checked;
+                  updateVoiceSettings({ holdMic });
+                  if (holdMic) holdMicStream();
+                  else releaseMicStream();
+                }}
+                className="size-4 accent-accent"
+              />
+            </label>
+            <p className="-mt-1 mb-1 text-xs leading-relaxed text-muted">
+              iPhoneでホーム画面から開いたとき、返事のあとにマイクが反応しなくなる場合は入にして
+              ください。話しかけているあいだ、マイクをつないだままにします。
+            </p>
 
             <label className="flex flex-col gap-1.5 py-2 text-sm">
               声
@@ -891,7 +964,18 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
             */}
             {recognitionEvents.length > 0 && (
               <div className="mt-3 border-t border-border pt-3">
-                <p className="text-xs font-medium">聞き取りの記録</p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-medium">聞き取りの記録</p>
+                  {/* 実機の記録をそのまま報告できるようにする（#179）。 */}
+                  <button
+                    type="button"
+                    onClick={() => void onCopyLog()}
+                    className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-rail-active"
+                  >
+                    <Copy className="size-3" aria-hidden="true" />
+                    {logCopied ? "コピーしました" : "コピー"}
+                  </button>
+                </div>
                 <p className="mt-1 text-[0.6875rem] leading-relaxed text-muted">
                   うまく聞き取れないときに、何が起きていたかを見るための記録です。
                 </p>

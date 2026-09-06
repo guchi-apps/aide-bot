@@ -1,4 +1,3 @@
-import type Anthropic from "@anthropic-ai/sdk";
 import type { McpConnection } from "@prisma/client";
 
 import type { CodexMcpServer } from "@/lib/codex";
@@ -296,11 +295,14 @@ export async function listConnectedServers(userId: string): Promise<ConnectedSer
 }
 
 /**
- * Codex（相談。#131）へ渡す形に均す。
+ * Codexへ渡す形に均す（相談は#131、朝の見通し・自宅の前提は#183・#167）。
  *
  * `-c mcp_servers.<slug>.…` の組み立てそのものは `runCodexExec()` の仕事で、ここでは
- * 「どの接続を・どの道具を止めて」渡すかだけを決める。止め方は `toMcpRequestParts()` と
- * 同じ名指し（`MCP_PRESETS` の `writeTools`）で、**挙げ漏らした道具はそのまま渡る**（#78）。
+ * 「どの接続を・どの道具を止めて」渡すかだけを決める。止め方は名指し（`MCP_PRESETS` の
+ * `writeTools`）で、**挙げ漏らした道具はそのまま渡る**（#78）。
+ *
+ * **#183で、繋ぎ先を組み立てる口はこれ1つになった**（朝の見通しもCodexへ移り、Messages API用の
+ * `toMcpRequestParts()` を消した）。
  * 止めた道具の名前は `withheldTools` で返し、システムプロンプトで「渡っていない」と伝える。
  */
 export function toCodexMcpServers(
@@ -322,61 +324,4 @@ export function toCodexMcpServers(
   });
 
   return { mcpServers, withheldTools };
-}
-
-/**
- * Messages APIへ渡す2点セットを組み立てる。**使っているのは朝の見通し（#79）だけになった**
- * （相談は#131で `toCodexMcpServers()` を使う）。
- *
- * **`mcp_servers` だけでは400になる。** サーバーの定義と、それを指す `mcp_toolset` が
- * `tools` 側にも要る（1サーバーにつきちょうど1つ）。
- *
- * `allowWriteTools` が偽のときは、把握している書き込みの道具を `configs` で止める（#78）。
- * **`mcp-client-2025-11-20` に `allowed_tools` は無い。** 絞り込みは
- * 「既定は全部有効（`default_config`）＋道具ごとの上書き（`configs`）」という形で、
- * 名指しした道具だけを `enabled: false` にできる。挙げ漏らした道具はそのまま渡る。
- *
- * 止めた道具の名前は `withheldTools` で返す。システムプロンプト側で「いまは書き込みの
- * 道具が渡っていない」と伝えるのに使う——伝えないと、渡っていないことに気付かないまま
- * 「登録しておきました」と答えてしまう。
- */
-export function toMcpRequestParts(
-  servers: ConnectedServer[],
-  allowWriteTools: boolean,
-): {
-  mcpServers: Anthropic.Beta.BetaRequestMCPServerURLDefinition[];
-  tools: Anthropic.Beta.BetaMCPToolset[];
-  withheldTools: string[];
-} {
-  const withheldTools: string[] = [];
-
-  const tools = servers.map((server) => {
-    // 並びは `MCP_PRESETS` の記述順のまま。プロンプトキャッシュは `tools` を含む前方一致で
-    // 効くため、往復ごとにキーの順が変わると、そこから後ろが全部書き直しになる（#56）。
-    const withheld = allowWriteTools ? [] : writeToolsFor(server.url);
-    withheldTools.push(...withheld);
-
-    return {
-      type: "mcp_toolset" as const,
-      mcp_server_name: server.slug,
-      ...(withheld.length > 0
-        ? {
-            configs: Object.fromEntries(
-              withheld.map((name) => [name, { enabled: false }] as const),
-            ),
-          }
-        : {}),
-    };
-  });
-
-  return {
-    mcpServers: servers.map((server) => ({
-      type: "url" as const,
-      name: server.slug,
-      url: server.url,
-      authorization_token: server.accessToken,
-    })),
-    tools,
-    withheldTools,
-  };
 }

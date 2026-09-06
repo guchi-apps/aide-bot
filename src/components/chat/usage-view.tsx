@@ -35,13 +35,13 @@ type Props = {
 /**
  * 使用量の画面（#51・#133）。
  *
- * **課金の形で2節に割る。** Codex（ChatGPTのサブスク定額）で動く相談・お知らせ選定は
- * 「どれだけ使ったか」だけ、Anthropic（従量課金）で動く朝の見通しは今までどおり
- * 「いくら掛かったか」を出す。1つの金額へ足し込むと、定額のはずの経路に費用が付いて見える。
+ * **課金の形で2節に割る。** Codex（ChatGPTのサブスク定額）で動く経路は「どれだけ使ったか」
+ * だけ、Anthropic（従量課金）ぶんは「いくら掛かったか」を出す。1つの金額へ足し込むと、
+ * 定額のはずの経路に費用が付いて見える。
  *
- * **記録が1件も無い節は見出しごと畳む。** #131で朝の見通しもCodexへ移ると従量課金ぶんは
- * 増えなくなり、いずれ累計も0になる。そのとき「$0.00」の節が居座らないようにしてある
- * ——この画面を作り直さずに済ませるための造り。
+ * **#183で全経路がCodexへ移り、従量課金の節に新しい記録は積まれなくなった。** 残っているのは
+ * 移行前の記録だけで、累計から外れれば節ごと消える——**記録が1件も無い節は見出しごと畳む**
+ * 造りにしてあるので、この画面を作り直す必要は無い。
  *
  * サーバーコンポーネントのまま置いている。数字を見るだけで操作が無く、クライアントにすると
  * `@/lib/usage`（Prismaを引き込む）がバンドルへ入るため。
@@ -63,7 +63,7 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
         {hasSubscription && (
           <section className="flex flex-col gap-3">
             <BandHead
-              title="相談・お知らせ"
+              title="相談・お知らせ・朝の見通し"
               source="Codex（GPT-5.6）"
               badge="サブスク定額 ・ 費用なし"
             />
@@ -97,7 +97,7 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
 
         {hasMetered && (
           <section className="flex flex-col gap-3">
-            <BandHead title="朝の見通し" source="Claude" badge="従量課金" accented />
+            <BandHead title="移行前の記録" source="Claude" badge="従量課金" accented />
 
             <div className="grid gap-2.5 md:grid-cols-3 md:gap-3">
               <MoneyCard label={`今月（${monthLabel}）`} summary={month.metered} highlighted />
@@ -183,8 +183,12 @@ export function UsageView({ today, month, total, daily, tableDays, monthLabel, c
               {pricingNote(total.metered.models)}
               円は1ドル={USD_JPY_RATE}円で換算した参考値です。
               「入力トークン」には、同じ内容を送り直さずに済ませたキャッシュ読みのぶんも
-              含みます。<Code>pause_turn</Code> で頼み直した回は、その回数ぶん行が増えます。
-              相談がCodexへ移る前（#128より古い記録）のぶんも、単価が付くためこの節に入っています。
+              含みます。
+              <b className="font-medium text-foreground">
+                この節に新しい記録が積まれることはもうありません。
+              </b>
+              朝の見通しもCodexへ移り、Anthropicを呼ぶ経路が無くなったためです。ここに出ているのは
+              移行前に残った記録で、日が経つほど「今日」「今月」から外れていきます。
             </p>
           </section>
         )}

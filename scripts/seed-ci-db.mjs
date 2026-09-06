@@ -26,8 +26,9 @@ const CI_BYPASS_SUPABASE_USER_ID = "ci-screenshot-bot";
 const USAGE_MODELS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
 const USAGE_MODEL = USAGE_MODELS[0];
 
-// 朝の見通し（#79）のモデル。**いま従量課金の節に入るのはこれだけ**（src/lib/chat-model.ts の
-// BRIEFING_MODEL と揃える）。片方だけ変えると、画面の節が空になって気付けない。
+// 従量課金の節（`/usage`）に入るダミー。**#183で朝の見通しもCodexへ移ったので、これは
+// 「移行前に残った記録」を再現するためだけの行**（BRIEFING_MODEL とは揃えない。揃えると
+// 従量課金の節が常に空になり、その節の表示が壊れていても画面から気付けない）。
 const BRIEFING_USAGE_MODEL = "claude-haiku-4-5";
 
 /**

@@ -89,6 +89,18 @@ export function holdMicStream(): void {
   );
 }
 
+/**
+ * いま接続を保っているか（#205）。
+ *
+ * **記録に「マイクを開いた時点で接続を保っていたか」を残すために足した。** #197は「掴んだ
+ * 接続が聞き取りと録音を取り合っているのではないか」を疑って既定を切にしたが、記録からは
+ * その回に保っていたかどうかが読めない——`holdMicStream()` は保っていればそのまま戻る
+ * （＝何も記録しない）ので、「保った」の行が出るのは取り直した回だけになる。
+ */
+export function isMicStreamHeld(): boolean {
+  return held !== null;
+}
+
 /** 保っている接続を手放す。画面を離れるとき・設定を切ったとき。 */
 export function releaseMicStream(): void {
   generation += 1;

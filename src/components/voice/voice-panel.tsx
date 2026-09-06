@@ -19,9 +19,10 @@ import { ToolCallNote } from "@/components/chat/tool-call-note";
 import type { ChatEntry, ChatToolCall } from "@/components/chat/types";
 import { useChatStream } from "@/components/chat/use-chat-stream";
 import { dayHeading } from "@/lib/day-key";
-import { holdMicStream, releaseMicStream } from "@/lib/speech/mic-stream";
+import { holdMicStream, isMicStreamHeld, releaseMicStream } from "@/lib/speech/mic-stream";
 import {
   isSpeechRecognitionSupported,
+  noteRecognition,
   RECOGNITION_ABORTED,
   recognitionLog,
   resetRecognition,
@@ -44,6 +45,7 @@ import {
   updateVoiceSettings,
   useRecognitionSupported,
   useVoiceSettings,
+  voiceSettingsSnapshot,
 } from "@/lib/speech/voice-settings";
 import {
   VOICEVOX_SPEAKERS,
@@ -183,6 +185,36 @@ const ABORTED_HINT =
   "端末が聞き取りを中断しました。アプリをいったん閉じて開き直すか、Safariのタブで開いてお試しください。";
 
 /**
+ * 聞き取りを開いた理由（#205）。記録の「マイクを開いた」に括弧で添える。
+ *
+ * **同じ「マイクを開いた」でも、押して開いた回と自動で開いた回では前提がまるで違う。**
+ * 押した回は利用者の操作の流れの中（`prime()` を通っており、端末から見ても操作の直後）で、
+ * 自動で開いた回はその外。#205で報告された記録では中断されたのは自動で開いた回だけだったが、
+ * 行だけを見てもそれが読み取れなかった。
+ */
+const LISTEN_REASON = {
+  pressed: "押した",
+  afterSpeech: "読み上げのあと",
+  interrupt: "割り込み",
+  silentRetry: "開き直し",
+  afterAbort: "中断のあと",
+} as const;
+
+type ListenReason = (typeof LISTEN_REASON)[keyof typeof LISTEN_REASON];
+
+/**
+ * ホーム画面のPWA（standalone）として開いているか（#205）。
+ *
+ * iOSのSafariは `display-mode: standalone` を返さない世代があるため、非標準の
+ * `navigator.standalone`（型は標準libに無い）も見る。
+ */
+function isStandalone(): boolean {
+  if (typeof window === "undefined") return false;
+  const legacy = (navigator as Navigator & { standalone?: boolean }).standalone === true;
+  return legacy || window.matchMedia("(display-mode: standalone)").matches;
+}
+
+/**
  * 音声で秘書と対話する画面（#27）。
  *
  * 聞き取りも読み上げもブラウザ内蔵の Web Speech API で行い、返答の生成は「書く」と同じ
@@ -296,12 +328,27 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
 
   // 「読み上げ終わり → また聞き取り」と「聞き取り終わり → 送信」で互いを呼ぶため、
   // 実体はrefに置いて参照だけを渡す。
-  const beginListeningRef = useRef<(resume?: boolean) => void>(() => {});
+  const beginListeningRef = useRef<(resume?: boolean, reason?: ListenReason) => void>(() => {});
   const resumeAfterSpeakingRef = useRef<() => void>(() => {});
   const sendRef = useRef<(text: string) => void>(() => {});
 
   // 選べる声は端末が非同期に用意する。揃った時点で入れ直す。
   useEffect(() => watchJapaneseVoices(setVoices), []);
+
+  /*
+   * 記録の1行目に前提を残す（#205）。
+   *
+   * **この画面の症状はホーム画面のPWAでしか出ない**（同じiPhoneでもSafariのタブでは続けて
+   * 話せる。#179の切り分け）のに、報告された記録からはどちらで開いたのかも、「マイクの接続を
+   * 保つ」が入だったのかも読めなかった。開いた時点で1行だけ残しておけば、貼られた記録が
+   * そのまま切り分けの材料になる。
+   */
+  useEffect(() => {
+    const where = isStandalone() ? "ホーム画面のPWA" : "ブラウザのタブ";
+    // `settingsRef` はハイドレーションのあいだ既定値を指す。保存されている値を直接読む。
+    const hold = voiceSettingsSnapshot().holdMicOptIn ? "入" : "切";
+    noteRecognition(`画面を開いた（${where}・接続を保つ:${hold}）`);
+  }, []);
 
   const bump = useCallback(() => {
     setReacting(true);
@@ -512,7 +559,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
     clearRestartTimer();
     restartTimerRef.current = setTimeout(() => {
       restartTimerRef.current = null;
-      beginListeningRef.current(true);
+      beginListeningRef.current(true, LISTEN_REASON.silentRetry);
     }, RESTART_DELAY_MS);
 
     return true;
@@ -537,6 +584,17 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
     if (!isSpeechRecognitionSupported()) return false;
     if (abortedRef.current > ABORTED_RESTART_LIMIT) return false;
 
+    /*
+     * 掴んだままのマイクの接続を手放してから開き直す（#205）。
+     *
+     * #205で報告された記録では、**中断された往復は接続を保ったまま**だった（保ったのは
+     * その前に押した回で、以後どこも手放していない）。#197が疑った「掴んだ接続と聞き取りが
+     * 取り合っている」と整合するので、中断されたときだけは手放して試す。**中断はすでに
+     * 失敗している経路**なので、これで悪くなる余地は無い——#179の対策が効いていたとしても、
+     * その回はすでに効いていない。設定（`holdMicOptIn`）が切なら何も起きない。
+     */
+    releaseMicStream();
+
     // 作り直しはマウント単位で打ち止めにする。使い切っても開き直しはする——ここで戻すと、
     // 押し直しても待機のままで、利用者からは何も起きていないように見える。
     if (abortedResetsRef.current < ABORTED_RESET_LIMIT) {
@@ -547,7 +605,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
     clearRestartTimer();
     restartTimerRef.current = setTimeout(() => {
       restartTimerRef.current = null;
-      beginListeningRef.current(true);
+      beginListeningRef.current(true, LISTEN_REASON.afterAbort);
     }, ABORTED_RESTART_DELAY_MS);
 
     return true;
@@ -558,7 +616,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
    * このときだけ開き直しの回数を持ち越す（`false` なら数え直す）。
    */
   const beginListening = useCallback(
-    (resume = false) => {
+    (resume = false, reason: ListenReason = LISTEN_REASON.pressed) => {
       clearRestartTimer();
       // 走っているものがあれば畳んでから開き直す。持っているだけで戻ると、`onend` が
       // 返らなかった1回のせいでマイクが二度と開かなくなる（#155）。
@@ -641,54 +699,59 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
         sendRef.current(text);
       };
 
-      const handle = startRecognition({
-        onInterim: (text) => {
-          if (!current()) return;
-          // 届いているうちは生きている。見張りを数え直す（#164）。
-          armWatchdog(LISTEN_WATCHDOG_MS);
-          setHeard(text);
-          if (text !== "") bump();
-        },
-        onFinal: (text) => {
-          if (!current()) return;
-          armWatchdog(LISTEN_WATCHDOG_MS);
-          finalRef.current += text;
-        },
-        onSpeechStart: () => {
-          if (!current()) return;
-          armWatchdog(LISTEN_WATCHDOG_MS);
-          // 声が届いた時点で開き直しの回数は仕切り直す。話し出すまでが長かっただけの
-          // 往復で、次の番の待ち時間まで短くなっていくのを防ぐ。
-          silentRestartsRef.current = 0;
-          abortedRef.current = 0;
-          // 届いたのだから「聞き取れていないようです」は下げる（#164）。
-          setHint(null);
-          bump();
-        },
-        onError: (message, code) => {
-          if (!current()) return;
+      const handle = startRecognition(
+        {
+          onInterim: (text) => {
+            if (!current()) return;
+            // 届いているうちは生きている。見張りを数え直す（#164）。
+            armWatchdog(LISTEN_WATCHDOG_MS);
+            setHeard(text);
+            if (text !== "") bump();
+          },
+          onFinal: (text) => {
+            if (!current()) return;
+            armWatchdog(LISTEN_WATCHDOG_MS);
+            finalRef.current += text;
+          },
+          onSpeechStart: () => {
+            if (!current()) return;
+            armWatchdog(LISTEN_WATCHDOG_MS);
+            // 声が届いた時点で開き直しの回数は仕切り直す。話し出すまでが長かっただけの
+            // 往復で、次の番の待ち時間まで短くなっていくのを防ぐ。
+            silentRestartsRef.current = 0;
+            abortedRef.current = 0;
+            // 届いたのだから「聞き取れていないようです」は下げる（#164）。
+            setHint(null);
+            bump();
+          },
+          onError: (message, code) => {
+            if (!current()) return;
 
-          /*
-           * 端末が聞き取りを打ち切った（#197）。こちらの `abort()` は先にハンドラを外して
-           * から呼ぶので、ここへ届く `aborted` は端末側の中断しかない。文言はこの場では
-           * 出さず（1回きりなら開き直しで直る）、続いたときに `finishTurn()` が出す。
-           */
-          if (code === RECOGNITION_ABORTED) {
-            abortedRef.current += 1;
-            return;
-          }
+            /*
+             * 端末が聞き取りを打ち切った（#197）。こちらの `abort()` は先にハンドラを外して
+             * から呼ぶので、ここへ届く `aborted` は端末側の中断しかない。文言はこの場では
+             * 出さず（1回きりなら開き直しで直る）、続いたときに `finishTurn()` が出す。
+             */
+            if (code === RECOGNITION_ABORTED) {
+              abortedRef.current += 1;
+              return;
+            }
 
-          // 正しく終われている（`no-speech` を含む）。中断の連続は途切れた。
-          abortedRef.current = 0;
-          if (!message) return;
-          failedRef.current = true;
-          setError(message);
+            // 正しく終われている（`no-speech` を含む）。中断の連続は途切れた。
+            abortedRef.current = 0;
+            if (!message) return;
+            failedRef.current = true;
+            setError(message);
+          },
+          onEnd: () => {
+            if (!current()) return;
+            finishTurn(false);
+          },
         },
-        onEnd: () => {
-          if (!current()) return;
-          finishTurn(false);
-        },
-      });
+        // 接続を保っているかも一緒に残す（#205）。`holdMicStream()` は保っていればそのまま
+        // 戻る（＝何も記録しない）ため、「保った」の行だけでは往復ごとの有無が読めない。
+        `${reason}・接続${isMicStreamHeld() ? "あり" : "なし"}`,
+      );
 
       if (!handle) {
         // 直前の聞き取りがまだ畳まれていないだけのことがある。少し待って開き直す。
@@ -730,7 +793,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
 
     restartTimerRef.current = setTimeout(() => {
       restartTimerRef.current = null;
-      beginListeningRef.current();
+      beginListeningRef.current(false, LISTEN_REASON.afterSpeech);
     }, RESUME_AFTER_SPEECH_MS);
   }, [clearRestartTimer]);
 
@@ -826,7 +889,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
 
     void (async () => {
       if (previousTurn) await previousTurn;
-      beginListening();
+      beginListening(false, LISTEN_REASON.interrupt);
     })();
   }
 

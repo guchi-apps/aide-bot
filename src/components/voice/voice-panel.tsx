@@ -992,7 +992,13 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
           </div>
         )}
 
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-6 py-6 text-center">
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 overflow-y-auto overscroll-contain px-6 py-6 text-center">
+          {/*
+            hint・notice・error・「聞き取りに対応していません」の案内が重なると、
+            ロボット・吹き出し・返答文だけでも狭い画面の高さを超える（#191）。ページ全体を
+            固定した以上、ここで縮めきれないぶんの逃げ場をこの列自身が持つ必要がある
+            ——持たないと、ページスクロールで逃がしていたはみ出しがただ読めなくなるだけになる。
+          */}
           {/* 待っている間は積まれたお知らせを、往復中はいまの状態を、同じ吹き出しで出す
               （#93）。外部サービスを見に行っている間に理由を出す扱い（#46）もここへ移した。 */}
           <SpeechBubble state={status} line={bubbleLine} activity={activity} />

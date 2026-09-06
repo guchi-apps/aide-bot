@@ -208,7 +208,18 @@ function describeError(code: string): string | null {
  * 実体は使い回す（`getRecognition()`）。呼ぶたびにハンドラを差し替えるので、**前の回の
  * ハンドラは残らない。**
  */
-export function startRecognition(handlers: RecognitionHandlers): RecognitionHandle | null {
+export function startRecognition(
+  handlers: RecognitionHandlers,
+  /**
+   * この聞き取りを開いた理由（#205）。記録の「マイクを開いた」に括弧で添える。
+   *
+   * **押して開いたのか、読み上げのあと自動で開いたのかが記録から読めなかった。** #205で
+   * 報告された記録では、続けて話せた2回はどちらも押して開いた回で、中断された回だけが自動で
+   * 開いた回だったが、行だけを見てもそれが分からない——区別できるのは、押した回にだけ出る
+   * 「マイクの接続を保った」を手掛かりにした間接的な読みだけだった。
+   */
+  reason?: string,
+): RecognitionHandle | null {
   const recognition = getRecognition();
   if (!recognition) return null;
 
@@ -254,7 +265,7 @@ export function startRecognition(handlers: RecognitionHandlers): RecognitionHand
     return null;
   }
 
-  note("マイクを開いた");
+  note(reason ? `マイクを開いた（${reason}）` : "マイクを開いた");
 
   return {
     // 「話し終わった」。確定した本文を `onEnd` で受け取るので、ハンドラは付けたままにする。

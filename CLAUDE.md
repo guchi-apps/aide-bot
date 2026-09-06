@@ -1255,10 +1255,17 @@ AIDEのREADME「認可の分離」）。#184で足したのは、その道具を
   `connectedServiceRules()` が並べる。`aide_schedule` と `aide_daily_briefing` は説明文に同じ
   「今日の予定は」が書いてあるので、聞き方ではなく欲しいもの（予定・空き時間か、天気・交通込みの
   見通しか）で呼び分けさせる。**道具の名前を書くのは、その道具が接続先に実在すると確かめてから**
-- **予定の登録・変更は、DaySpan（dayspan#550）→ AIDE（aide#243）→ aide-bot（#185）の順に口を
-  作らないとできない。** DaySpanの `POST /api/events` はブラウザのセッションでしか叩けず、
-  サーバー間用のAPIは読み取り（`GET /api/internal/schedule`）しか無い。届いたら `writeTools` へ
-  足す（#78の絞り込みと#81の記録は同じ表を引く）
+- **予定の登録は、DaySpan（dayspan#550）→ AIDE（aide#243）→ aide-bot（#185）の順に口が
+  作られ、#185でaide-botの配線も完了した。** DaySpanの `POST /api/events` はブラウザの
+  セッションでしか叩けず、サーバー間用のAPIは読み取り（`GET /api/internal/schedule`）しか
+  無かったため、書き込み用に `POST /api/internal/events` を別途足した経路。**予定の変更・
+  取り消しに当たる道具は無い**（`aide_create_event` は新規作成専用。`missing` に残してある）
+- **#185で足した `aide_create_event` は `MCP_PRESETS` の `writeTools` に入っている**
+  （#78の絞り込みと#81の記録は同じ表を引くので、ここへ足すだけで両方が効く）。**`hints` は
+  書き込みの許可状態と無関係に常にプロンプトへ入る**——既定（`off`）でも`hints`の文だけは
+  出るので、道具名を名指しするhintを書くときは「一覧に無ければ許可されていない」という
+  読みで矛盾しない文にする（`toCodexMcpServers()` の結果で出し分ける手はまだ採っていない）。
+  計画レビュー（#185）で指摘された点
 - **本番のAIDEが予定を返しているかは、Claude CodeのAIDEコネクタから `aide_schedule` を直接
   叩けば分かる**（#184でそうやって `configured: true` を確かめた）。開発DBのAIDE接続はダミーの
   トークンなので、手元の相談から実際に予定を引くことはできない。確かめられるのはプロンプトと

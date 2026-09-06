@@ -1,6 +1,48 @@
 import * as THREE from "three";
 import type { RobotState } from "../robot";
 
+/**
+ * 1フレームぶんの入力（#180）。**姿勢を決める材料はすべてここから渡す。**
+ * モデルの側で時刻を数えたり入力を覚えたりしない——描画を止めている間（非表示・画面外）に
+ * 位相だけが進むと、戻ってきた瞬間にロボットが跳ねる。
+ */
+export type RobotDrive = {
+  state: RobotState;
+  /** 声が届いた直後だけ true。 */
+  reacting: boolean;
+  /** 揺れ・まばたき・うなずきの位相（秒）。 */
+  time: number;
+  /** 前のフレームからの経過（秒）。なじませる速さを描画のこま数から切り離す。 */
+  delta: number;
+  /** 端末の「動きを減らす」設定。 */
+  reduced: boolean;
+  /** 視線の目標（-1..1）。追う相手がいなければ 0。 */
+  lookX: number;
+  lookY: number;
+  /** 会釈の進み（0=していない、1=終わり）。 */
+  bow: number;
+  /** アンテナの発光の強さ（0..1）。 */
+  flash: number;
+};
+
+/**
+ * 姿勢をなじませる時定数（秒）。3τでほぼ収まるので、0.12なら約0.35秒で落ち着く。
+ * うなずき（周期2.6秒）はこの速さならほとんど鈍らない。**まばたきはここを通さない**
+ * ——0.15秒で閉じて開くものをなじませると、目が半開きのままになる。
+ */
+const POSE_TAU = 0.12;
+/** 視線をなじませる時定数（秒）。約0.25秒で追いつく。急に振り向かず、せわしなくもならない。 */
+const GAZE_TAU = 0.085;
+/** 視線に連れて体が向く量（ラジアン）。首が独立していないので、目より控えめにする。 */
+const LOOK_YAW = 0.12;
+/** 視線の上下に連れて体が傾く量（ラジアン）。 */
+const LOOK_PITCH = 0.07;
+
+/** 目標へ一定の割合で寄せる。経過時間から割合を出すので、こま数が変わっても速さが変わらない。 */
+function approach(current: number, target: number, tau: number, delta: number) {
+  return current + (target - current) * (1 - Math.exp(-Math.max(delta, 0) / tau));
+}
+
 /** 承認済みのニット外装・茶色のガラス・青い目を持つ、編集可能な立体モデル。 */
 export function createRobotModel() {
   const root = new THREE.Group();
@@ -104,16 +146,59 @@ export function createRobotModel() {
     }
     ellipsoid(`Ear_${x}`, body, brown, [Math.sign(x) * 1.08, 1.17, 0], [0.16, 0.34, 0.29]);
   }
-  ellipsoid("Antenna_base", body, brown, [0, 2.13, 0], [0.25, 0.085, 0.2]);
+  /*
+   * アンテナは1つのグループにまとめる（#180）。押された場所が体かアンテナかは、
+   * 当たったメッシュの祖先にこのグループがあるかで見分ける——名前の一致で判定すると、
+   * 部品を1つ足すたびに判定側の文字列も足すことになる。
+   */
+  const antenna = new THREE.Group();
+  antenna.name = "Antenna";
+  body.add(antenna);
+  ellipsoid("Antenna_base", antenna, brown, [0, 2.13, 0], [0.25, 0.085, 0.2]);
   const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.032, 0.27, 20), metal);
   stalk.name = "Antenna_stalk";
   stalk.position.set(0, 2.3, 0);
-  body.add(stalk);
+  antenna.add(stalk);
   const lampMaterial = new THREE.MeshPhysicalMaterial({
     color: "#65d4ff", emissive: "#19a6ee", emissiveIntensity: 0.65,
     roughness: 0.19, clearcoat: 1,
   });
-  ellipsoid("Antenna_lamp", body, lampMaterial, [0, 2.49, 0], [0.105, 0.105, 0.105]);
+  const lamp = ellipsoid("Antenna_lamp", antenna, lampMaterial, [0, 2.49, 0], [0.105, 0.105, 0.105]);
+  /*
+   * 指で押せる大きさの当たり判定（#180）。**見えているメッシュを的にすると指では当たらない。**
+   * カメラの画角から計算すると、168pxの表示でランプは直径10.7px・アンテナ全体でも約25×28pxで、
+   * iOSの推奨44pxを大きく下回る。この楕円は168pxで44.9×46.9px（200pxなら53.4×55.9px）になる。
+   * `visible = false` に頼らないのは、three.jsのレイキャストが可視性を見ないためで、
+   * 透明な材質で「写らないが当たる」を作っている。
+   */
+  const hitMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+  const antennaZone = ellipsoid("Antenna_hit_area", antenna, hitMaterial, [0, 2.4, 0], [0.44, 0.46, 0.44]);
+  antennaZone.renderOrder = -1;
+  /*
+   * 押されたときに広がる光（#180）。**明るさを上げるだけでは足りない。** 168pxの表示だと
+   * ランプは4px程度しかなく、実測では発光の前後で絵がほとんど変わらなかった
+   * （頭のあたりだけを切り出しても、待機中の揺れと見分けが付かなかった）。
+   * ランプの外へはみ出す面を1枚重ねて、触れたことが分かる大きさにする。
+   */
+  const glowCanvas = document.createElement("canvas");
+  glowCanvas.width = glowCanvas.height = 64;
+  const glowContext = glowCanvas.getContext("2d");
+  if (!glowContext) throw new Error("Canvas 2D unavailable");
+  const halo = glowContext.createRadialGradient(32, 32, 0, 32, 32, 32);
+  halo.addColorStop(0, "rgba(255,255,255,0.95)");
+  halo.addColorStop(0.32, "rgba(159,226,255,0.6)");
+  halo.addColorStop(1, "rgba(127,208,255,0)");
+  glowContext.fillStyle = halo;
+  glowContext.fillRect(0, 0, 64, 64);
+  const glowTexture = new THREE.CanvasTexture(glowCanvas);
+  glowTexture.colorSpace = THREE.SRGBColorSpace;
+  const glowMaterial = new THREE.SpriteMaterial({ map: glowTexture, transparent: true, opacity: 0, depthWrite: false });
+  const glow = new THREE.Sprite(glowMaterial);
+  glow.name = "Antenna_glow";
+  glow.position.set(0, 2.49, 0);
+  glow.scale.set(1.1, 1.1, 1.1);
+  glow.visible = false;
+  antenna.add(glow);
 
   // 顔は曲面メッシュ。目と口は画面内の表示なので、同じテクスチャ上で変形させる。
   function roundedPoint(u: number, v: number, width: number, height: number) {
@@ -176,12 +261,20 @@ export function createRobotModel() {
   face.position.y = 1.2;
   body.add(face);
   let lastFace = "";
-  function paintFace(state: RobotState, time: number, reduced: boolean) {
+  /**
+   * 顔はテクスチャなので、書き換えた回だけGPUへ送り直す。`key` が変わらない回は何もしない
+   * ——視線を追っている間は毎フレーム変わるため、目の位置は1px刻みへ丸めてから比べる。
+   */
+  function paintFace(state: RobotState, time: number, reduced: boolean, eyeOpen: number, gazeX: number, gazeY: number) {
     const phase = time % 6.2;
+    // まばたきはなじませた開き具合へ後から掛ける。0.15秒で閉じて開くものをなじませると半開きになる。
     const blink = !reduced && phase > 5.9 ? Math.max(0.08, Math.abs(phase - 6.05) / 0.15) : 1;
-    const eyeHeight = (state === "thinking" ? 0.6 : 1) * blink;
+    const eyeHeight = eyeOpen * blink;
     const mouthHeight = state === "speaking" && !reduced ? 14 + 13 * (1 + Math.sin(time * 17)) : 15;
-    const key = `${state}:${eyeHeight.toFixed(2)}:${Math.round(mouthHeight)}`;
+    // 目そのものと、その中の光の点を別々に動かす。両方が同じだけ動くと顔ごとずれて見える。
+    const eyeShiftX = Math.round(gazeX * 14), eyeShiftY = Math.round(gazeY * 10);
+    const pupilX = Math.round(gazeX * 24), pupilY = Math.round(gazeY * 17);
+    const key = `${state}:${eyeHeight.toFixed(2)}:${Math.round(mouthHeight)}:${eyeShiftX}:${eyeShiftY}:${pupilX}:${pupilY}`;
     if (key === lastFace) return;
     lastFace = key;
     const bg = ctx!.createLinearGradient(0, 0, 0, 512);
@@ -189,19 +282,23 @@ export function createRobotModel() {
     ctx!.fillStyle = bg; ctx!.fillRect(0, 0, 768, 512);
     for (const x of [230, 538]) {
       ctx!.save();
-      ctx!.translate(x, state === "thinking" ? 229 : 246);
+      ctx!.translate(x + eyeShiftX, (state === "thinking" ? 229 : 246) + eyeShiftY);
       ctx!.scale(state === "listening" ? 1.06 : 1, eyeHeight);
       ctx!.shadowColor = "#27beff"; ctx!.shadowBlur = 22;
       ctx!.strokeStyle = "#58d0ff"; ctx!.lineWidth = 23;
       ctx!.beginPath(); ctx!.arc(0, 0, 85, 0, Math.PI * 2); ctx!.stroke();
       ctx!.shadowBlur = 0; ctx!.fillStyle = "#0a1720";
       ctx!.beginPath(); ctx!.arc(0, 0, 72, 0, Math.PI * 2); ctx!.fill();
+      // 光の点だけは目の中を動く。**縁からはみ出さないよう切り抜いてから描く。**
+      ctx!.save();
+      ctx!.beginPath(); ctx!.arc(0, 0, 72, 0, Math.PI * 2); ctx!.clip();
       ctx!.fillStyle = "#f4fcff";
-      ctx!.beginPath(); ctx!.arc(-22, -26, 9, 0, Math.PI * 2); ctx!.fill();
+      ctx!.beginPath(); ctx!.arc(pupilX - 22, pupilY - 26, 9, 0, Math.PI * 2); ctx!.fill();
+      ctx!.restore();
       ctx!.restore();
     }
     ctx!.fillStyle = "#080d10";
-    ctx!.beginPath(); ctx!.ellipse(384, 397, 40, mouthHeight, 0, 0, Math.PI); ctx!.fill();
+    ctx!.beginPath(); ctx!.ellipse(384 + eyeShiftX * 0.5, 397, 40, mouthHeight, 0, 0, Math.PI); ctx!.fill();
     if (state === "thinking" || state === "preparing") {
       for (let i = 0; i < 3; i++) {
         ctx!.fillStyle = state === "thinking" ? "#65d5ff" : "#e9bf83";
@@ -210,15 +307,93 @@ export function createRobotModel() {
     }
     faceTexture.needsUpdate = true;
   }
-  function update(state: RobotState, reacting: boolean, time: number, reduced = false) {
-    const t = reduced ? 0 : time;
-    body.rotation.z = state === "thinking" ? 0.065 + Math.sin(t * 1.8) * 0.025 : Math.sin(t * 1.2) * 0.008;
-    body.rotation.x = state === "listening" ? 0.06 + (reacting ? 0.035 : 0) : state === "speaking" ? Math.sin(t * 5) * 0.023 : 0;
-    body.position.y = reduced ? 0 : Math.sin(t * 1.2) * 0.009;
-    lampMaterial.emissiveIntensity = (state === "listening" ? 0.9 : 0.5) + (reduced ? 0 : Math.sin(t * (state === "preparing" ? 4 : 1.8)) * 0.18);
-    paintFace(state, t, reduced);
+
+  /*
+   * いま画面に出ている姿勢（#180）。目標を直接入れず、ここへ寄せていく。
+   * 状態が切り替わった回に前の姿勢から続けて動くので、跳ねずに次の仕草へ移る。
+   */
+  const pose = { pitch: 0, roll: 0, lift: 0, eye: 1, gazeX: 0, gazeY: 0 };
+
+  /**
+   * 部位ごとに誰が値を決めるかを固定してある。強い順に **会話の状態 → タップ反応 → 視線追従**で、
+   * 上のものが下のものを上書きする。会話の状態がいちばん強いのは、いま聞いているのか考えて
+   * いるのかが読めなくなるのがいちばん困るため（Issue #180の「会話状態の分かりやすさを優先する」）。
+   */
+  function update(d: RobotDrive) {
+    const t = d.reduced ? 0 : d.time;
+    const sway = Math.sin(t * 1.2);
+
+    // --- 1. 会話の状態。姿勢の土台をここで決める。 ---
+    let roll = sway * 0.008, pitch = 0, lift = d.reduced ? 0 : sway * 0.009, eye = 1;
+    let lampBase = 0.5 + (d.reduced ? 0 : Math.sin(t * 1.8) * 0.18);
+    // 視線を状態の側から差し押さえる指示。null なら追従にまかせる。
+    let override: readonly [number, number] | null = null;
+    let gazeGain = 1;
+
+    if (d.state === "listening") {
+      // 前傾して相手へ寄る。声が届いた回だけさらにひと寄せする。
+      pitch = 0.06 + (d.reacting ? 0.035 : 0);
+      lift += d.reacting ? 0.028 : 0;
+      eye = 1.06;
+      lampBase = 0.9 + (d.reduced ? 0 : Math.sin(t * 3) * 0.1);
+    } else if (d.state === "thinking") {
+      roll = 0.065 + (d.reduced ? 0 : Math.sin(t * 1.8) * 0.025);
+      eye = 0.6;
+      override = [-0.55, -0.75]; // 考えている間は相手を見ず、斜め上へ視線を外す
+    } else if (d.state === "preparing") {
+      // 声の出来上がりを待っている間は、正面へ戻って静かにしている。
+      override = [0, 0];
+      lampBase = 0.55 + (d.reduced ? 0 : Math.sin(t * 4) * 0.3);
+    } else if (d.state === "speaking") {
+      // うなずきは一定の間隔で頭を落として戻すもの。上下に揺らし続けるのとは違う。
+      const nod = d.reduced ? 0 : Math.max(0, Math.sin(t * 2.4));
+      pitch = nod * 0.045;
+      lift -= nod * 0.03;
+      gazeGain = 0.55; // 話している間の追従は弱める。喋りながらきょろきょろしない
+      lampBase = 0.6;
+    }
+
+    pose.pitch = approach(pose.pitch, pitch, POSE_TAU, d.delta);
+    pose.roll = approach(pose.roll, roll, POSE_TAU, d.delta);
+    pose.lift = approach(pose.lift, lift, POSE_TAU, d.delta);
+    pose.eye = approach(pose.eye, eye, POSE_TAU, d.delta);
+
+    // --- 2. タップ反応。なじませた姿勢の上へそのまま足す（なじませると会釈が鈍る）。 ---
+    const bow = d.bow > 0 ? Math.sin(d.bow * Math.PI) : 0; // 出て、戻る
+    if (bow > 0) override = [0, 0.1]; // 会釈の間はこちらを向く
+    const lampFlash = d.flash > 0 ? 0.35 + d.flash * 3.2 : 0;
+
+    // --- 3. 視線追従。いちばん弱く、上の2つが向きを決めた回は譲る。 ---
+    const goalX = override ? override[0] : d.lookX * gazeGain;
+    const goalY = override ? override[1] : d.lookY * gazeGain;
+    pose.gazeX = approach(pose.gazeX, goalX, GAZE_TAU, d.delta);
+    pose.gazeY = approach(pose.gazeY, goalY, GAZE_TAU, d.delta);
+
+    body.rotation.y = pose.gazeX * LOOK_YAW;
+    body.rotation.x = pose.pitch + pose.gazeY * LOOK_PITCH + bow * 0.14;
+    body.rotation.z = pose.roll * (1 - bow);
+    body.position.y = pose.lift - bow * 0.05;
+    lampMaterial.emissiveIntensity = Math.max(lampBase, lampFlash);
+    // 光っている間はランプ自体も膨らみ、外へはみ出す光を重ねる。
+    // **明るさだけでは気付けない**（この大きさではランプが数pxしかない）。
+    const swell = d.reduced ? 1 : 1 + d.flash * 0.55;
+    lamp.scale.set(0.105 * swell, 0.105 * swell, 0.105 * swell);
+    glow.visible = d.flash > 0;
+    glowMaterial.opacity = d.flash * 0.95;
+    paintFace(d.state, t, d.reduced, pose.eye, pose.gazeX, pose.gazeY);
   }
-  update("idle", false, 0, true);
+
+  /** 押された場所が体かアンテナかを見分ける。当たらなければ null。 */
+  function partAt(raycaster: THREE.Raycaster) {
+    const hit = raycaster.intersectObject(root, true)[0];
+    if (!hit) return null;
+    for (let node: THREE.Object3D | null = hit.object; node; node = node.parent) {
+      if (node === antenna) return "antenna" as const;
+    }
+    return "body" as const;
+  }
+
+  update({ state: "idle", reacting: false, time: 0, delta: 0, reduced: true, lookX: 0, lookY: 0, bow: 0, flash: 0 });
   function dispose() {
     const geometries = new Set<THREE.BufferGeometry>();
     const materials = new Set<THREE.Material>();
@@ -230,7 +405,9 @@ export function createRobotModel() {
       }
     });
     geometries.forEach(g => g.dispose()); materials.forEach(m => m.dispose());
-    knitTexture.dispose(); knitNormal.dispose(); knitColor.dispose(); faceTexture.dispose();
+    // Sprite は Mesh ではないので、上の traverse では拾えない。ここで名指しで手放す。
+    glowMaterial.dispose();
+    knitTexture.dispose(); knitNormal.dispose(); knitColor.dispose(); faceTexture.dispose(); glowTexture.dispose();
   }
-  return { root, update, dispose };
+  return { root, update, partAt, dispose };
 }

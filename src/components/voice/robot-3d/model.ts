@@ -76,10 +76,14 @@ export function createRobotModel() {
       }
     }
   }
-  const knitTexture = new THREE.CanvasTexture(knit);
-  knitTexture.wrapS = knitTexture.wrapT = THREE.RepeatWrapping;
-  knitTexture.repeat.set(14, 8);
-  knitTexture.anisotropy = 4;
+  /*
+   * 編み目の繰り返し回数。**`anisotropy` は実際に材質へ渡すテクスチャに付ける**（#190）。
+   * ここには以前この値を持つだけのテクスチャがもう1枚あり、どの材質にも渡っていないのに
+   * `anisotropy` だけがそちらに付いていたため、**体の編み目は等方フィルタのまま**だった
+   * ——面が視線から傾くほど、繰り返しの細かい模様がざらついて見える。
+   */
+  const KNIT_REPEAT = new THREE.Vector2(14, 8);
+  const KNIT_ANISOTROPY = 4;
   const albedo = document.createElement("canvas");
   albedo.width = albedo.height = 128;
   const a = albedo.getContext("2d")!;
@@ -93,7 +97,8 @@ export function createRobotModel() {
   const knitColor = new THREE.CanvasTexture(albedo);
   knitColor.colorSpace = THREE.SRGBColorSpace;
   knitColor.wrapS = knitColor.wrapT = THREE.RepeatWrapping;
-  knitColor.repeat.copy(knitTexture.repeat);
+  knitColor.repeat.copy(KNIT_REPEAT);
+  knitColor.anisotropy = KNIT_ANISOTROPY;
   const normalCanvas = document.createElement("canvas");
   normalCanvas.width = normalCanvas.height = 128;
   const normalContext = normalCanvas.getContext("2d")!;
@@ -114,7 +119,8 @@ export function createRobotModel() {
   normalContext.putImageData(normals, 0, 0);
   const knitNormal = new THREE.CanvasTexture(normalCanvas);
   knitNormal.wrapS = knitNormal.wrapT = THREE.RepeatWrapping;
-  knitNormal.repeat.copy(knitTexture.repeat);
+  knitNormal.repeat.copy(KNIT_REPEAT);
+  knitNormal.anisotropy = KNIT_ANISOTROPY;
   const cloth = new THREE.MeshPhysicalMaterial({
     map: knitColor, color: "#efd5af", roughness: 0.95, normalMap: knitNormal, normalScale: new THREE.Vector2(0.7, 0.7),
     sheen: 0.55, sheenColor: new THREE.Color("#fff1dc"), sheenRoughness: 0.9,
@@ -407,7 +413,7 @@ export function createRobotModel() {
     geometries.forEach(g => g.dispose()); materials.forEach(m => m.dispose());
     // Sprite は Mesh ではないので、上の traverse では拾えない。ここで名指しで手放す。
     glowMaterial.dispose();
-    knitTexture.dispose(); knitNormal.dispose(); knitColor.dispose(); faceTexture.dispose(); glowTexture.dispose();
+    knitNormal.dispose(); knitColor.dispose(); faceTexture.dispose(); glowTexture.dispose();
   }
   return { root, update, partAt, dispose };
 }

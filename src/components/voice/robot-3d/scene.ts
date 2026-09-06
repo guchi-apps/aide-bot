@@ -23,7 +23,14 @@ export function mountRobotScene(host: HTMLElement, onFailure: () => void) {
   let pmrem: THREE.PMREMGenerator | undefined;
   let teardown: (() => void) | undefined;
   try {
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    /*
+     * 端末の画素密度どおりに描く（#190）。**上限を下げて描いた絵はブラウザが引き伸ばすので、
+     * そのぶんそのまま粗く見える**——DPR 3のiPhoneで上限1.5だと、168pxの枠を252²で描いて
+     * 504²へ2倍に拡大していた（Issueの画像はこの状態）。増えるのは塗る画素だけで、
+     * 頂点数・描画回数・30fps上限・画面外での停止は変わらない。3で頭を打たせているのは、
+     * DPR 4以上を名乗る端末で描画の面積が青天井にならないようにするため。
+     */
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 3));
     renderer.setClearColor(0, 0);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;

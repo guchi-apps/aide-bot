@@ -24,7 +24,9 @@ export default async function LoginPage({
   const next = safeInternalPath(callbackUrl, "/");
 
   return (
-    <main className="grid min-h-dvh place-items-center px-6 py-12">
+    // html/body（#191）で画面全体が固定されたぶん、カードがはみ出す狭い画面のための
+    // 逃げ場をこの`main`自身が持つ（`min-h-dvh`だとbodyのoverflow-hiddenに切り落とされる）。
+    <main className="grid h-dvh place-items-center overflow-y-auto overscroll-contain px-6 py-12">
       <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 shadow-sm">
         {/* svgは既定でinline。blockにしないと下に行の余白が入り、見出しとの間隔がずれる。 */}
         <AppIcon className="block size-13" />

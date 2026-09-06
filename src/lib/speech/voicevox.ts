@@ -164,7 +164,7 @@ const PROBE_CACHE_MS = 60_000;
 const ENGINE_TIMEOUT_MS = 10_000;
 
 export type VoicevoxAudio = {
-  /** `<audio>` の `src` に入れるURL。 */
+  /** 合成した音声のURL。`playVoicevoxAudio()` が `fetch` して Web Audio で鳴らす（#210）。 */
   url: string;
   /** 鳴らし終えたら呼ぶ。ENGINEのObjectURLを解放する（WEB版では何もしない）。 */
   release: () => void;
@@ -344,56 +344,185 @@ export async function checkVoicevoxEngine(engineUrl: string): Promise<EngineChec
 }
 
 /*
- * 鳴らす `<audio>` は1つだけ作って使い回す。
+ * 合成した音声は Web Audio（`AudioContext`）で鳴らす（#210。以前は `<audio>` 要素）。
  *
- * iOSは「画面を触った流れ」で一度 `play()` を通した要素しか、以降の自動再生を許さない。
- * 返答が届いた時点で新しく作った要素では鳴らないため、マイクを押した時点で
- * `primeVoicevoxAudio()` を通したこの要素へ、後から `src` を差し替えて使う。
+ * **`<audio>` 要素での再生は、iPhoneのホーム画面PWAで聞き取りを壊す。** 実機（#210）で、
+ * VOICEVOX（`<audio>`）で読み上げた後に開いた `SpeechRecognition` には音が一切回らず
+ * （`no-speech` すら無く15秒黙る）、端末の声（`speechSynthesis`）で読んだ後なら回る、という
+ * 差が出た。待ちを2.5秒に伸ばしても、読み上げの後に端末の声を空で鳴らしても戻らない。
+ * `<audio>` の再生がiOS側の音声セッションを「再生専用」へ倒し、止めた後もそのまま居座るのが
+ * いちばん疑わしい形で、`AudioContext` は同じ再生でもセッションの扱いが異なる。
+ *
+ * `AudioContext` は1つだけ作って使い回す。iOSは「画面を触った流れ」の中で一度 `resume()` を
+ * 通したものしか後から鳴らせないため、マイクを押した時点で `primeVoicevoxAudio()` を通す
+ * （`<audio>` の `play()` と同じ考え方）。
  */
-let sharedAudio: HTMLAudioElement | null = null;
+type WindowWithWebkitAudio = Window & { webkitAudioContext?: typeof AudioContext };
 
-/** 無音のWAV。空の `src` では `play()` が失敗するので、鳴っても聞こえないものを渡す。 */
-const SILENT_WAV =
-  "data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQgAAACAgICAgICAgA==";
-
-/** 合成した音声を鳴らせる端末か。要素は作らない（描画の途中で呼ばれる）。 */
-export function isVoicevoxPlaybackSupported(): boolean {
-  return typeof window !== "undefined" && typeof Audio !== "undefined";
+function audioContextConstructor(): typeof AudioContext | null {
+  if (typeof window === "undefined") return null;
+  return window.AudioContext ?? (window as WindowWithWebkitAudio).webkitAudioContext ?? null;
 }
 
-export function getVoicevoxAudio(): HTMLAudioElement | null {
-  if (typeof window === "undefined") return null;
+let sharedContext: AudioContext | null = null;
+/** いま鳴らしている音。`stopVoicevoxAudio()` で止める。 */
+let currentSource: AudioBufferSourceNode | null = null;
 
-  sharedAudio ??= new Audio();
-  return sharedAudio;
+/** 合成した音声を鳴らせる端末か。`AudioContext` は作らない（描画の途中で呼ばれる）。 */
+export function isVoicevoxPlaybackSupported(): boolean {
+  return audioContextConstructor() !== null;
+}
+
+function getAudioContext(): AudioContext | null {
+  const Constructor = audioContextConstructor();
+  if (!Constructor) return null;
+
+  sharedContext ??= new Constructor();
+  return sharedContext;
+}
+
+/** デコードした音声。`<audio>` の `src` に入れていたURLの代わり。 */
+export type VoicevoxPlayback = {
+  /** 鳴り終わる（または止められる）まで。合成・デコード・再生に失敗したら reject。 */
+  done: Promise<void>;
+  /** 途中で止める。`done` は resolve する。 */
+  stop: () => void;
+};
+
+/**
+ * Safariの `decodeAudioData` はコールバック版しか無い世代があるため、Promiseで包む。
+ *
+ * **渡すバッファはコピーする**（`slice(0)`）——`decodeAudioData` は元のバッファを切り離す
+ * （detach）ので、そのまま渡すと呼び出し側が持っている参照が使えなくなる。
+ */
+function decode(context: AudioContext, bytes: ArrayBuffer): Promise<AudioBuffer> {
+  return new Promise((resolve, reject) => {
+    context.decodeAudioData(
+      bytes.slice(0),
+      (buffer) => resolve(buffer),
+      (error) => reject(error ?? new Error("voicevox: decode failed")),
+    );
+  });
 }
 
 /**
- * 鳴らしているものを止めて、音声要素を空にする（#164）。
+ * 合成した音声（URL）を取ってきて Web Audio で鳴らす（#210）。
  *
- * **要素そのものは捨てない。** `primeVoicevoxAudio()` で許可を通したこの1つを使い回すのが
- * iOSで鳴らせる前提で、しかも `prime()` は1回きりなので、差し替えると以降のVOICEVOXが
- * 丸ごと無音になる。止めるのは再生中の音の方で、読み上げが終わってもiOSの音声の扱いが
- * 「再生中」のまま居座り、続けて開いたマイクへ音が回ってこない——というのが#164で
- * いちばん疑わしい形。要素が無いなら作らずに戻る。
+ * WEB版の `mp3StreamingUrl`（合成しながら流すURL）もENGINEのObjectURLも、ここでは
+ * `fetch` で丸ごと取ってからデコードする。**WEB版で「合成しながら流す」ことはできなくなった**
+ * ——`decodeAudioData` は全体が揃ってからでないと鳴らせないため。鳴り始めまでの待ちは
+ * そのぶん伸びるが、`<audio>` を避けるのが目的なので受け入れる（呼ぶ側は「話しています」を
+ * 出したまま待つ）。
+ */
+export function playVoicevoxAudio(
+  url: string,
+  rate: number,
+  onPlaying: () => void,
+): VoicevoxPlayback {
+  const context = getAudioContext();
+  if (!context) {
+    return { done: Promise.reject(new Error("voicevox: no AudioContext")), stop: () => {} };
+  }
+
+  let stopped = false;
+  let node: AudioBufferSourceNode | null = null;
+  let settle!: (error?: Error) => void;
+  const done = new Promise<void>((resolve, reject) => {
+    settle = (error?: Error) => (error ? reject(error) : resolve());
+  });
+
+  const teardown = () => {
+    if (!node) return;
+    node.onended = null;
+    try {
+      node.stop();
+    } catch {
+      // まだ鳴らし始めていない・すでに止まっている。捨てるだけなので続けてよい。
+    }
+    node.disconnect();
+    if (currentSource === node) currentSource = null;
+    node = null;
+  };
+
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    teardown();
+    settle();
+  };
+
+  void (async () => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`voicevox: HTTP ${response.status}`);
+      const bytes = await response.arrayBuffer();
+      if (stopped) return;
+
+      // iOSは操作の外だと suspended のことがある。prime で通してあれば resume できる。
+      if (context.state === "suspended") await context.resume();
+      const buffer = await decode(context, bytes);
+      if (stopped) return;
+
+      node = context.createBufferSource();
+      node.buffer = buffer;
+      node.playbackRate.value = rate;
+      node.connect(context.destination);
+      node.onended = () => {
+        if (stopped) return;
+        stopped = true;
+        teardown();
+        settle();
+      };
+      currentSource = node;
+      node.start();
+      onPlaying();
+    } catch (error) {
+      if (stopped) return;
+      stopped = true;
+      settle(error instanceof Error ? error : new Error(String(error)));
+    }
+  })();
+
+  return { done, stop };
+}
+
+/**
+ * 鳴らしているものを止める（#164・#210）。
  *
- * **名前を `release` にしないこと。** 合成し終えた音声を手放す `VoicevoxAudio.release`
- * （ObjectURLの解放）がすでにあり、別物と紛らわしくなる。
+ * 読み上げが終わってもiOSの音声の扱いが「再生中」のまま居座り、続けて開いたマイクへ音が
+ * 回ってこない——というのが#164からの疑い。**名前を `release` にしないこと。** 合成し終えた
+ * 音声を手放す `VoicevoxAudio.release`（ObjectURLの解放）がすでにあり、別物と紛らわしくなる。
  */
 export function stopVoicevoxAudio(): void {
-  if (!sharedAudio) return;
+  const source = currentSource;
+  currentSource = null;
+  if (!source) return;
 
-  sharedAudio.pause();
-  sharedAudio.removeAttribute("src");
-  sharedAudio.load();
+  source.onended = null;
+  try {
+    source.stop();
+  } catch {
+    // すでに止まっている。
+  }
+  source.disconnect();
 }
 
 /** iOSで後から鳴らせるようにする。マイクを押した流れの中で呼ぶ。 */
 export function primeVoicevoxAudio(): void {
-  const audio = getVoicevoxAudio();
-  if (!audio) return;
+  const context = getAudioContext();
+  if (!context) return;
 
-  audio.src = SILENT_WAV;
-  // 許可を取るだけなので、鳴らせなくてもそのまま進む。
-  void audio.play().catch(() => {});
+  // 操作の流れの中で resume しておかないと、後から鳴らせない（iOS）。
+  void context.resume().catch(() => {});
+
+  // 長さ1の無音を1度鳴らして、確実にアンロックする。失敗しても進む。
+  try {
+    const buffer = context.createBuffer(1, 1, context.sampleRate);
+    const node = context.createBufferSource();
+    node.buffer = buffer;
+    node.connect(context.destination);
+    node.start(0);
+  } catch {
+    // アンロックできなくても、最初の再生時の resume で間に合うことがある。
+  }
 }

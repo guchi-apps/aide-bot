@@ -440,6 +440,16 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
         { kind: "message", id: `local-user-${previous.length}`, role: "USER", content: text },
       ]);
 
+      /*
+       * 読み上げの始まり・終わりも記録に残す（#210）。iPhoneのPWAで壊れるのは読み上げの
+       * あとに開いた聞き取りなので、読み上げが何で・いつ終わり、そこから何ミリ秒後に
+       * マイクを開いたのかが記録から読めないと切り分けにならない。VOICEVOXが端末の声へ
+       * 落ちた回は `onStart` が2度来うる（落ちた先の `SpeechReader` にも同じものを渡す）
+       * ので、1往復につき1行にする。
+       */
+      const voiceKind = parseVoicevoxSpeaker(settingsRef.current.voiceURI) ? "VOICEVOX" : "端末の声";
+      let speechNoted = false;
+
       // 内蔵の声なら、届いた端から文の切れ目で読み上げる。全部揃うまで待つと、字幕が
       // 出ているのに声が始まらない時間ができる（VOICEVOXは仕組み上まとめて合成する）。
       const reader =
@@ -452,8 +462,15 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
               // 見え、マイクを押して割り込まれてしまう（#52）。
               onPreparing: () =>
                 setStatus((current) => (current === "speaking" ? current : "preparing")),
-              onStart: () => setStatus("speaking"),
+              onStart: () => {
+                if (!speechNoted) {
+                  speechNoted = true;
+                  noteRecognition(`読み上げを始めた（${voiceKind}）`);
+                }
+                setStatus("speaking");
+              },
               onDrain: () => {
+                noteRecognition("読み上げを終えた");
                 readerRef.current = null;
                 // 読み終えた直後に開くと、iOSでは声が届かないことがある（#164）。
                 if (settingsRef.current.continuous) resumeAfterSpeakingRef.current();
@@ -589,9 +606,9 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
      *
      * #205で報告された記録では、**中断された往復は接続を保ったまま**だった（保ったのは
      * その前に押した回で、以後どこも手放していない）。#197が疑った「掴んだ接続と聞き取りが
-     * 取り合っている」と整合するので、中断されたときだけは手放して試す。**中断はすでに
-     * 失敗している経路**なので、これで悪くなる余地は無い——#179の対策が効いていたとしても、
-     * その回はすでに効いていない。設定（`holdMicOptIn`）が切なら何も起きない。
+     * 取り合っている」と整合するので、中断されたときだけは手放して試す——というのが#205の
+     * 手当てで、**#210からは開く前に必ず手放す**（`beginListening()`）ので、ここで手放すのは
+     * 開き直しまでの1秒の間を空けるためだけになった。設定（`holdMicOptIn`）が切なら何も起きない。
      */
     releaseMicStream();
 
@@ -618,6 +635,16 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
   const beginListening = useCallback(
     (resume = false, reason: ListenReason = LISTEN_REASON.pressed) => {
       clearRestartTimer();
+      /*
+       * 保っているマイクの接続は、開く前に必ず手放す（#210）。
+       *
+       * #205・#210の実機の記録を合わせると、**開いた時点で接続をすでに保っていた聞き取りは
+       * 5回とも声が届かず**（`aborted`・黙ったまま15秒・`audio-capture`）、**開いた後に接続を
+       * 取った聞き取りは3回とも届いた**（どれも1往復目で、`start()` の後に `getUserMedia` が
+       * 返っている）。「保つ」設定が入なら、下で `start()` が通ってから取り直す。切なら何も
+       * 保っていないので、この呼び出しは何もしない。
+       */
+      releaseMicStream();
       // 走っているものがあれば畳んでから開き直す。持っているだけで戻ると、`onend` が
       // 返らなかった1回のせいでマイクが二度と開かなくなる（#155）。
       discardRecognition();
@@ -683,6 +710,9 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
           if (abortedRef.current > 0) {
             if (restartAfterAbort()) return;
             if (!closedByUserRef.current && !failedRef.current) setHint(ABORTED_HINT);
+            // 聞かずに待機へ戻るなら、保っている接続も要らない（#210）。持ったままだと
+            // iOSの録音中の印が待機のあいだも点いたままになる。次に開くときに取り直す。
+            releaseMicStream();
             setStatus("idle");
             return;
           }
@@ -692,6 +722,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
           // 開き直しを使い切ったときだけ知らせる。利用者が自分で止めたとき・文言付きの
           // エラーで終わったときは、すでに理由が画面に出ている。
           if (!closedByUserRef.current && !failedRef.current) setHint(SILENT_CLOSE_HINT);
+          releaseMicStream();
           setStatus("idle");
           return;
         }
@@ -742,6 +773,13 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
             if (!message) return;
             failedRef.current = true;
             setError(message);
+            /*
+             * 文言付きのエラーの後、`onend` が来ないことがある（#210）。仕様では `error` の後に
+             * 必ず `end` が続くが、iPhoneのPWAでは `audio-capture` の後に「マイクを閉じた」が
+             * 一度も記録されず、15秒の見張りに掛かるまで「聞いています」のままだった。
+             * 失敗はもう画面に出ているので、「話し終わった」を押したときと同じ短さで畳む。
+             */
+            armWatchdog(STOP_WATCHDOG_MS);
           },
           onEnd: () => {
             if (!current()) return;
@@ -767,6 +805,13 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
       // 開いたきり黙り込んだときの逃げ道を掛ける（#164）。畳む手は「話し終わった」からも使う。
       finishTurnRef.current = finishTurn;
       armWatchdog(LISTEN_WATCHDOG_MS);
+
+      /*
+       * マイクの接続を取るのは `start()` が通った後（#179・#210）。上の注記のとおり、実機で
+       * 声が届いた聞き取りはすべてこの順だった。押して開いた回は `onPrimaryButton()` からの
+       * 同期の流れの中なので、初回の許可の確認もそのまま出せる。
+       */
+      if (settingsRef.current.holdMicOptIn) holdMicStream();
     },
     [
       armWatchdog,
@@ -789,6 +834,9 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
    */
   const resumeAfterSpeaking = useCallback(() => {
     silenceBeforeListening();
+    // 保っている接続もここで手放し、開くまでの間を空ける（#210）。`beginListening()` でも
+    // 手放すが、そちらは `start()` の直前で間が無い。
+    releaseMicStream();
     clearRestartTimer();
 
     restartTimerRef.current = setTimeout(() => {
@@ -812,13 +860,10 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
     warmVoicevoxSource(settingsRef.current.engineUrl);
 
     /*
-     * マイクの接続を掴む（#179。**既定は切**——#197で入から変えた）。**`primedRef` の外に
-     * 置く**——読み上げの許可取りと違って1回きりではなく、`stopEverything()` で手放した
-     * ぶんをここで取り直す。押した流れの中で呼ぶ必要があるので、`beginListening()` の側
-     * ではなくここに置いてある。
+     * マイクの接続（#179）はここでは取らない（#210）。以前はここで取っていたが、そうすると
+     * 押して開いた回は `start()` より先に接続を持つことになり、実機の記録で声が届かなかった
+     * 形（開いた時点で保っている）になる。`beginListening()` が `start()` の後に取る。
      */
-    if (settingsRef.current.holdMicOptIn) holdMicStream();
-
     if (primedRef.current) return;
     primeSpeechSynthesis();
     primeVoicevoxAudio();
@@ -1017,9 +1062,10 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
             {/*
               iPhoneのホーム画面PWAで、読み上げのあとにマイクが音を拾わなくなる症状の対策
               （#179）。**既定は切**——入のまま出した#179の後で、2往復目以降が端末に中断
-              されるという報告になった（#197）。効いていたのかどうかが実機の記録から
-              確かめられていないので、切り分けのために入切だけは残してある。押した流れの中で
-              取り直す必要があるため、ここで直接呼ぶ。
+              されるという報告になった（#197）。#210で「開いた後に取る」順序に固定したが、
+              効くかどうかはまだ実機の記録でしか分からないので、切り分けのために入切は残す。
+              **入にした時点では取らない**——次に聞き取りを開いたときに `start()` の後で取る。
+              ここで取ると、次の聞き取りが「保ったまま開く」順になる。
             */}
             <label className="flex items-center justify-between gap-3 py-2 text-sm">
               マイクの接続を保つ
@@ -1029,15 +1075,15 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
                 onChange={(event) => {
                   const holdMicOptIn = event.target.checked;
                   updateVoiceSettings({ holdMicOptIn });
-                  if (holdMicOptIn) holdMicStream();
-                  else releaseMicStream();
+                  if (!holdMicOptIn) releaseMicStream();
                 }}
                 className="size-4 accent-accent"
               />
             </label>
             <p className="-mt-1 mb-1 text-xs leading-relaxed text-muted">
-              話しかけているあいだ、マイクをつないだままにします。切り分け用の項目です。入にすると
-              聞き取りが端末に中断されることがあるため、ふだんは切のままにしてください。
+              聞き取りを開くたびに、マイクの接続をいったん手放してから開き、開けたあとで
+              つなぎ直します。iPhoneのホーム画面から開いたときに2回目以降の声が届かない場合の
+              切り分け用の項目で、入にしたときと切のときの両方の「聞き取りの記録」を見比べます。
             </p>
 
             <label className="flex flex-col gap-1.5 py-2 text-sm">

@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 import type { ReplyStyle } from "@/lib/chat-model";
+import { jstTodayLabel } from "@/lib/day-key";
 
 /**
  * 返答の生成に使うモデルの定義は `@/lib/chat-model` にある（#71）。
@@ -129,12 +130,20 @@ const VOICE_FORMAT_RULES = [
  *
  * `writeToolsWithheld` は、こちらが書き込みの道具を止めたかどうか。止めたことを伝えないと、
  * 道具が見当たらないまま「登録しておきました」と答えてしまう。
+ *
+ * `hints` は繋いでいる接続先ごとの指示（#184。`MCP_PRESETS` の `hints`）。共通の指示の後ろに
+ * そのまま並べる。接続の増減でしか変わらないので、キャッシュ（#56）の切れ方は今までと同じ。
  */
-function connectedServiceRules(labels: string[], writeToolsWithheld: boolean): string[] {
+function connectedServiceRules(
+  labels: string[],
+  hints: string[],
+  writeToolsWithheld: boolean,
+): string[] {
   if (labels.length === 0) return [];
 
   return [
     `${labels.join("・")}に繋がっていて、その中のデータを取ってくる道具が使えます`,
+    ...hints,
     "残高・予定・部屋の状態・記録の中身など、手元に無い事実を尋ねられたら、推測せず道具で調べてから答える",
     // 道具を1回呼ぶごとに返答が約9秒遅れる（#131）。要らない回に呼ばせず、要る回は1度で済ませる。
     "会話の中にすでにある情報や、事実を要しない話（雑談・相談・言い直し）では道具を呼ばない。道具を呼ぶたびに返事が遅れる",
@@ -150,14 +159,24 @@ function connectedServiceRules(labels: string[], writeToolsWithheld: boolean): s
   ];
 }
 
+/**
+ * 相談のシステムプロンプト。
+ *
+ * **今日の日付を入れる**（#184）。無いと「明後日」「来週の月曜」を予定の道具へ渡す日付に
+ * 落とせない。日付だけで時刻は入れない（`jstTodayLabel()`。往復ごとにキャッシュが切れるため）。
+ * `now` を外から渡せるのは、日付をまたぐ検証で実時計に縛られないため。
+ */
 export function secretarySystemPrompt(
   style: ReplyStyle,
   connectedLabels: string[] = [],
   writeToolsWithheld = false,
+  connectedHints: string[] = [],
+  now: Date = new Date(),
 ): string {
   const rules = [
+    `今日は ${jstTodayLabel(now)} です（日本時間）。「明日」「来週」のような相対の日付はここから数える`,
     ...COMMON_RULES,
-    ...connectedServiceRules(connectedLabels, writeToolsWithheld),
+    ...connectedServiceRules(connectedLabels, connectedHints, writeToolsWithheld),
     ...(style === "voice" ? VOICE_FORMAT_RULES : TEXT_FORMAT_RULES),
   ];
 

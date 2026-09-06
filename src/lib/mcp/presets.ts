@@ -35,6 +35,18 @@ export type McpPreset = {
    */
   missing: string[];
   /**
+   * この接続を繋いでいるときだけ相談のシステムプロンプトへ足す指示（#184）。
+   *
+   * 道具の説明文だけでも呼び分けはできるが、**どの道具に何を渡せば問いに答えられるか**
+   * （予定なら日付と日数、時刻は読み替えない）までは説明文に頼りきれない。接続先ごとの
+   * 癖はここに置き、`connectedServiceRules()` が繋いでいる接続のぶんだけ並べる。
+   * 繋いでいない接続の指示を出すと、無い道具を探して往復を無駄にする。
+   *
+   * **道具の名前を書くのは、その道具が接続先に実在すると確かめてから。** 無い名前を
+   * 指示に書くと、モデルはそれを探してから諦める。
+   */
+  hints: string[];
+  /**
    * この接続先が持つ、**書き込みを伴う道具**の名前（#78）。
    *
    * 既定ではこれらを秘書へ渡さない。絞り込みは**ここに挙げた名前を名指しで止める形**
@@ -57,6 +69,9 @@ export const MCP_PRESETS: McpPreset[] = [
     provides: [
       "いまの室温・湿度・CO2・エアコンの状態（aide_room_status）",
       "今日と明日の予定・天気（aide_daily_briefing）。天気は自宅の地域のもの",
+      // Googleカレンダーへは直接繋がない。DaySpanが統合したものをAIDEが読む（aide#173）。
+      "予定と空いている時間帯（aide_schedule）。今日から最大14日ぶんで、Googleカレンダーの予定に" +
+        "Notionのタスク・日付リマインド・移動が混ざったもの",
       "資産と固定費・引き落とし予定（aide_money_summary）",
       "VPSとサブPCの稼働（aide_ops_status）・開発状況（aide_dev_status）",
       "放置しているClaudeのセッション（aide_claude_sessions）",
@@ -64,6 +79,15 @@ export const MCP_PRESETS: McpPreset[] = [
     missing: [
       "電車の遅延・乗換（交通のコネクタが未実装。guchi-apps/aide#33）",
       "今日・明日より先の天気、自宅以外の地域の天気",
+      // DaySpan（dayspan#550）→ AIDE（aide#243）→ aide-bot（#185）の順に口を作る。
+      "予定の登録・変更（登録の経路を作っている途中。guchi-apps/dayspan#550・guchi-apps/aide#243・#185）",
+    ],
+    hints: [
+      // `aide_schedule` の説明文には「今日の予定は」で呼ぶとあり、`aide_daily_briefing` にも
+      // 同じ聞き方が書いてある。どちらを呼ぶかを聞き方ではなく欲しいもので決めさせる。
+      "予定・空いている時間・何時なら入れられるかを聞かれたら aide_schedule を呼ぶ。起点の日付（date）と日数（days）を、今日の日付から数えて YYYY-MM-DD で渡す。今日の見通し全体（予定に加えて天気・交通）が欲しいときだけ aide_daily_briefing を呼ぶ",
+      "aide_schedule が返す時刻は日本時間の HH:MM なので、時差を足し引きせずそのまま伝える。configured や complete が false のときは「予定が無い」ではなく「取れなかった」と言う",
+      "予定を登録・変更する道具は無い（設定で書き込みを許可しても使えない）。頼まれたら、いまは秘書からカレンダーへ書き込めないので DaySpan で入れてほしいと伝える",
     ],
     // `guchi-apps/aide` のMCP層が出している、あとから取り消せない結果が残る道具。
     // `aide_zaim_payment` は説明文に「この経路から取り消し・修正はできない」と明記されている。
@@ -91,6 +115,7 @@ export const MCP_PRESETS: McpPreset[] = [
       "自宅の情報（住まい・暮らしの決まりごと）の取り込み元（#167）",
     ],
     missing: [],
+    hints: [],
     // **あえて空にしてある**（#78）。名前が違えばその道具は素通りするだけだが、
     // 逆に接続先が改名した名前を書いたまま残すと、相談のたびに実在しない道具を
     // 名指しすることになる。手元にAPIキーが無く実物で確かめられないため、
@@ -112,4 +137,13 @@ export function findPreset(url: string): McpPreset | undefined {
  */
 export function writeToolsFor(url: string): string[] {
   return findPreset(url)?.writeTools ?? [];
+}
+
+/**
+ * その接続先を繋いでいるときにプロンプトへ足す指示（#184）。
+ *
+ * プリセットに無い接続先では空。把握していない接続先に指示は書けない。
+ */
+export function hintsFor(url: string): string[] {
+  return findPreset(url)?.hints ?? [];
 }

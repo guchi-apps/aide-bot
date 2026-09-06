@@ -10,7 +10,7 @@ import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
 import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { listConnectedServers, toCodexMcpServers, type ConnectedServer } from "@/lib/mcp/connections";
-import { writeToolsFor } from "@/lib/mcp/presets";
+import { hintsFor, writeToolsFor } from "@/lib/mcp/presets";
 import { writeToolsAllowed } from "@/lib/mcp/write-tools";
 import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
 import { TOOL_CALL_INPUT_LIMIT, TOOL_CALL_OUTPUT_LIMIT, truncateToolText } from "@/lib/tool-call";
@@ -192,10 +192,12 @@ function buildCodexPrompt(
   topics: string,
   connectedLabels: string[],
   writeToolsWithheld: boolean,
+  connectedHints: string[],
 ): string {
   // 繋いでいる接続の名前と「書き込みの道具を止めている」ことを体裁の指示に含める（#46・#78）。
   // 接続の増減はまれなので、プレフィックスの先頭側が変わることは受け入れる。
-  const system = secretarySystemPrompt(style, connectedLabels, writeToolsWithheld);
+  // 接続先ごとの指示（#184）も同じ場所に入る。今日の日付もここ（1日1回だけ変わる）。
+  const system = secretarySystemPrompt(style, connectedLabels, writeToolsWithheld, connectedHints);
   const conversation = buildConversationText(history);
 
   return [
@@ -341,6 +343,8 @@ export async function POST(request: Request) {
     topics,
     servers.map((server) => server.label),
     withheldTools.length > 0,
+    // 繋いでいる接続先の指示（#184）。プリセットに無い接続先ぶんは空。
+    servers.flatMap((server) => hintsFor(server.url)),
   );
 
   // 次に割り込んでくるリクエストへ「この生成の後片付けが終わった」と伝えるための錠（#48）。

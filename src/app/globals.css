@@ -226,7 +226,8 @@ body {
 .bot-eye,
 .bot-mouth,
 .bot-lamp,
-.bot-wave {
+.bot-wave,
+.bot-foot {
   transform-box: view-box;
 }
 
@@ -250,6 +251,11 @@ body {
 .bot-lamp,
 .bot-wave {
   transform-origin: 256px 130px;
+}
+
+/* 足上げ（#215）で動かす1本の足。自分の付け根を基準にする。 */
+.bot-foot {
+  transform-origin: 306px 454px;
 }
 
 .bot-idle .bot-body {
@@ -329,9 +335,24 @@ body {
  * 後から書いた方が勝つ）。**状態ごとの動きを重ねるのではなく、反応の間だけ丸ごと差し替える。**
  * 状態と反応の組み合わせぶん（5通り）のキーフレームを書くより、反応の0.7秒だけ揺れが止まる方を
  * 採った——3Dで描けている端末ではこの経路を通らないため、書き分けに見合わない。
+ *
+ * **会釈・ジャンプ・足上げ（#215）は排他。** 体を押されるたびに`pickBodyReaction()`が
+ * この3つから1つだけ選ぶので、同時に2つのクラスが付くことはない。
  */
 .bot-bow .bot-body {
   animation: bot-bow 0.7s ease-in-out;
+}
+
+.bot-jump .bot-body {
+  animation: bot-jump 0.7s ease-in-out;
+}
+
+.bot-legup .bot-body {
+  animation: bot-legtilt 0.7s ease-in-out;
+}
+
+.bot-legup .bot-foot {
+  animation: bot-footup 0.7s ease-in-out;
 }
 
 .bot-flash .bot-lamp {
@@ -474,6 +495,48 @@ body {
   }
   40% {
     transform: translateY(20px) scaleY(0.95);
+  }
+}
+
+/*
+ * ジャンプ（#215）。沈んでから跳ね上がり、スクワッシュ&ストレッチを付けて着地する。
+ * 3D側（`robot-3d/model.ts`）は同じ進み方（`Math.sin(progress * Math.PI)`）を`root`の
+ * 位置・`body`の伸び縮みに使っている。
+ */
+@keyframes bot-jump {
+  0%,
+  100% {
+    transform: translateY(0) scaleY(1);
+  }
+  18% {
+    transform: translateY(6px) scaleY(0.92);
+  }
+  55% {
+    transform: translateY(-30px) scaleY(1.08);
+  }
+  85% {
+    transform: translateY(2px) scaleY(0.95);
+  }
+}
+
+/* 足上げ（#215）。体をわずかに傾け、`.bot-foot`（1本だけ）を独立して持ち上げる。 */
+@keyframes bot-legtilt {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  45% {
+    transform: rotate(-4deg);
+  }
+}
+
+@keyframes bot-footup {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+  45% {
+    transform: translate(-4px, -34px) rotate(-20deg);
   }
 }
 

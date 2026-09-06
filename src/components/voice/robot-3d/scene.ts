@@ -2,10 +2,11 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { createRobotModel } from "./model";
 import type { RobotState } from "../robot";
+import { pickBodyReaction } from "../robot-reaction";
 
 /** 触られなくなってから正面へ戻り始めるまで（ミリ秒）。 */
 const LOOK_TIMEOUT_MS = 2500;
-/** 会釈の長さ（ミリ秒）。 */
+/** 体を押されたときの反応の長さ（ミリ秒）。会釈・ジャンプ・足上げの3種類で共通（#215）。 */
 const BOW_MS = 700;
 /** アンテナが光っている長さ（ミリ秒）。 */
 const FLASH_MS = 600;
@@ -66,10 +67,14 @@ export function mountRobotScene(host: HTMLElement, onFailure: () => void) {
      */
     let pointer: { x: number; y: number } | null = null;
     let pointedAt = -Infinity, bowAt = -Infinity, flashAt = -Infinity, blockedUntil = 0;
+    // ジャンプ・足上げ（#215）はタップのたびに`pickBodyReaction()`が会釈と排他で選ぶので、
+    // 同時に2つ以上が真になることはない。
+    let jumpAt = -Infinity, legUpAt = -Infinity;
     /** ドラッグで回した角度（ラジアン。#201）。慣性は呼び出し側（`robot.tsx`）が持つ。 */
     let spin = 0;
     /** 反応が終わるまで（ミリ秒）。動きを減らす設定でも、この間だけは描画を続ける。 */
-    const activeUntil = () => Math.max(bowAt + BOW_MS, flashAt + FLASH_MS);
+    const activeUntil = () =>
+      Math.max(bowAt + BOW_MS, flashAt + FLASH_MS, jumpAt + BOW_MS, legUpAt + BOW_MS);
 
     /** 画面の座標を、ロボットの中心から見た -1..1 の向きへ直す。遠いカーソルは追わない。 */
     const lookTarget = () => {
@@ -96,10 +101,12 @@ export function mountRobotScene(host: HTMLElement, onFailure: () => void) {
         if (pointer && now - pointedAt > LOOK_TIMEOUT_MS) pointer = null;
         const look = lookTarget();
         const bow = now - bowAt < BOW_MS ? (now - bowAt) / BOW_MS : 0;
+        const jump = now - jumpAt < BOW_MS ? (now - jumpAt) / BOW_MS : 0;
+        const legUp = now - legUpAt < BOW_MS ? (now - legUpAt) / BOW_MS : 0;
         const flash = now - flashAt < FLASH_MS ? 1 - (now - flashAt) / FLASH_MS : 0;
         model!.update({
           state, reacting, time: (now - start) / 1000, delta, reduced: motion.matches,
-          lookX: look.x, lookY: look.y, bow, flash,
+          lookX: look.x, lookY: look.y, bow, jump, legUp, flash,
         });
         // ドラッグ回転（#201）は視線・状態の合成（`model.update()`内・bodyの回転）とは別に、
         // 全体を包むrootへ足す。互いの計算を上書きし合わない。
@@ -184,7 +191,15 @@ export function mountRobotScene(host: HTMLElement, onFailure: () => void) {
         if (now < blockedUntil) return false;
         // 動きを減らす設定では体を動かさず、アンテナの明るさだけで応える。
         const kind = motion.matches ? "antenna" : part;
-        if (kind === "antenna") flashAt = now; else bowAt = now;
+        if (kind === "antenna") {
+          flashAt = now;
+        } else {
+          // 体を押されるたびに、会釈・ジャンプ・足上げのどれかをランダムに選ぶ（#215）。
+          const body = pickBodyReaction();
+          if (body === "jump") jumpAt = now;
+          else if (body === "legUp") legUpAt = now;
+          else bowAt = now;
+        }
         blockedUntil = activeUntil() + REACTION_COOLDOWN_MS;
         resume();
         return true;

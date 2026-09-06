@@ -4,6 +4,10 @@ import { forwardRef, useCallback, useEffect, useId, useRef, useState } from "rea
 
 import { cn } from "@/lib/utils";
 import type { RobotPart } from "./robot-3d/scene";
+import { pickBodyReaction, type BodyReactionKind } from "./robot-reaction";
+
+/** SVGフォールバックが受け付ける反応の種類。体の3種類（#215）とアンテナの発光。 */
+type FallbackReaction = "antenna" | BodyReactionKind;
 
 /**
  * 秘書のいまの状態。画面の文言とロボットの見た目はこの1つの値から決める。
@@ -49,7 +53,7 @@ const SPIN_FRAME_MS = 1000 / 60;
  * ぶつからないようにするため。React が返す値には記号が混じるので、そのまま
  * `url(#...)` に入れず英数字だけへ落としてある。
  */
-const RobotFallback = forwardRef<SVGSVGElement, Props & { reaction?: RobotPart | null }>(function RobotFallback(
+const RobotFallback = forwardRef<SVGSVGElement, Props & { reaction?: FallbackReaction | null }>(function RobotFallback(
   { state, reacting = false, reaction, className },
   ref,
 ) {
@@ -64,7 +68,9 @@ const RobotFallback = forwardRef<SVGSVGElement, Props & { reaction?: RobotPart |
         "bot",
         `bot-${state}`,
         reacting && "bot-reacting",
-        reaction === "body" && "bot-bow",
+        reaction === "bow" && "bot-bow",
+        reaction === "jump" && "bot-jump",
+        reaction === "legUp" && "bot-legup",
         reaction === "antenna" && "bot-flash",
         className,
       )}
@@ -146,7 +152,8 @@ const RobotFallback = forwardRef<SVGSVGElement, Props & { reaction?: RobotPart |
         />
 
         <ellipse cx="206" cy="432" rx="31" ry="22" fill={`url(#${uid}-shell)`} />
-        <ellipse cx="306" cy="432" rx="31" ry="22" fill={`url(#${uid}-shell)`} />
+        {/* 足上げ（#215）で動かす1本。他の部位と独立して動かせるよう、自分だけのクラスを持つ。 */}
+        <ellipse className="bot-foot" cx="306" cy="432" rx="31" ry="22" fill={`url(#${uid}-shell)`} />
 
         <rect x="148" y="230" width="216" height="152" rx="72" fill={`url(#${uid}-face)`} />
         <rect x="158" y="240" width="196" height="60" rx="30" fill="#ffffff" opacity="0.05" />
@@ -223,7 +230,7 @@ export function Robot({ state, reacting = false, className }: Props) {
   const controller = useRef<ReturnType<typeof import("./robot-3d/scene").mountRobotScene> | null>(null);
   const [ready, setReady] = useState(false);
   // WebGLが使えずSVGで出ているときの反応。3Dのときは `robot-3d/model.ts` が同じ動きを作る。
-  const [fallbackReaction, setFallbackReaction] = useState<RobotPart | null>(null);
+  const [fallbackReaction, setFallbackReaction] = useState<FallbackReaction | null>(null);
   const fallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fallbackBlockedUntil = useRef(0);
   const pressed = useRef<
@@ -326,7 +333,10 @@ export function Robot({ state, reacting = false, className }: Props) {
     if (now < fallbackBlockedUntil.current) return;
     fallbackBlockedUntil.current = now + REACTION_MS + REACTION_COOLDOWN_MS;
     // 動きを減らす設定では体を動かさず、アンテナの明るさだけで応える（3D側の `react()` と同じ扱い）。
-    setFallbackReaction(window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "antenna" : part);
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // 体を押されたときは、会釈・ジャンプ・足上げのどれかをランダムに選ぶ（#215。3D側の
+    // `scene.ts` と同じ `pickBodyReaction()` を使う）。
+    setFallbackReaction(reduced ? "antenna" : part === "antenna" ? "antenna" : pickBodyReaction());
     if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
     fallbackTimer.current = setTimeout(() => setFallbackReaction(null), REACTION_MS);
   }, []);

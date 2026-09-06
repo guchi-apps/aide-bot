@@ -33,6 +33,13 @@ type Props = {
  * 高さから `env(safe-area-inset-bottom)` を引いているのは、body側で同じぶんの余白を
  * 取っているため。100dvhのままだと合計が画面より高くなり、ページ全体が数十pxだけ
  * 縦スクロールする（ホーム画面から起動したiOSで顕著）。
+ *
+ * **ページそのものが上下にスクロールしないことの担保は `html`/`body`（`src/app/layout.tsx`）
+ * 側の `overflow-hidden`・`overscroll-none` が持つ**（#191）。この`ChatShell`のルートに
+ * ある `overflow-hidden` は、この中で内容が縦に収まりきらないときの見た目のクリップ用で、
+ * iOSのタッチのラバーバンド（弾性スクロール）まではデスクトップの検証では再現できず、
+ * `html`/`body` 側で塞ぐ必要があった。各画面の内部スクロール（一覧・記録欄・設定パネル等）は
+ * `overflow-y-auto` の入れ物ごとに閉じているので、ここを固定しても壊れない。
  */
 export function ChatShell({
   days,

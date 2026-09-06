@@ -21,6 +21,10 @@ export type RobotDrive = {
   lookY: number;
   /** 会釈の進み（0=していない、1=終わり）。 */
   bow: number;
+  /** ジャンプの進み（0=していない、1=終わり。#215）。 */
+  jump: number;
+  /** 足上げの進み（0=していない、1=終わり。#215）。 */
+  legUp: number;
   /** アンテナの発光の強さ（0..1）。 */
   flash: number;
 };
@@ -37,6 +41,12 @@ const GAZE_TAU = 0.085;
 const LOOK_YAW = 0.12;
 /** 視線の上下に連れて体が傾く量（ラジアン）。 */
 const LOOK_PITCH = 0.07;
+/** ジャンプで`root`が持ち上がる高さ（世界座標の単位。#215）。 */
+const JUMP_HEIGHT = 0.45;
+/** 足上げで足が浮く高さ（世界座標の単位。#215）。 */
+const LEG_LIFT = 0.24;
+/** 足上げのあいだ、体がわずかに傾く量（ラジアン。#215）。 */
+const LEG_LEAN = 0.06;
 
 /** 目標へ一定の割合で寄せる。経過時間から割合を出すので、こま数が変わっても速さが変わらない。 */
 function approach(current: number, target: number, tau: number, delta: number) {
@@ -134,6 +144,8 @@ export function createRobotModel() {
     parent.add(mesh);
     return mesh;
   }
+  /** 足上げ（#215）で動かす1本の足。世界に対してではなく`root`直下の局所座標で動かす。 */
+  let liftFoot: THREE.Mesh | null = null;
   const shellGeo = sphere.clone();
   const pos = shellGeo.attributes.position;
   for (let i = 0; i < pos.count; i++) {
@@ -148,7 +160,8 @@ export function createRobotModel() {
   body.add(shell);
   for (const x of [-0.67, 0.67]) {
     for (const z of [-0.47, 0.47]) {
-      ellipsoid(`Foot_${x}_${z}`, root, brown, [x, 0.17, z], [0.25, 0.17, 0.3]);
+      const foot = ellipsoid(`Foot_${x}_${z}`, root, brown, [x, 0.17, z], [0.25, 0.17, 0.3]);
+      if (x > 0 && z > 0) liftFoot = foot; // 前寄り・右側の1本を足上げの対象にする
     }
     ellipsoid(`Ear_${x}`, body, brown, [Math.sign(x) * 1.08, 1.17, 0], [0.16, 0.34, 0.29]);
   }
@@ -365,7 +378,10 @@ export function createRobotModel() {
     pose.eye = approach(pose.eye, eye, POSE_TAU, d.delta);
 
     // --- 2. タップ反応。なじませた姿勢の上へそのまま足す（なじませると会釈が鈍る）。 ---
+    // 会釈・ジャンプ・足上げは同時に来ない（`scene.ts`がタップのたびに1つだけ選ぶ）。
     const bow = d.bow > 0 ? Math.sin(d.bow * Math.PI) : 0; // 出て、戻る
+    const jump = d.jump > 0 ? Math.sin(d.jump * Math.PI) : 0;
+    const legRaise = d.legUp > 0 ? Math.sin(d.legUp * Math.PI) : 0;
     if (bow > 0) override = [0, 0.1]; // 会釈の間はこちらを向く
     const lampFlash = d.flash > 0 ? 0.35 + d.flash * 3.2 : 0;
 
@@ -377,8 +393,17 @@ export function createRobotModel() {
 
     body.rotation.y = pose.gazeX * LOOK_YAW;
     body.rotation.x = pose.pitch + pose.gazeY * LOOK_PITCH + bow * 0.14;
-    body.rotation.z = pose.roll * (1 - bow);
+    body.rotation.z = pose.roll * (1 - bow) - legRaise * LEG_LEAN;
     body.position.y = pose.lift - bow * 0.05;
+    // ジャンプはスクワッシュ&ストレッチ付きで伸び縮みさせる。体だけでなく`root`ごと持ち上げ、
+    // 4本の足も一緒に地面から離す（`root`直下にあるため）。
+    body.scale.set(1 - jump * 0.08, 1 + jump * 0.16, 1 - jump * 0.08);
+    root.position.y = jump * JUMP_HEIGHT;
+    // 足上げは1本の足だけを`root`直下の局所座標で持ち上げる。他の3本と`root`自体は地面のまま。
+    if (liftFoot) {
+      liftFoot.position.y = 0.17 + legRaise * LEG_LIFT;
+      liftFoot.rotation.x = -legRaise * 0.8;
+    }
     lampMaterial.emissiveIntensity = Math.max(lampBase, lampFlash);
     // 光っている間はランプ自体も膨らみ、外へはみ出す光を重ねる。
     // **明るさだけでは気付けない**（この大きさではランプが数pxしかない）。
@@ -399,7 +424,10 @@ export function createRobotModel() {
     return "body" as const;
   }
 
-  update({ state: "idle", reacting: false, time: 0, delta: 0, reduced: true, lookX: 0, lookY: 0, bow: 0, flash: 0 });
+  update({
+    state: "idle", reacting: false, time: 0, delta: 0, reduced: true, lookX: 0, lookY: 0,
+    bow: 0, jump: 0, legUp: 0, flash: 0,
+  });
   function dispose() {
     const geometries = new Set<THREE.BufferGeometry>();
     const materials = new Set<THREE.Material>();

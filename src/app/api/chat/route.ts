@@ -24,11 +24,13 @@ import { recordApiUsage } from "@/lib/usage";
  * 繋いだ外部サービス（MCP）の道具は#131で戻した——`listConnectedServers()` で引いた接続を
  * `runCodexExec()` に渡し、Codex自身がリモートMCPへ繋ぐ（`-c mcp_servers.…`。`@/lib/codex`）。
  * 書き込みの道具の絞り込み（#78）はCodexの `disabled_tools`、記録（#81）はJSONLの
- * `mcp_tool_call` から取る。**朝の見通し（#79）はまだAnthropic側のMCPコネクタのまま**（#151）。
+ * `mcp_tool_call` から取る。**#183で朝の見通し（#79）も同じ形へ移り、Anthropicを呼ぶ経路は
+ * 無くなった。**
  *
  * **使用量（`ApiUsage`）の記録は#133で戻した。** Codexはサブスク定額で費用が付かないが、
  * `codex exec --json` の `turn.completed` がトークン数を返すため、`/usage` の「相談・お知らせ」
- * の節に量として出す。**費用が0になるのは単価表を引かないから**で、記録しないからではない
+ * の節（#183から「相談・お知らせ・朝の見通し」）に量として出す。**費用が0になるのは単価表を
+ * 引かないから**で、記録しないからではない
  * （`billingKind()`。`@/lib/chat-model`）。
  *
  * **`codex exec` はトークン単位でストリーミングしない**（`@/lib/codex`）。応答が完結して

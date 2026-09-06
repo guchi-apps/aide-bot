@@ -165,12 +165,14 @@ export function createRobotModel() {
   });
   const lamp = ellipsoid("Antenna_lamp", antenna, lampMaterial, [0, 2.49, 0], [0.105, 0.105, 0.105]);
   /*
-   * 指で押せる大きさの当たり判定。168pxの表示ではランプは実寸4px程度しかなく、
-   * 光る部分だけを的にすると押せない。`visible = false` に頼らないのは、
-   * three.jsのレイキャストが可視性を見ないためで、透明な材質で「写らないが当たる」を作る。
+   * 指で押せる大きさの当たり判定（#180）。**見えているメッシュを的にすると指では当たらない。**
+   * カメラの画角から計算すると、168pxの表示でランプは直径10.7px・アンテナ全体でも約25×28pxで、
+   * iOSの推奨44pxを大きく下回る。この楕円は168pxで44.9×46.9px（200pxなら53.4×55.9px）になる。
+   * `visible = false` に頼らないのは、three.jsのレイキャストが可視性を見ないためで、
+   * 透明な材質で「写らないが当たる」を作っている。
    */
   const hitMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
-  const antennaZone = ellipsoid("Antenna_hit_area", antenna, hitMaterial, [0, 2.4, 0], [0.34, 0.42, 0.34]);
+  const antennaZone = ellipsoid("Antenna_hit_area", antenna, hitMaterial, [0, 2.4, 0], [0.44, 0.46, 0.44]);
   antennaZone.renderOrder = -1;
   /*
    * 押されたときに広がる光（#180）。**明るさを上げるだけでは足りない。** 168pxの表示だと

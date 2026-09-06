@@ -1,6 +1,6 @@
 {
   "name": "aide-bot",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "private": true,
   "packageManager": "pnpm@10.34.5+sha512.a4ee05f2f73658255bd6a89859c065a45c28a57daefae2c893a168ee2b73168c37b91e83e57ea67654ad03f03031746430e8bce38e362e042605fb8abc80192e",
   "scripts": {
@@ -34,6 +34,7 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.6.0",
+    "three": "0.185.1",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
@@ -41,6 +42,7 @@
     "@types/node": "^20.19.43",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
+    "@types/three": "0.185.0",
     "@types/web-push": "^3.6.4",
     "dotenv": "^17.4.2",
     "eslint": "^9.39.5",

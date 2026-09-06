@@ -1,6 +1,6 @@
 "use client";
 
-import { useId } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -31,7 +31,7 @@ type Props = {
  * ぶつからないようにするため。React が返す値には記号が混じるので、そのまま
  * `url(#...)` に入れず英数字だけへ落としてある。
  */
-export function Robot({ state, reacting = false, className }: Props) {
+function RobotFallback({ state, reacting = false, className }: Props) {
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
 
   return (
@@ -177,5 +177,36 @@ export function Robot({ state, reacting = false, className }: Props) {
         <circle className="bot-dot bot-dot-3" cx="300" cy="104" r="8" />
       </g>
     </svg>
+  );
+}
+
+
+/** SVGを先に表示し、3Dの初回描画が成功したときだけ切り替える。 */
+export function Robot({ state, reacting = false, className }: Props) {
+  const host = useRef<HTMLDivElement>(null);
+  const controller = useRef<ReturnType<typeof import("./robot-3d/scene").mountRobotScene> | null>(null);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    import("./robot-3d/scene").then(({ mountRobotScene }) => {
+      if (cancelled || !host.current) return;
+      controller.current = mountRobotScene(host.current, () => {
+        controller.current = null;
+        if (!cancelled) setReady(false);
+      });
+      setReady(true);
+    }).catch(() => {
+      // GPU非対応・初期化失敗・チャンク取得失敗でも、会話とSVGを継続する。
+      if (!cancelled) setReady(false);
+    });
+    return () => { cancelled = true; controller.current?.dispose(); controller.current = null; };
+  }, []);
+  useEffect(() => { controller.current?.setState(state, reacting); }, [state, reacting, ready]);
+  return (
+    <div className={cn("relative shrink-0", className)} aria-hidden="true">
+      <div className="absolute inset-x-[16%] bottom-[8%] h-[7%] rounded-[50%] bg-black/15 blur-[5px]" hidden={!ready} />
+      <div ref={host} className="absolute inset-0" style={{ visibility: ready ? "visible" : "hidden" }} />
+      {!ready && <RobotFallback state={state} reacting={reacting} className="h-full w-full" />}
+    </div>
   );
 }

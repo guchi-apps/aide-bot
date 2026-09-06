@@ -22,6 +22,7 @@ import { dayHeading } from "@/lib/day-key";
 import { holdMicStream, releaseMicStream } from "@/lib/speech/mic-stream";
 import {
   isSpeechRecognitionSupported,
+  RECOGNITION_ABORTED,
   recognitionLog,
   resetRecognition,
   startRecognition,
@@ -142,6 +143,46 @@ const STOP_WATCHDOG_MS = 2_000;
 const SILENT_CLOSE_HINT = "聞き取れていないようです。マイクを押し直してから話しかけてください。";
 
 /**
+ * 端末が聞き取りを打ち切ったあと、開き直すまでの間（#197）。
+ *
+ * 何も聞こえずに閉じた回（`RESTART_DELAY_MS`）より長く待つ。中断は端末側の都合で起きて
+ * おり、`onend` の直後に開き直しても同じところで打ち切られる——実際、報告された記録では
+ * 300msで開き直した回が続けて `aborted` になっている。
+ */
+const ABORTED_RESTART_DELAY_MS = 1_000;
+
+/**
+ * 端末による中断（`aborted`）を、続けて何回まで開き直すか（#197）。
+ *
+ * 1回目は聞き取りの実体を作り直して開き直す。**2回続いたらやめる**——同じ理由で打ち切られて
+ * いるので、待っても直らない。`retryListening()` に任せると `SILENT_RESTART_LIMIT`（10回）を
+ * 300msごとに使い切ることになり、そのあいだ画面は「お話しください…」のまま変わらない。
+ */
+const ABORTED_RESTART_LIMIT = 1;
+
+/**
+ * 画面を開いてから、端末の中断を理由に実体を作り直してよい回数（#197）。
+ *
+ * **上限は往復単位ではなくマウント単位で持つ。** 利用者がマイクを押し直すたびに数え直すと、
+ * 押すたびに1回ずつ作り直すことになり、#155が名指しで潰した「実質毎回作り直す」に近づく。
+ * 使い切ったら作り直さずに開き直すだけにする——案内は変わらず出るので、画面が止まったまま
+ * にはならない。
+ */
+const ABORTED_RESET_LIMIT = 3;
+
+/**
+ * 端末による中断が続いたときに出す案内（#197）。
+ *
+ * **`SILENT_CLOSE_HINT` では合わない場面のために足したもの。** あちらは「マイクを押し直して
+ * から話しかけてください」＝押し直せば直る前提の文言だが、端末に中断されているときは
+ * **押し直しても同じところで打ち切られる**（#197の記録では、手で押し直した回も `aborted`）。
+ * iPhoneのホーム画面PWAでだけ起きており、同じ端末でもSafariのタブでは続けて話せる
+ * （#179の切り分け）ので、その場でできる回避策まで書く。
+ */
+const ABORTED_HINT =
+  "端末が聞き取りを中断しました。アプリをいったん閉じて開き直すか、Safariのタブで開いてお試しください。";
+
+/**
  * 音声で秘書と対話する画面（#27）。
  *
  * 聞き取りも読み上げもブラウザ内蔵の Web Speech API で行い、返答の生成は「書く」と同じ
@@ -229,6 +270,21 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
   const closedByUserRef = useRef(false);
   /** 文言を出して終わった聞き取りは開き直さない（マイクが許可されていない、など）。 */
   const failedRef = useRef(false);
+  /**
+   * 端末に中断された（`aborted`）回が続いている数（#197）。
+   *
+   * 何も聞こえずに閉じた回（`silentRestartsRef`）と分けて数える。前者は待てば話し出せる
+   * ——実際に声が届く往復がある——のに対し、こちらは同じところで打ち切られ続けるので、
+   * 早めにやめて理由を画面へ出す必要がある。
+   */
+  const abortedRef = useRef(0);
+  /**
+   * 画面を開いてから、中断を理由に実体を作り直した回数（#197）。**往復をまたいで数える。**
+   *
+   * 利用者が押し直すたびに数え直すと、押すたびに1回ずつ作り直すことになり、#155が潰した
+   * 「実質毎回作り直す」へ近づく。`beginListening()` では戻さない。
+   */
+  const abortedResetsRef = useRef(0);
 
   // コールバックの中からは、その時点の最新の設定を見たい。stateを直接読むと
   // 聞き取りを始めた時点の値で固定される。
@@ -463,6 +519,41 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
   }, [clearRestartTimer]);
 
   /**
+   * 端末に中断された聞き取りを、実体を作り直してから開き直す（#197）。
+   *
+   * `retryListening()` と分けてあるのは、**待ち時間も回数も止めどきも別物**のため。無音で
+   * 閉じた回は話し出すまでの間を待つのが目的で何度でも開き直してよいが、中断は端末側の
+   * 都合なので、同じ実体・同じ間合いで開き直しても打ち切られ続ける。
+   *
+   * **実体を作り直してよい場面はここと、`onend` すら返らなくなった回（`finishTurn(true)`）の
+   * 2つだけ。** #155が禁じたのは「何も聞こえないまま閉じた回で作り直す」ことで、それは
+   * 毎回真になるため実質「毎回作り直す」になってしまうという理由だった。中断は続けて2回で
+   * 打ち切るので、その形にはならない。
+   *
+   * 戻り値が false なら、呼ぶ側が案内を出して待機へ戻す。
+   */
+  const restartAfterAbort = useCallback(() => {
+    if (closedByUserRef.current || failedRef.current) return false;
+    if (!isSpeechRecognitionSupported()) return false;
+    if (abortedRef.current > ABORTED_RESTART_LIMIT) return false;
+
+    // 作り直しはマウント単位で打ち止めにする。使い切っても開き直しはする——ここで戻すと、
+    // 押し直しても待機のままで、利用者からは何も起きていないように見える。
+    if (abortedResetsRef.current < ABORTED_RESET_LIMIT) {
+      abortedResetsRef.current += 1;
+      resetRecognition();
+    }
+
+    clearRestartTimer();
+    restartTimerRef.current = setTimeout(() => {
+      restartTimerRef.current = null;
+      beginListeningRef.current(true);
+    }, ABORTED_RESTART_DELAY_MS);
+
+    return true;
+  }, [clearRestartTimer]);
+
+  /**
    * マイクを開く。`resume` は「無音で閉じたぶんを開き直している途中」という意味で、
    * このときだけ開き直しの回数を持ち越す（`false` なら数え直す）。
    */
@@ -476,6 +567,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
 
       if (!resume) {
         silentRestartsRef.current = 0;
+        abortedRef.current = 0;
         // 開き直しの途中では消さない（#164）。出したそばから次の開き直しが消してしまい、
         // 「聞き取れていないようです」が一度も読めないまま点滅する。
         setHint(null);
@@ -497,9 +589,10 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
       /**
        * 1回の聞き取りを畳む（#164）。
        *
-       * `stuck` は「`onend` が返ってこないまま見張りに掛かった」という意味。**この経路が
-       * 唯一、実体を作り直してよい場面**——`no-speech` で正しく閉じているうちは実体は
-       * 生きており、そこで作り直すと#155で潰した振る舞いへ戻る。
+       * `stuck` は「`onend` が返ってこないまま見張りに掛かった」という意味。実体を作り直して
+       * よいのはこの経路と、端末に中断された回（`restartAfterAbort()`。#197）だけ——
+       * `no-speech` で正しく閉じているうちは実体は生きており、そこで作り直すと#155で潰した
+       * 振る舞いへ戻る。
        */
       const finishTurn = (stuck: boolean) => {
         if (!current() || settled) return;
@@ -520,6 +613,22 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
         finalRef.current = "";
 
         if (text === "") {
+          /*
+           * 端末に中断された回は、無音で閉じた回とは別に扱う（#197）。作り直して1回だけ
+           * 開き直し、それでも中断されたら理由を出して待機へ戻る。
+           *
+           * **`retryListening()` に任せると、案内は出るのに合わない文言が出る。** あちらが
+           * 出す `SILENT_CLOSE_HINT` は「マイクを押し直してから話しかけてください」＝
+           * 押し直せば直る前提だが、中断は押し直しても同じところで打ち切られる。しかも
+           * 300msごとに10回開き直すので、そのあいだ画面は「お話しください…」のまま。
+           */
+          if (abortedRef.current > 0) {
+            if (restartAfterAbort()) return;
+            if (!closedByUserRef.current && !failedRef.current) setHint(ABORTED_HINT);
+            setStatus("idle");
+            return;
+          }
+
           if (retryListening()) return;
 
           // 開き直しを使い切ったときだけ知らせる。利用者が自分で止めたとき・文言付きの
@@ -551,12 +660,27 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
           // 声が届いた時点で開き直しの回数は仕切り直す。話し出すまでが長かっただけの
           // 往復で、次の番の待ち時間まで短くなっていくのを防ぐ。
           silentRestartsRef.current = 0;
+          abortedRef.current = 0;
           // 届いたのだから「聞き取れていないようです」は下げる（#164）。
           setHint(null);
           bump();
         },
-        onError: (message) => {
-          if (!current() || !message) return;
+        onError: (message, code) => {
+          if (!current()) return;
+
+          /*
+           * 端末が聞き取りを打ち切った（#197）。こちらの `abort()` は先にハンドラを外して
+           * から呼ぶので、ここへ届く `aborted` は端末側の中断しかない。文言はこの場では
+           * 出さず（1回きりなら開き直しで直る）、続いたときに `finishTurn()` が出す。
+           */
+          if (code === RECOGNITION_ABORTED) {
+            abortedRef.current += 1;
+            return;
+          }
+
+          // 正しく終われている（`no-speech` を含む）。中断の連続は途切れた。
+          abortedRef.current = 0;
+          if (!message) return;
           failedRef.current = true;
           setError(message);
         },
@@ -581,7 +705,15 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
       finishTurnRef.current = finishTurn;
       armWatchdog(LISTEN_WATCHDOG_MS);
     },
-    [armWatchdog, bump, clearRestartTimer, clearWatchdog, discardRecognition, retryListening],
+    [
+      armWatchdog,
+      bump,
+      clearRestartTimer,
+      clearWatchdog,
+      discardRecognition,
+      restartAfterAbort,
+      retryListening,
+    ],
   );
 
   /**
@@ -617,11 +749,12 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
     warmVoicevoxSource(settingsRef.current.engineUrl);
 
     /*
-     * マイクの接続を掴む（#179）。**`primedRef` の外に置く**——読み上げの許可取りと違って
-     * 1回きりではなく、`stopEverything()` で手放したぶんをここで取り直す。押した流れの中で
-     * 呼ぶ必要があるので、`beginListening()` の側ではなくここに置いてある。
+     * マイクの接続を掴む（#179。**既定は切**——#197で入から変えた）。**`primedRef` の外に
+     * 置く**——読み上げの許可取りと違って1回きりではなく、`stopEverything()` で手放した
+     * ぶんをここで取り直す。押した流れの中で呼ぶ必要があるので、`beginListening()` の側
+     * ではなくここに置いてある。
      */
-    if (settingsRef.current.holdMic) holdMicStream();
+    if (settingsRef.current.holdMicOptIn) holdMicStream();
 
     if (primedRef.current) return;
     primeSpeechSynthesis();
@@ -820,26 +953,28 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
 
             {/*
               iPhoneのホーム画面PWAで、読み上げのあとにマイクが音を拾わなくなる症状の対策
-              （#179）。効いたかどうかは手元で確かめられないので、その場で切り戻せるように
-              画面へ出してある。押した流れの中で取り直す必要があるため、ここで直接呼ぶ。
+              （#179）。**既定は切**——入のまま出した#179の後で、2往復目以降が端末に中断
+              されるという報告になった（#197）。効いていたのかどうかが実機の記録から
+              確かめられていないので、切り分けのために入切だけは残してある。押した流れの中で
+              取り直す必要があるため、ここで直接呼ぶ。
             */}
             <label className="flex items-center justify-between gap-3 py-2 text-sm">
               マイクの接続を保つ
               <input
                 type="checkbox"
-                checked={settings.holdMic}
+                checked={settings.holdMicOptIn}
                 onChange={(event) => {
-                  const holdMic = event.target.checked;
-                  updateVoiceSettings({ holdMic });
-                  if (holdMic) holdMicStream();
+                  const holdMicOptIn = event.target.checked;
+                  updateVoiceSettings({ holdMicOptIn });
+                  if (holdMicOptIn) holdMicStream();
                   else releaseMicStream();
                 }}
                 className="size-4 accent-accent"
               />
             </label>
             <p className="-mt-1 mb-1 text-xs leading-relaxed text-muted">
-              iPhoneでホーム画面から開いたとき、返事のあとにマイクが反応しなくなる場合は入にして
-              ください。話しかけているあいだ、マイクをつないだままにします。
+              話しかけているあいだ、マイクをつないだままにします。切り分け用の項目です。入にすると
+              聞き取りが端末に中断されることがあるため、ふだんは切のままにしてください。
             </p>
 
             <label className="flex flex-col gap-1.5 py-2 text-sm">

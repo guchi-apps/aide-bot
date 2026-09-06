@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 import type { RobotPart } from "./robot-3d/scene";
@@ -29,6 +29,14 @@ const REACTION_COOLDOWN_MS = 400;
 const TAP_SLOP_PX = 12;
 /** これより長く押されていたら、押したのではなく長押しとして扱う（ミリ秒）。 */
 const TAP_HOLD_MS = 700;
+/** 横に1px動かすごとに回す角度（ラジアン。#201）。指の動きにそのまま追従させる。 */
+const SPIN_SENSITIVITY = 0.012;
+/** 慣性の減衰（1/60秒ごとの倍率）。1に近いほど長く回り続ける。 */
+const SPIN_FRICTION = 0.95;
+/** これより角速度が小さくなったら、惰性回転を止める（ラジアン/フレーム）。 */
+const SPIN_MIN_VELOCITY = 0.0008;
+/** 慣性の1歩を60fps換算するための基準（ミリ秒）。 */
+const SPIN_FRAME_MS = 1000 / 60;
 
 /**
  * 画面の中央にいる「秘書」のロボット（#49）。絵は `public/icon.svg` と同じ一体。
@@ -41,11 +49,15 @@ const TAP_HOLD_MS = 700;
  * ぶつからないようにするため。React が返す値には記号が混じるので、そのまま
  * `url(#...)` に入れず英数字だけへ落としてある。
  */
-function RobotFallback({ state, reacting = false, reaction, className }: Props & { reaction?: RobotPart | null }) {
+const RobotFallback = forwardRef<SVGSVGElement, Props & { reaction?: RobotPart | null }>(function RobotFallback(
+  { state, reacting = false, reaction, className },
+  ref,
+) {
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
 
   return (
     <svg
+      ref={ref}
       viewBox="0 0 512 512"
       aria-hidden="true"
       className={cn(
@@ -195,7 +207,7 @@ function RobotFallback({ state, reacting = false, reaction, className }: Props &
       </g>
     </svg>
   );
-}
+});
 
 
 /**
@@ -214,7 +226,16 @@ export function Robot({ state, reacting = false, className }: Props) {
   const [fallbackReaction, setFallbackReaction] = useState<RobotPart | null>(null);
   const fallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fallbackBlockedUntil = useRef(0);
-  const pressed = useRef<{ x: number; y: number; at: number; part: RobotPart | null } | null>(null);
+  const pressed = useRef<
+    { x: number; y: number; at: number; part: RobotPart | null; lastX: number; lastAt: number } | null
+  >(null);
+  // SVGフォールバックの回転は3Dの `setSpin()` と同じ角度をCSSの `rotateY()` で真似る（#201）。
+  const fallbackSvg = useRef<SVGSVGElement>(null);
+  /** ドラッグで回した角度（ラジアン）。慣性の間もここへ積み続ける。 */
+  const spinAngle = useRef(0);
+  /** 直近の角速度（ラジアン/フレーム）。指を離した瞬間の勢いをそのまま慣性へ渡す。 */
+  const spinVelocity = useRef(0);
+  const spinFrame = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -232,6 +253,8 @@ export function Robot({ state, reacting = false, className }: Props) {
     return () => { cancelled = true; controller.current?.dispose(); controller.current = null; };
   }, []);
   useEffect(() => { controller.current?.setState(state, reacting); }, [state, reacting, ready]);
+  // SVGフォールバックで回している最中に3Dの初期化が終わっても、角度を引き継ぐ（#201）。
+  useEffect(() => { if (ready) controller.current?.setSpin(spinAngle.current); }, [ready]);
   useEffect(() => () => { if (fallbackTimer.current) clearTimeout(fallbackTimer.current); }, []);
 
   /*
@@ -252,6 +275,50 @@ export function Robot({ state, reacting = false, className }: Props) {
     };
   }, [ready]);
 
+  /**
+   * ドラッグで回した角度を3D・SVGフォールバックの両方へ映す（#201）。慣性の計算は
+   * ここではなく呼び出し側（下の `startSpinMomentum`）が持つ——3D側の `setSpin()` は
+   * 受け取った角度をそのまま描画するだけの薄いAPIにして、視線・会話の状態の合成
+   * （`model.ts` の `update()`）とは干渉させない。
+   */
+  const applySpin = useCallback((radians: number) => {
+    controller.current?.setSpin(radians);
+    if (fallbackSvg.current) {
+      fallbackSvg.current.style.transform = `rotateY(${(radians * 180) / Math.PI}deg)`;
+    }
+  }, []);
+
+  const stopSpinMomentum = useCallback(() => {
+    if (spinFrame.current !== null) {
+      cancelAnimationFrame(spinFrame.current);
+      spinFrame.current = null;
+    }
+  }, []);
+
+  /**
+   * 指を離した後も、直前の勢いのぶんだけ回り続けさせる。「ぐるぐる回転できる感じ」
+   * （Issue本文）はドラッグへの追従だけでは弱く、離した後の惰性があって初めて出る。
+   * 動きを減らす設定では、この自動で続く回転そのものを起こさない
+   * ——ドラッグに追従する分は操作の結果としてそのまま反映する。
+   */
+  const startSpinMomentum = useCallback(() => {
+    stopSpinMomentum();
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const step = () => {
+      spinVelocity.current *= SPIN_FRICTION;
+      if (Math.abs(spinVelocity.current) < SPIN_MIN_VELOCITY) {
+        spinFrame.current = null;
+        return;
+      }
+      spinAngle.current += spinVelocity.current;
+      applySpin(spinAngle.current);
+      spinFrame.current = requestAnimationFrame(step);
+    };
+    spinFrame.current = requestAnimationFrame(step);
+  }, [applySpin, stopSpinMomentum]);
+
+  useEffect(() => stopSpinMomentum, [stopSpinMomentum]);
+
   /** 触られた反応を始める。連打しても積み上がらないよう、再生中と待ち時間は受け付けない。 */
   const react = useCallback((part: RobotPart) => {
     if (controller.current) { controller.current.react(part); return; }
@@ -269,18 +336,42 @@ export function Robot({ state, reacting = false, className }: Props) {
       type="button"
       aria-label="秘書のロボット。押すと反応します"
       onPointerDown={event => {
+        const now = performance.now();
         pressed.current = {
-          x: event.clientX, y: event.clientY, at: performance.now(),
+          x: event.clientX, y: event.clientY, at: now, lastX: event.clientX, lastAt: now,
           // 3Dのときは押された立体の部品で見分ける。SVGのときは体として扱う。
           part: controller.current ? controller.current.partAt(event.clientX, event.clientY) : "body",
         };
+        // 回っている途中で掴んだら、いったん惰性を止めて指の動きへ渡す。
+        stopSpinMomentum();
+        // 画面の外まで指を滑らせても、その先のpointermoveを引き続き受け取るため。
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={event => {
+        const down = pressed.current;
+        if (!down) return;
+        const dx = event.clientX - down.lastX;
+        if (dx === 0) return;
+        // 横方向の動きだけを回転にする。縦方向（`touch-pan-y`で許した縦スクロール）は使わない。
+        spinAngle.current += dx * SPIN_SENSITIVITY;
+        applySpin(spinAngle.current);
+        const now = performance.now();
+        const elapsedFrames = Math.max((now - down.lastAt) / SPIN_FRAME_MS, 1);
+        spinVelocity.current = (dx * SPIN_SENSITIVITY) / elapsedFrames;
+        down.lastX = event.clientX;
+        down.lastAt = now;
       }}
       onPointerUp={event => {
         const down = pressed.current;
         pressed.current = null;
-        if (!down?.part) return;
-        // 指を滑らせたぶん（＝画面を送っている）と長押しは反応にしない。縦スクロールを塞がないため。
-        if (Math.hypot(event.clientX - down.x, event.clientY - down.y) > TAP_SLOP_PX) return;
+        if (!down) return;
+        // 指を滑らせたぶん（＝画面を送っている）は反応にしない。縦スクロールを塞がないため。
+        // 3Dモデルに当たらない余白（`down.part === null`）からのドラッグでも回せる。
+        if (Math.hypot(event.clientX - down.x, event.clientY - down.y) > TAP_SLOP_PX) {
+          startSpinMomentum();
+          return;
+        }
+        if (!down.part) return;
         if (performance.now() - down.at > TAP_HOLD_MS) return;
         if (event.pointerType !== "mouse") controller.current?.look(event.clientX, event.clientY);
         react(down.part);
@@ -296,6 +387,8 @@ export function Robot({ state, reacting = false, className }: Props) {
         "focus-visible:rounded-full focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent",
         className,
       )}
+      // SVGフォールバックの `rotateY()`（#201）に奥行きを与える。3D側はcanvas自体が立体なので無関係。
+      style={{ perspective: "900px" }}
     >
       <span
         aria-hidden="true"
@@ -304,7 +397,13 @@ export function Robot({ state, reacting = false, className }: Props) {
       />
       <span ref={host} aria-hidden="true" className="absolute inset-0 block" style={{ visibility: ready ? "visible" : "hidden" }} />
       {!ready && (
-        <RobotFallback state={state} reacting={reacting} reaction={fallbackReaction} className="h-full w-full" />
+        <RobotFallback
+          ref={fallbackSvg}
+          state={state}
+          reacting={reacting}
+          reaction={fallbackReaction}
+          className="h-full w-full"
+        />
       )}
     </button>
   );

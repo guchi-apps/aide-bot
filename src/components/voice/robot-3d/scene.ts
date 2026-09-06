@@ -11,6 +11,8 @@ const BOW_MS = 700;
 const FLASH_MS = 600;
 /** 反応が終わってから次を受け付けるまで（ミリ秒）。連打で動きが積み上がらないようにする。 */
 const REACTION_COOLDOWN_MS = 400;
+/** 起動時に向けている角度（ラジアン）。ドラッグ回転（#201）はこの値からの追加分として持つ。 */
+const BASE_ROTATION_Y = -0.17;
 
 /** 触れた場所。体を押せば会釈、アンテナを押せば発光。 */
 export type RobotPart = "body" | "antenna";
@@ -43,7 +45,7 @@ export function mountRobotScene(host: HTMLElement, onFailure: () => void) {
     scene.environment = environment.texture;
     scene.environmentIntensity = 0.65;
     model = createRobotModel();
-    model.root.rotation.y = -0.17;
+    model.root.rotation.y = BASE_ROTATION_Y;
     scene.add(model.root);
     scene.add(new THREE.HemisphereLight(0xfff4e2, 0x6e6257, 0.9));
     const key = new THREE.DirectionalLight(0xfff5e6, 2);
@@ -64,6 +66,8 @@ export function mountRobotScene(host: HTMLElement, onFailure: () => void) {
      */
     let pointer: { x: number; y: number } | null = null;
     let pointedAt = -Infinity, bowAt = -Infinity, flashAt = -Infinity, blockedUntil = 0;
+    /** ドラッグで回した角度（ラジアン。#201）。慣性は呼び出し側（`robot.tsx`）が持つ。 */
+    let spin = 0;
     /** 反応が終わるまで（ミリ秒）。動きを減らす設定でも、この間だけは描画を続ける。 */
     const activeUntil = () => Math.max(bowAt + BOW_MS, flashAt + FLASH_MS);
 
@@ -97,6 +101,9 @@ export function mountRobotScene(host: HTMLElement, onFailure: () => void) {
           state, reacting, time: (now - start) / 1000, delta, reduced: motion.matches,
           lookX: look.x, lookY: look.y, bow, flash,
         });
+        // ドラッグ回転（#201）は視線・状態の合成（`model.update()`内・bodyの回転）とは別に、
+        // 全体を包むrootへ足す。互いの計算を上書きし合わない。
+        model!.root.rotation.y = BASE_ROTATION_Y + spin;
         try { renderer.render(scene, camera); } catch { fail(); return; }
         lastTime = now;
       }
@@ -150,6 +157,15 @@ export function mountRobotScene(host: HTMLElement, onFailure: () => void) {
         pointer = clientX === undefined || clientY === undefined ? null : { x: clientX, y: clientY };
         pointedAt = performance.now();
         resume();
+      },
+      /**
+       * ドラッグで回した角度（ラジアン）を反映する。慣性の計算は呼び出し側（`robot.tsx`）が持ち、
+       * ここは受け取った値をそのまま描画するだけ（3D・SVGフォールバックの両方で同じ角度を
+       * 使い回すため）。
+       */
+      setSpin(radians: number) {
+        spin = radians;
+        wake();
       },
       /** その座標にあるのが体かアンテナかを返す。当たっていなければ null。 */
       partAt(clientX: number, clientY: number): RobotPart | null {

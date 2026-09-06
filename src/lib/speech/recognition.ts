@@ -22,7 +22,14 @@ const RECOGNITION_LANG = "ja-JP";
  */
 export type RecognitionLogEntry = { at: string; text: string };
 
-const LOG_LIMIT = 12;
+/**
+ * 記録に残す行数（#197）。
+ *
+ * **12行では足りなかった。** 端末側が聞き取りを中断し続ける症状（#197）では、開き直しの
+ * たびに3行（開いた・終わった理由・閉じた）積むため、報告として貼られるころには
+ * 「1往復目は通っていたのか」「マイクの接続を保てていたのか」といった前提が流れている。
+ */
+const LOG_LIMIT = 30;
 
 let log: RecognitionLogEntry[] = [];
 const logListeners = new Set<() => void>();
@@ -67,8 +74,16 @@ export type RecognitionHandlers = {
   onFinal: (text: string) => void;
   /** 人の声を検出した瞬間。球の反応に使う。 */
   onSpeechStart: () => void;
-  /** 利用者へ出す日本語の文言。`null` は「黙って終わってよい」（無音など）。 */
-  onError: (message: string | null) => void;
+  /**
+   * 終わった理由。`message` は利用者へ出す日本語の文言で、`null` なら「黙って終わって
+   * よい」（無音など）。
+   *
+   * **`code`（`SpeechRecognitionErrorEvent.error` の生の値）も渡す**（#197）。文言を
+   * 出さない理由が2つ（`no-speech` と `aborted`）あり、**この2つは意味がまるで違う**
+   * ——前者は開いたマイクが黙って閉じただけ、後者は端末が聞き取りを打ち切っている。
+   * 同じ「黙って終わった」として扱うと、後者で開き直しても中断され続ける形になる。
+   */
+  onError: (message: string | null, code: string) => void;
   /** 成否によらず、聞き取りが終わったときに必ず1回。 */
   onEnd: () => void;
 };
@@ -150,10 +165,19 @@ export function resetRecognition(): void {
 }
 
 /**
+ * 端末が聞き取りを打ち切ったときのコード（#197）。
+ *
+ * **こちらの `abort()` は先にハンドラを外してから呼ぶ**ので、`onError` へこれが届いたら
+ * 端末側の中断とみて間違いない。開き直しの扱いを `no-speech` と分けるために使う。
+ */
+export const RECOGNITION_ABORTED = "aborted";
+
+/**
  * エラーコードを利用者向けの文言にする。
  *
  * `no-speech` と `aborted` は「何も言わずに終わった」だけなので、赤字を出さずに黙って戻す。
  * ここで文言を出すと、話しかけようとして止めただけの操作が毎回エラー表示になる。
+ * **中断が続いているときの案内は呼ぶ側が出す**（`onError` の `code` を見て決める。#197）。
  */
 function describeError(code: string): string | null {
   switch (code) {
@@ -214,7 +238,7 @@ export function startRecognition(handlers: RecognitionHandlers): RecognitionHand
     // 文言を出さない `no-speech` も記録には残す。**これが並んでいること自体が、
     // マイクは開いたのに声が一度も届いていないという手掛かりになる**（#164）。
     note(`終わった理由: ${event.error}`);
-    handlers.onError(describeError(event.error));
+    handlers.onError(describeError(event.error), event.error);
   };
 
   recognition.onend = () => {

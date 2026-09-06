@@ -1417,6 +1417,11 @@ Supabase の Redirect URLs に、開発で使うオリジンの `/auth/callback`
   別Issueのセッションが `prisma migrate dev` を流していると、こちらのスキーマには無いテーブルが
   すでに存在する。壊し合わないよう、検証で書き込みを伴う場合はDB名を変えて隔離する
   （`CREATE DATABASE app_aide_bot_issue<番号>` → `pnpm db:migrate:deploy` → 確認後に `DROP`）
+- **`.env.local` はコマンドラインで前置きした環境変数より優先される**（#183）。
+  `CODEX_BIN=… pnpm dev` のように前置きしても効かず、`.env.local` 側の値がそのまま使われる。
+  **差し替えたつもりで前と同じ結果が出る**ので、値を変えて挙動を見比べるときは `.env.local`
+  そのものを書き換えてから起こし直すこと（実測で、失敗するスタブを前置きしたのに
+  `status: sent` が返り、`.env.local` を書き換えたら `status: failed` になった）
 - **Next.js 16の `next dev` は同じディレクトリで2つ起動できない**（`Another next dev server is
   already running.` で終了する）。ポートを変えても回避できないので、環境変数を変えて起動し直す
   検証では、先に動いているサーバーを落とす

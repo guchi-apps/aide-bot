@@ -23,13 +23,16 @@ const RECOGNITION_LANG = "ja-JP";
 export type RecognitionLogEntry = { at: string; text: string };
 
 /**
- * 記録に残す行数（#197）。
+ * 記録に残す行数（#197・#210）。
  *
  * **12行では足りなかった。** 端末側が聞き取りを中断し続ける症状（#197）では、開き直しの
  * たびに3行（開いた・終わった理由・閉じた）積むため、報告として貼られるころには
  * 「1往復目は通っていたのか」「マイクの接続を保てていたのか」といった前提が流れている。
+ *
+ * #210で読み上げの始まり・終わりと接続の手放し・取り直しも残すようにしたので、1往復で
+ * 8行ほど積む。30行では3往復ぶんしか残らず、「1往復目は通っていた」がまた流れる。
  */
-const LOG_LIMIT = 30;
+const LOG_LIMIT = 50;
 
 let log: RecognitionLogEntry[] = [];
 const logListeners = new Set<() => void>();

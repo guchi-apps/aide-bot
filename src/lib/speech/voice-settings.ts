@@ -29,12 +29,21 @@ export type VoiceSettings = {
    * されているため、`NEXT_PUBLIC_*` に置くとJSバンドル越しに誰でも読める。端末ごとに入れる。
    */
   engineUrl: string;
-  /*
-   * **`holdMic`（#179）は#197で消した。** 往復のあいだ `getUserMedia` の接続を掴んだままに
-   * する対策だったが、iPhoneのホーム画面PWAでは1往復目しか通らないまま——つまり目的を
-   * 達成しないまま——2往復目以降が `aborted`（端末側の中断）で終わるようになっていた。
-   * 保存された値ごと読まなくなるので、既定を変えるだけの場合と違って実機にも必ず効く。
+  /**
+   * 往復のあいだ、マイクの接続を掴んだままにする（#179）。**既定は切**（#197で入から変えた）。
+   *
+   * iPhoneのホーム画面PWAで、読み上げのあとに開いたマイクが音を拾わなくなる症状の対策として
+   * 既定で入にしていたが、その端末では**1往復目しか通らないまま——つまり目的を達成しない
+   * まま——2往復目以降が `aborted`（端末側の中断）で終わる**という報告になった（#197）。
+   * 掴んだ接続が聞き取りと録音を取り合っている疑いがあるので、まず既定を切にしてある。
+   *
+   * **保存済みの設定を無効にするため、キーの名前ごと `holdMic` から変えてある。** 既定値だけを
+   * `false` にしても、localStorageに残った `holdMic: true` が読まれ続けて実機では切り替わらない。
+   *
+   * 切り分けのための入切は残してある——効いていたのかどうかが実機の記録から確かめられて
+   * いないため（`./mic-stream` の「マイクの接続を保った」が記録に写っていない）。
    */
+  holdMicOptIn: boolean;
 };
 
 export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
@@ -43,6 +52,7 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   voiceURI: null,
   rate: RATE_DEFAULT,
   engineUrl: "",
+  holdMicOptIn: false,
 };
 
 /**
@@ -73,6 +83,7 @@ function read(): VoiceSettings {
           : DEFAULT_VOICE_SETTINGS.rate,
       engineUrl:
         typeof parsed.engineUrl === "string" ? parsed.engineUrl : DEFAULT_VOICE_SETTINGS.engineUrl,
+      holdMicOptIn: parsed.holdMicOptIn ?? DEFAULT_VOICE_SETTINGS.holdMicOptIn,
     };
   } catch {
     // 壊れた値が残っていても画面は開けるようにする。

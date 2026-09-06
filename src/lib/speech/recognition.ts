@@ -50,6 +50,16 @@ export function recognitionLog(): RecognitionLogEntry[] {
   return log;
 }
 
+/**
+ * ほかのモジュールから記録へ1行足す（#179）。
+ *
+ * マイクの接続を保てたか（`./mic-stream`）は聞き取りが音を拾えるかに直結するので、同じ並びへ
+ * 混ぜて読めるようにしてある。**足すのは節目だけ**という決まりは変えない。
+ */
+export function noteRecognition(text: string): void {
+  note(text);
+}
+
 export function subscribeRecognitionLog(listener: () => void): () => void {
   logListeners.add(listener);
   return () => {

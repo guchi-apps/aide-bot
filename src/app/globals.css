@@ -322,6 +322,20 @@ body {
   animation: bot-wave 1.5s ease-out infinite;
 }
 
+/*
+ * 触れられたときの反応（#180）。**ここが効くのはWebGLが使えずSVGで出ているときだけ**で、
+ * 3Dで描けている端末では同じ動きを `robot-3d/model.ts` が作る。状態ごとの動きを
+ * 上書きするため、必ず `.bot-idle` などの指定より後ろに置くこと（詳しさが同じなので
+ * 後から書いた方が勝つ）。
+ */
+.bot-bow .bot-body {
+  animation: bot-bow 0.7s ease-in-out;
+}
+
+.bot-flash .bot-lamp {
+  animation: bot-flash 0.6s ease-out;
+}
+
 /* 波と点は時間差で出して、途切れずに広がって見せる。 */
 .bot-wave-2 {
   animation-delay: 0.4s;
@@ -447,6 +461,29 @@ body {
   100% {
     transform: scale(1.3);
     opacity: 0;
+  }
+}
+
+/* 会釈。出て、戻る。基準は足元（`.bot-body` の transform-origin）なので前へ沈んで見える。 */
+@keyframes bot-bow {
+  0%,
+  100% {
+    transform: translateY(0) scaleY(1);
+  }
+  40% {
+    transform: translateY(20px) scaleY(0.95);
+  }
+}
+
+/* アンテナの発光。明るさを一段上げてから戻す。 */
+@keyframes bot-flash {
+  0% {
+    transform: scale(1.3);
+    filter: brightness(2.2);
+  }
+  100% {
+    transform: scale(1);
+    filter: brightness(1);
   }
 }
 
@@ -619,6 +656,15 @@ body {
   .bot-listening .bot-wave,
   .bot-speaking .bot-wave {
     opacity: 0.5;
+  }
+
+  /*
+   * 触れられても体は動かさず、アンテナの明るさだけで応える（#180。3D側の
+   * `scene.ts` の `react()` も同じ扱いにしてある）。上の `animation: none` に
+   * 消されないよう、キーフレームではなく素の指定で書く。
+   */
+  .bot-flash .bot-lamp {
+    filter: brightness(1.8);
   }
 
   .bubble-pop,

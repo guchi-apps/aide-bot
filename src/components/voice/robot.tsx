@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
+import type { RobotPart } from "./robot-3d/scene";
 
 /**
  * 秘書のいまの状態。画面の文言とロボットの見た目はこの1つの値から決める。
@@ -20,6 +21,15 @@ type Props = {
   className?: string;
 };
 
+/** 触られた反応が続く長さ（ミリ秒）。3D側（`robot-3d/scene.ts`）と揃えてある。 */
+const REACTION_MS = 700;
+/** 反応が終わってから次を受け付けるまで（ミリ秒）。 */
+const REACTION_COOLDOWN_MS = 400;
+/** これ以上指が動いたら、押したのではなく画面を送ったものとして扱う（ピクセル）。 */
+const TAP_SLOP_PX = 12;
+/** これより長く押されていたら、押したのではなく長押しとして扱う（ミリ秒）。 */
+const TAP_HOLD_MS = 700;
+
 /**
  * 画面の中央にいる「秘書」のロボット（#49）。絵は `public/icon.svg` と同じ一体。
  *
@@ -31,14 +41,21 @@ type Props = {
  * ぶつからないようにするため。React が返す値には記号が混じるので、そのまま
  * `url(#...)` に入れず英数字だけへ落としてある。
  */
-function RobotFallback({ state, reacting = false, className }: Props) {
+function RobotFallback({ state, reacting = false, reaction, className }: Props & { reaction?: RobotPart | null }) {
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
 
   return (
     <svg
       viewBox="0 0 512 512"
       aria-hidden="true"
-      className={cn("bot", `bot-${state}`, reacting && "bot-reacting", className)}
+      className={cn(
+        "bot",
+        `bot-${state}`,
+        reacting && "bot-reacting",
+        reaction === "body" && "bot-bow",
+        reaction === "antenna" && "bot-flash",
+        className,
+      )}
     >
       <defs>
         <radialGradient id={`${uid}-body`} cx="36%" cy="26%" r="82%">
@@ -181,11 +198,24 @@ function RobotFallback({ state, reacting = false, className }: Props) {
 }
 
 
-/** SVGを先に表示し、3Dの初回描画が成功したときだけ切り替える。 */
+/**
+ * SVGを先に表示し、3Dの初回描画が成功したときだけ切り替える。
+ *
+ * **触れる部品なので、装飾ではなくボタンとして置く（#180）。** 絵そのものは
+ * `aria-hidden` のままで、名前とキーボード操作を外側のボタンが持つ。押して起きるのは
+ * 見た目の反応だけで、**マイク・送信・読み上げには一切触らない**——ここから会話の状態を
+ * 変えないという#176の前提をそのまま守っている。
+ */
 export function Robot({ state, reacting = false, className }: Props) {
-  const host = useRef<HTMLDivElement>(null);
+  const host = useRef<HTMLSpanElement>(null);
   const controller = useRef<ReturnType<typeof import("./robot-3d/scene").mountRobotScene> | null>(null);
   const [ready, setReady] = useState(false);
+  // WebGLが使えずSVGで出ているときの反応。3Dのときは `robot-3d/model.ts` が同じ動きを作る。
+  const [fallbackReaction, setFallbackReaction] = useState<RobotPart | null>(null);
+  const fallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fallbackBlockedUntil = useRef(0);
+  const pressed = useRef<{ x: number; y: number; at: number; part: RobotPart | null } | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     import("./robot-3d/scene").then(({ mountRobotScene }) => {
@@ -202,11 +232,80 @@ export function Robot({ state, reacting = false, className }: Props) {
     return () => { cancelled = true; controller.current?.dispose(); controller.current = null; };
   }, []);
   useEffect(() => { controller.current?.setState(state, reacting); }, [state, reacting, ready]);
+  useEffect(() => () => { if (fallbackTimer.current) clearTimeout(fallbackTimer.current); }, []);
+
+  /*
+   * PCではロボットの近くへ来たカーソルを追う。**触るだけの端末では繋がない**——
+   * `pointermove` は指が触れている間しか届かず、タップの位置は下の `pointerup` で渡している。
+   */
+  useEffect(() => {
+    if (!ready || !window.matchMedia("(hover: hover)").matches) return;
+    const move = (event: PointerEvent) => {
+      if (event.pointerType === "mouse") controller.current?.look(event.clientX, event.clientY);
+    };
+    const leave = () => controller.current?.look();
+    window.addEventListener("pointermove", move, { passive: true });
+    document.addEventListener("pointerleave", leave);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerleave", leave);
+    };
+  }, [ready]);
+
+  /** 触られた反応を始める。連打しても積み上がらないよう、再生中と待ち時間は受け付けない。 */
+  const react = useCallback((part: RobotPart) => {
+    if (controller.current) { controller.current.react(part); return; }
+    const now = performance.now();
+    if (now < fallbackBlockedUntil.current) return;
+    fallbackBlockedUntil.current = now + REACTION_MS + REACTION_COOLDOWN_MS;
+    // 動きを減らす設定では体を動かさず、アンテナの明るさだけで応える（3D側の `react()` と同じ扱い）。
+    setFallbackReaction(window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "antenna" : part);
+    if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
+    fallbackTimer.current = setTimeout(() => setFallbackReaction(null), REACTION_MS);
+  }, []);
+
   return (
-    <div className={cn("relative shrink-0", className)} aria-hidden="true">
-      <div className="absolute inset-x-[16%] bottom-[8%] h-[7%] rounded-[50%] bg-black/15 blur-[5px]" hidden={!ready} />
-      <div ref={host} className="absolute inset-0" style={{ visibility: ready ? "visible" : "hidden" }} />
-      {!ready && <RobotFallback state={state} reacting={reacting} className="h-full w-full" />}
-    </div>
+    <button
+      type="button"
+      aria-label="秘書のロボット。押すと反応します"
+      onPointerDown={event => {
+        pressed.current = {
+          x: event.clientX, y: event.clientY, at: performance.now(),
+          // 3Dのときは押された立体の部品で見分ける。SVGのときは体として扱う。
+          part: controller.current ? controller.current.partAt(event.clientX, event.clientY) : "body",
+        };
+      }}
+      onPointerUp={event => {
+        const down = pressed.current;
+        pressed.current = null;
+        if (!down?.part) return;
+        // 指を滑らせたぶん（＝画面を送っている）と長押しは反応にしない。縦スクロールを塞がないため。
+        if (Math.hypot(event.clientX - down.x, event.clientY - down.y) > TAP_SLOP_PX) return;
+        if (performance.now() - down.at > TAP_HOLD_MS) return;
+        if (event.pointerType !== "mouse") controller.current?.look(event.clientX, event.clientY);
+        react(down.part);
+      }}
+      onPointerCancel={() => { pressed.current = null; }}
+      onClick={event => {
+        // キーボード（Enter・Space）で押された回だけをここで拾う（`detail` が 0 になる）。
+        // マウスは `pointerup` で済ませてあり、両方で受けると同じ操作が2回反応する。
+        if (event.detail === 0) react("body");
+      }}
+      className={cn(
+        "relative block shrink-0 cursor-pointer touch-pan-y appearance-none border-0 bg-transparent p-0",
+        "focus-visible:rounded-full focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent",
+        className,
+      )}
+    >
+      <span
+        aria-hidden="true"
+        className="absolute inset-x-[16%] bottom-[8%] h-[7%] rounded-[50%] bg-black/15 blur-[5px]"
+        hidden={!ready}
+      />
+      <span ref={host} aria-hidden="true" className="absolute inset-0 block" style={{ visibility: ready ? "visible" : "hidden" }} />
+      {!ready && (
+        <RobotFallback state={state} reacting={reacting} reaction={fallbackReaction} className="h-full w-full" />
+      )}
+    </button>
   );
 }

@@ -11,6 +11,7 @@
  * 呼ぶ側は `createReader()` を使う。
  */
 
+import { noteRecognition } from "./recognition";
 import {
   forgetVoicevoxEngine,
   getVoicevoxAudio,
@@ -33,6 +34,25 @@ const FORCED_BREAK_LENGTH = 60;
  * 長くなり、2回目までの間が空くだけになる。短い場合は先出しせず、従来どおり1回にまとめる。
  */
 const LEAD_MIN_LENGTH = 12;
+
+/**
+ * 読み終わったのに `onend` が返ってこないときの見張り（#205）。
+ *
+ * **iOSでは `speechSynthesis` の `onstart` は返るのに `onend` が返らないことがある。**
+ * #205の実機（iPhoneのホーム画面PWA）で、**声は最後まで鳴ったのに画面が
+ * 「お話ししています」のまま戻らなくなった**——`SpeechReader` は `onend` / `onerror` でしか
+ * 読み終わりを数えないため、`onDrain` が一度も鳴らず、`VoicePanel` は `speaking` のまま
+ * 止まる。**「続けて話す」の自動再開も `onDrain` の中からしか動かない**ので、
+ * マイクは二度と開かず、押して割り込むしか先へ進めなくなる（#205の記録で、続く2回が
+ * どちらも「割り込み」だったのはこのため）。
+ *
+ * 逃げ道は、鳴らしているかどうかを実物（`speechSynthesis.speaking` / `.pending`）に
+ * 聞くこと。どちらも偽の状態がこの回数ぶん続いたら、届かなかった `onend` の代わりに畳む。
+ * **時間ではなく状態で見る**——返答の長さで読み上げの時間は何倍にも変わるので、
+ * 「N秒返らなければ」では長い返答を途中で畳んでしまう。
+ */
+const DRAIN_CHECK_MS = 500;
+const DRAIN_IDLE_TICKS = 4;
 
 /** 読み上げ速度の下限・上限・既定値。`SpeechSynthesisUtterance.rate` の許容範囲より内側に取る。 */
 export const RATE_MIN = 0.7;
@@ -190,6 +210,10 @@ export class SpeechReader {
   private ended = false;
   private cancelled = false;
   private started = false;
+  /** `onend` の取りこぼしを見張る（#205）。鳴らしているものがある間だけ動かす。 */
+  private drainTimer: ReturnType<typeof setInterval> | null = null;
+  /** 鳴らしていない状態が続いた回数。声が届くたびに数え直す。 */
+  private idleTicks = 0;
 
   constructor(private readonly options: ReaderOptions) {}
 
@@ -223,8 +247,51 @@ export class SpeechReader {
     this.cancelled = true;
     this.buffer = "";
     this.pending = 0;
+    this.clearDrainWatchdog();
 
     if (isSpeechSynthesisSupported()) window.speechSynthesis.cancel();
+  }
+
+  private clearDrainWatchdog(): void {
+    if (!this.drainTimer) return;
+    clearInterval(this.drainTimer);
+    this.drainTimer = null;
+  }
+
+  /**
+   * `onend` が返ってこないまま鳴り終わっていないかを見張る（#205）。
+   *
+   * **畳むのは、実物が「鳴らしてもいないし順番待ちも無い」と答え続けたときだけ。**
+   * 鳴らしている間・次の固まりを待っている間は `speaking` か `pending` のどちらかが立つので、
+   * ふつうの読み上げでは一度も掛からない。
+   */
+  private armDrainWatchdog(): void {
+    if (this.drainTimer || !isSpeechSynthesisSupported()) return;
+
+    this.idleTicks = 0;
+    this.drainTimer = setInterval(() => {
+      if (this.cancelled || this.pending === 0) {
+        this.clearDrainWatchdog();
+        return;
+      }
+
+      const synthesis = window.speechSynthesis;
+      if (synthesis.speaking || synthesis.pending) {
+        this.idleTicks = 0;
+        return;
+      }
+
+      this.idleTicks += 1;
+      if (this.idleTicks < DRAIN_IDLE_TICKS) return;
+
+      this.clearDrainWatchdog();
+      this.pending = 0;
+      // 記録に残す。**この行が並ぶこと自体が、iOSが `onend` を返していない証拠になる**
+      // ——画面からは「読み終わったのに戻らない」としか見えない。
+      noteRecognition("読み上げの終わりを取りこぼした");
+      // まだ本文が続いているなら、畳むのは `finish()` の仕事。
+      if (this.ended) this.options.onDrain();
+    }, DRAIN_CHECK_MS);
   }
 
   /**
@@ -276,7 +343,9 @@ export class SpeechReader {
     const settle = () => {
       if (this.cancelled) return;
       this.pending -= 1;
-      if (this.pending === 0 && this.ended) this.options.onDrain();
+      if (this.pending > 0) return;
+      this.clearDrainWatchdog();
+      if (this.ended) this.options.onDrain();
     };
 
     utterance.onend = settle;
@@ -284,6 +353,8 @@ export class SpeechReader {
 
     this.pending += 1;
     window.speechSynthesis.speak(utterance);
+    // iOSは `onend` を返さないことがある（#205）。鳴らしているものがある間だけ見張る。
+    this.armDrainWatchdog();
   }
 }
 

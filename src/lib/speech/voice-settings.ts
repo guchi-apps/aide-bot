@@ -131,6 +131,18 @@ export function useVoiceSettings(): VoiceSettings {
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
 
+/**
+ * Reactの外から、いまこの端末に入っている設定を読む（#205）。
+ *
+ * **`useVoiceSettings()` の値をマウント直後の効果から見てはいけない。** ハイドレーションの
+ * あいだは `getServerSnapshot()`（＝既定値）が返るため、`useEffect(..., [])` の時点では
+ * **保存されている値ではなく既定値**が読める（実測で、`holdMicOptIn` を入にしてある端末でも
+ * 「切」と記録された）。「いま端末に入っている値」がほしい場面ではこちらを使う。
+ */
+export function voiceSettingsSnapshot(): VoiceSettings {
+  return getSnapshot();
+}
+
 /** 購読するものが無い値のための、何もしない購読。 */
 function subscribeNothing(): () => void {
   return () => {};

@@ -14,12 +14,13 @@
 import { noteRecognition } from "./recognition";
 import {
   forgetVoicevoxEngine,
-  getVoicevoxAudio,
   isVoicevoxPlaybackSupported,
   parseVoicevoxSpeaker,
+  playVoicevoxAudio,
   resolveVoicevoxSource,
   stopVoicevoxAudio,
   type VoicevoxAudio,
+  type VoicevoxPlayback,
   type VoicevoxSource,
   type VoicevoxSpeaker,
 } from "./voicevox";
@@ -124,50 +125,6 @@ export function primeSpeechSynthesis(): void {
 export function silenceBeforeListening(): void {
   if (isSpeechSynthesisSupported()) window.speechSynthesis.cancel();
   stopVoicevoxAudio();
-}
-
-/**
- * 空で鳴らした端末の声が終わるのを待つ上限（#210）。iOSは `onend` を返さないことがある
- * （#205）ので、返らなくても先へ進める。
- */
-const SILENT_HANDOFF_TIMEOUT_MS = 2_000;
-
-/**
- * 端末の声を音量0で一言だけ鳴らし、終わるまで待つ（#210）。
- *
- * **VOICEVOX（`<audio>`）で読み終えた後、マイクを開く前にだけ使う。** iPhoneのホーム画面PWAでは、
- * `<audio>` で鳴らした後に開いた聞き取りには何も届かない（`no-speech` すら無く15秒黙る）のに、
- * 端末の声（`speechSynthesis`）で読んだ後なら届く——という実機の記録（#210）から、`speechSynthesis` を
- * 通すことがiOS側の音声の扱いを聞き取りへ渡せる状態へ戻すのではないか、という仮説を試すもの。
- * 2.5秒待つだけでは戻らなかった（同じ記録）。
- *
- * 空白1文字は実装によっては鳴らさずに終わる（`primeSpeechSynthesis()` の注記）ので、短い1音を
- * 音量0で渡す。**利用者の操作の外から呼ぶ**が、`primeSpeechSynthesis()` で許可を通した後なら
- * iOSでも鳴らせる（返答の読み上げと同じ前提）。
- */
-export function speakSilentHandoff(): Promise<void> {
-  return new Promise((resolve) => {
-    if (!isSpeechSynthesisSupported()) {
-      resolve();
-      return;
-    }
-
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(finish, SILENT_HANDOFF_TIMEOUT_MS);
-
-    const utterance = new SpeechSynthesisUtterance("ん");
-    utterance.lang = "ja-JP";
-    utterance.volume = 0;
-    utterance.onend = finish;
-    utterance.onerror = finish;
-    window.speechSynthesis.speak(utterance);
-  });
 }
 
 /**
@@ -432,7 +389,8 @@ class VoicevoxReader implements Reader {
   private started = false;
   private readonly controller = new AbortController();
   private fallback: SpeechReader | null = null;
-  private detach: (() => void) | null = null;
+  /** いま鳴らしている再生。中断のときに止める（#210）。 */
+  private playback: VoicevoxPlayback | null = null;
   /** 依頼した順のひと固まり。この順にそのまま鳴らす。 */
   private readonly chunks: VoicevoxChunk[] = [];
   /** 決まった宛先。疎通を調べている間は `null`。 */
@@ -471,8 +429,8 @@ class VoicevoxReader implements Reader {
     this.cancelled = true;
     this.buffer = "";
 
-    this.detach?.();
-    this.detach = null;
+    this.playback?.stop();
+    this.playback = null;
     this.controller.abort();
     this.releaseFrom(0);
     this.chunks.length = 0;
@@ -586,7 +544,7 @@ class VoicevoxReader implements Reader {
    * WEB版では「5秒に1回」の間隔がそこまで待つだけで自然に空く。
    */
   private async run(): Promise<void> {
-    const audio = getVoicevoxAudio();
+    const canPlay = isVoicevoxPlaybackSupported();
     const source = this.source ?? (await this.sourceReady.catch(() => null));
     if (this.cancelled || !source) return;
     this.source = source;
@@ -603,7 +561,7 @@ class VoicevoxReader implements Reader {
       return;
     }
 
-    if (!audio) {
+    if (!canPlay) {
       this.fallbackTo(this.remainingText(0), null);
       return;
     }
@@ -616,7 +574,7 @@ class VoicevoxReader implements Reader {
         const ready = await this.request(chunk, source);
         if (this.cancelled) return;
 
-        await this.playUrl(audio, ready.url, () => {
+        await this.playUrl(ready.url, () => {
           playing = true;
           const next = this.chunks[index + 1];
           if (next) this.request(next, source);
@@ -668,46 +626,27 @@ class VoicevoxReader implements Reader {
     }
   }
 
-  /** 1つぶんを鳴らし終えるまで待つ。`onPlaying` は鳴り始めた時点で1度だけ呼ぶ。 */
-  private playUrl(
-    audio: HTMLAudioElement,
-    url: string,
-    onPlaying: (() => void) | null,
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      // 「鳴り始めた」を先に伝えてから次のぶんを頼む。逆にすると、すでに鳴っているのに
-      // 「声を用意しています」が1度きり挟まる。
-      const handlePlaying = () => {
-        if (!this.started && !this.cancelled) {
-          this.started = true;
-          this.options.onStart();
-        }
-        onPlaying?.();
-      };
+  /**
+   * 1つぶんを取ってきて鳴らし終えるまで待つ（#210）。`onPlaying` は鳴り始めた時点で1度だけ。
+   *
+   * 再生そのものは `playVoicevoxAudio()`（Web Audio）に任せる。ここは「鳴り始めた」を秘書の
+   * 状態へつなぎ、中断（`cancel()`）で止められるように `this.playback` を持たせるだけ。
+   */
+  private playUrl(url: string, onPlaying: (() => void) | null): Promise<void> {
+    // 「鳴り始めた」を先に伝えてから次のぶんを頼む。逆にすると、すでに鳴っているのに
+    // 「声を用意しています」が1度きり挟まる。
+    const playback = playVoicevoxAudio(url, this.options.rate, () => {
+      if (!this.started && !this.cancelled) {
+        this.started = true;
+        this.options.onStart();
+      }
+      onPlaying?.();
+    });
 
-      // 中断されたときも必ず畳む。放っておくと run() が待ったまま戻らない。
-      const settle = (error?: Error) => {
-        audio.removeEventListener("playing", handlePlaying);
-        audio.removeEventListener("ended", onEnded);
-        audio.removeEventListener("error", onError);
-        this.detach = null;
+    this.playback = playback;
 
-        if (error && !this.cancelled) reject(error);
-        else resolve();
-      };
-
-      const onEnded = () => settle();
-      const onError = () => settle(new Error("voicevox: playback failed"));
-
-      this.detach = () => settle();
-
-      audio.addEventListener("playing", handlePlaying);
-      audio.addEventListener("ended", onEnded);
-      audio.addEventListener("error", onError);
-
-      audio.src = url;
-      audio.playbackRate = this.options.rate;
-      audio.play().catch(onError);
+    return playback.done.finally(() => {
+      if (this.playback === playback) this.playback = null;
     });
   }
 

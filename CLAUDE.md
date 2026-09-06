@@ -1190,12 +1190,22 @@ pnpm dev:https    # tailnetへHTTPSで公開し、iPhoneで開くURLを出す
   この手当てが効いている。「保った」の後に「声が届いた」が無ければ、順序ではない別の原因を疑う
 - **実機（#210）では、端末の声なら2往復目以降も聞き取れるようになり、VOICEVOXでは聞き取れない
   ままだった。** 読み上げの経路だけが違う——`speechSynthesis` はiOS側の音声セッションを変えず、
-  `<audio>` の再生はセッションを「再生」へ切り替える。**開くまでの間を2.5秒に伸ばしても戻らなかった**
-  （記録: `読み上げを終えた → 手放した → 2.5秒 → 開いた（接続なし）→ 保った → 15秒なにも無し →
-  作り直した`）。時間では解消しないので、**VOICEVOXの後は端末の声を音量0で一言鳴らしてから開く**
-  （`speakSilentHandoff()`。`src/lib/speech/synthesis.ts`）。記録には「端末の声を空で鳴らす（VOICEVOX
-  のあと）」「鳴らし終えた」が並ぶ。これでも届かなければ、`<audio>` そのものを避ける（Web Audioで
-  鳴らす等）方向に絞られる
+  `<audio>` 要素の再生はセッションを「再生専用」へ倒し、止めた後もそのまま居座る。次の2つは
+  **どちらも効かなかった**（実機の記録で、開いた聞き取りに `no-speech` すら来ず15秒黙る）。
+  - 開くまでの間を2.5秒に伸ばす（時間では戻らない）
+  - 読み上げの後に端末の声を音量0で一言鳴らす（`speechSynthesis` を通しても戻らない）
+- **効いたのは、VOICEVOXの再生を `<audio>` 要素から Web Audio（`AudioContext`）へ替えること
+  （#210）。** `playVoicevoxAudio()`（`src/lib/speech/voicevox.ts`）が合成した音声を `fetch` →
+  `decodeAudioData` → `AudioBufferSourceNode` で鳴らす。`AudioContext` は1つを使い回し、マイクを
+  押した流れの中で `primeVoicevoxAudio()`（`resume()` ＋ 無音を1度鳴らす）を通す。
+  **`<audio>` は使わない**——`getVoicevoxAudio()` は消えている。
+  - **WEB版API（`api.tts.quest`）の「合成しながら流す」（`mp3StreamingUrl`）は使えなくなった。**
+    `decodeAudioData` は音声全体が揃ってからでないと鳴らせないため、鳴り始めまでの待ちがそのぶん
+    伸びる（ENGINEは元々まとめて返すので影響が小さい）。`<audio>` を避けるのが目的なので受け入れる
+  - **Safariの `decodeAudioData` はコールバック版で呼び、渡すバッファはコピーする**（`slice(0)`）
+    ——`decodeAudioData` は元のバッファを切り離す（detach）ため
+  - 実機で確かめるときは `pnpm dev:https`。記録が `読み上げを終えた → 手放した →
+    マイクを開いた（読み上げのあと・接続なし）→ マイクの接続を保った → 声が届いた` と続けば効いている
 
 ### ロボットに触れる・目で追う（#180）
 

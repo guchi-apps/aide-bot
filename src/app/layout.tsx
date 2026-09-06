@@ -25,8 +25,8 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="ja">
-      <body className="min-h-dvh antialiased">{children}</body>
+    <html lang="ja" className="overflow-hidden overscroll-none">
+      <body className="h-dvh overflow-hidden overscroll-none antialiased">{children}</body>
     </html>
   );
 }

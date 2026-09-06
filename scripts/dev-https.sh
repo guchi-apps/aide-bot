@@ -32,6 +32,13 @@ fi
 PORT="${PORT:-3000}"
 HTTPS_PORT="${DEV_HTTPS_PORT:-$((PORT + 10000))}"
 
+# 解除。`pnpm dev:https off` で呼べる。
+if [ "${1:-}" = "off" ]; then
+  tailscale serve --https="${HTTPS_PORT}" off
+  echo "https://<ホスト>.ts.net:${HTTPS_PORT} の公開をやめました。"
+  exit 0
+fi
+
 if ! command -v tailscale >/dev/null 2>&1; then
   echo "tailscale が見つかりません。このホストからは実機での確認ができません。" >&2
   exit 1
@@ -69,6 +76,6 @@ iPhoneからは次のURLで開けます（Tailscaleに繋がっている必要�
 
 公開をやめるときは次を実行します。
 
-  tailscale serve --https=${HTTPS_PORT} off
+  pnpm dev:https off
 
 EOF

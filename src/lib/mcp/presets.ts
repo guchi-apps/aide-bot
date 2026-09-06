@@ -75,19 +75,20 @@ export const MCP_PRESETS: McpPreset[] = [
       "資産と固定費・引き落とし予定（aide_money_summary）",
       "VPSとサブPCの稼働（aide_ops_status）・開発状況（aide_dev_status）",
       "放置しているClaudeのセッション（aide_claude_sessions）",
+      // DaySpan（dayspan#550）→ AIDE（aide#243）の順に口が作られ、#185でaide-bot側も配線した。
+      "予定の登録（aide_create_event）。GoogleカレンダーへDaySpan経由で1件作成する",
     ],
     missing: [
       "電車の遅延・乗換（交通のコネクタが未実装。guchi-apps/aide#33）",
       "今日・明日より先の天気、自宅以外の地域の天気",
-      // DaySpan（dayspan#550）→ AIDE（aide#243）→ aide-bot（#185）の順に口を作る。
-      "予定の登録・変更（登録の経路を作っている途中。guchi-apps/dayspan#550・guchi-apps/aide#243・#185）",
+      "予定の変更・削除（作成のみ。guchi-apps/aide#243の時点では作成専用）",
     ],
     hints: [
       // `aide_schedule` の説明文には「今日の予定は」で呼ぶとあり、`aide_daily_briefing` にも
       // 同じ聞き方が書いてある。どちらを呼ぶかを聞き方ではなく欲しいもので決めさせる。
       "予定・空いている時間・何時なら入れられるかを聞かれたら aide_schedule を呼ぶ。起点の日付（date）と日数（days）を、今日の日付から数えて YYYY-MM-DD で渡す。今日の見通し全体（予定に加えて天気・交通）が欲しいときだけ aide_daily_briefing を呼ぶ",
       "aide_schedule が返す時刻は日本時間の HH:MM なので、時差を足し引きせずそのまま伝える。configured や complete が false のときは「予定が無い」ではなく「取れなかった」と言う",
-      "予定を登録・変更する道具は無い（設定で書き込みを許可しても使えない）。頼まれたら、いまは秘書からカレンダーへ書き込めないので DaySpan で入れてほしいと伝える",
+      "予定の登録を頼まれたら aide_create_event を呼ぶ。作成できたら返る url を「入れました」の案内に添える。予定の変更・削除はできない（作成専用）ので、頼まれたら DaySpan で直接直してほしいと伝える",
     ],
     // `guchi-apps/aide` のMCP層が出している、あとから取り消せない結果が残る道具。
     // `aide_zaim_payment` は説明文に「この経路から取り消し・修正はできない」と明記されている。
@@ -103,6 +104,7 @@ export const MCP_PRESETS: McpPreset[] = [
       "aide_create_task_candidate",
       "aide_save_daily_brief",
       "asset_manager_import_payment",
+      "aide_create_event",
     ],
   },
   {

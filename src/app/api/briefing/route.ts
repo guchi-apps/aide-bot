@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { runMorningBriefing } from "@/lib/briefing";
+import { refreshHomeProfiles } from "@/lib/home-profile";
 
 /**
  * 朝の見通しを起動する（#79）。**cronから叩かれる、利用者のいない経路。**
@@ -58,6 +59,11 @@ export async function POST(request: Request) {
 
   const outcomes = await runMorningBriefing();
 
+  // 自宅の情報の取り込み（#167）。**朝の見通しとは独立**で、設定時刻の前でも走る
+  // （見通しを送ったかどうかとは関係が無い）。前回から1日あいていなければDBを1回引くだけで
+  // 戻るので、cronが30分ごとに叩いても取り込みは1日1回に収まる。
+  const homeProfiles = await refreshHomeProfiles();
+
   // cronのログ（メール）に流れる想定なので、届いたかどうかが一目で分かる形にする。
   // 本文そのものは返さない——ログに秘書の返答が丸ごと残るのは行き過ぎ。
   return NextResponse.json({
@@ -68,5 +74,6 @@ export async function POST(request: Request) {
       delivered,
       ...(detail ? { detail } : {}),
     })),
+    homeProfiles,
   });
 }

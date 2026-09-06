@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { BriefingTimePicker } from "@/components/settings/briefing-time-picker";
 import { ConnectionList } from "@/components/settings/connection-list";
+import { HomeProfileCard } from "@/components/settings/home-profile-card";
 import { ModelPicker } from "@/components/settings/model-picker";
 import { NotificationSettings } from "@/components/settings/notification-settings";
 import { WriteToolPicker } from "@/components/settings/write-tool-picker";
@@ -10,6 +11,7 @@ import { selectedChatModels } from "@/lib/chat-model-server";
 import { listConnections } from "@/lib/mcp/connections";
 import { writeToolsFor } from "@/lib/mcp/presets";
 import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
+import { hasNotionConnection } from "@/lib/home-profile";
 import { pushPublicKey } from "@/lib/push/config";
 import { countSubscriptions } from "@/lib/push/subscriptions";
 
@@ -44,14 +46,26 @@ export default async function SettingsPage({ searchParams }: Props) {
     inUse: connection.connected && connection.enabled,
   }));
 
+  // 自宅の情報（#167）。取り込んだ時刻はサーバー側で日本時間へ整形して渡す
+  // （クライアントで作ると端末のタイムゾーンで出て、ハイドレーションでもずれる）。
+  const homeProfileFetchedAt = user.homeProfileFetchedAt
+    ? new Intl.DateTimeFormat("ja-JP", {
+        timeZone: "Asia/Tokyo",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(user.homeProfileFetchedAt)
+    : null;
+
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-6 md:px-7">
         <header>
           <h2 className="text-lg font-medium">設定</h2>
           <p className="mt-2 text-sm leading-relaxed text-muted">
-            秘書からのお知らせ、返答に使うモデル、外部サービスとの接続、書き込みの道具の扱いを
-            ここで変えられます。
+            秘書からのお知らせ、返答に使うモデル、自宅の情報、外部サービスとの接続、書き込みの道具の
+            扱いをここで変えられます。
           </p>
         </header>
 
@@ -63,6 +77,14 @@ export default async function SettingsPage({ searchParams }: Props) {
         <BriefingTimePicker initial={{ hour: user.briefingHour, minute: user.briefingMinute }} />
 
         <ModelPicker initial={models} />
+
+        <HomeProfileCard
+          initialProfile={user.homeProfile}
+          fetchedAtLabel={homeProfileFetchedAt}
+          notionConnected={hasNotionConnection(
+            connections.filter((connection) => connection.connected).map((connection) => connection.url),
+          )}
+        />
 
         <ConnectionList connections={connections} error={query.error} connected={query.connected} />
 

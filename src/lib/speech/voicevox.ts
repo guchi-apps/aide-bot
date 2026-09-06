@@ -369,14 +369,18 @@ export function getVoicevoxAudio(): HTMLAudioElement | null {
 }
 
 /**
- * 鳴らし終えた音声を手放す（#164）。
+ * 鳴らしているものを止めて、音声要素を空にする（#164）。
  *
  * **要素そのものは捨てない。** `primeVoicevoxAudio()` で許可を通したこの1つを使い回すのが
- * iOSで鳴らせる前提なので、捨てると次の返答が無音になる。手放すのは再生中の音の方で、
- * 読み上げが終わってもiOSの音声の扱いが「再生中」のまま居座り、続けて開いたマイクへ音が
- * 回ってこない——というのが#164でいちばん疑わしい形。要素が無いなら作らずに戻る。
+ * iOSで鳴らせる前提で、しかも `prime()` は1回きりなので、差し替えると以降のVOICEVOXが
+ * 丸ごと無音になる。止めるのは再生中の音の方で、読み上げが終わってもiOSの音声の扱いが
+ * 「再生中」のまま居座り、続けて開いたマイクへ音が回ってこない——というのが#164で
+ * いちばん疑わしい形。要素が無いなら作らずに戻る。
+ *
+ * **名前を `release` にしないこと。** 合成し終えた音声を手放す `VoicevoxAudio.release`
+ * （ObjectURLの解放）がすでにあり、別物と紛らわしくなる。
  */
-export function releaseVoicevoxAudio(): void {
+export function stopVoicevoxAudio(): void {
   if (!sharedAudio) return;
 
   sharedAudio.pause();

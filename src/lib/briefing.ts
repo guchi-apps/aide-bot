@@ -1,18 +1,13 @@
-import type Anthropic from "@anthropic-ai/sdk";
-
 import {
-  BRIEFING_MAX_OUTPUT_TOKENS,
   BRIEFING_SKIP_TOKEN,
-  MCP_BETA,
-  MCP_TOKEN_ALLOWANCE,
   MORNING_BRIEFING_REQUEST,
   briefingSystemPrompt,
-  getAnthropicClient,
 } from "@/lib/anthropic";
 import { BRIEFING_MODEL } from "@/lib/chat-model";
+import { runCodexExec } from "@/lib/codex";
 import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
-import { listConnectedServers, toMcpRequestParts } from "@/lib/mcp/connections";
+import { listConnectedServers, toCodexMcpServers } from "@/lib/mcp/connections";
 import { ingestNotice } from "@/lib/notices";
 import { sendPushToUser, usersWithSubscriptions } from "@/lib/push/subscriptions";
 import { recordApiUsage } from "@/lib/usage";
@@ -23,6 +18,12 @@ import { recordApiUsage } from "@/lib/usage";
  * cronから `POST /api/briefing` を叩いて動かす。常駐プロセスも新しい依存も足さない形で、
  * AIDEの `src/worker/run.ts`（常駐させずワンショットで実行し、スケジューリングは外に任せる）
  * と同じ考え方。
+ *
+ * **#183で生成元をCodex CLI（ChatGPTのサブスク枠）へ移した。** #128（相談）・#132（お知らせ
+ * 選定）・#167（自宅の前提）に続く最後の1本で、**これでアプリからAnthropic（従量課金）を
+ * 呼ぶ経路は無くなった**——`ANTHROPIC_API_KEY` も `@anthropic-ai/sdk` も要らない。
+ * 移せるようになったのは#131でCodexからリモートMCPへ繋げるようになり、`disabled_tools` で
+ * 書き込みの道具を名指しで止められると分かったため（#151で「移せない」とした理由が消えた）。
  *
  * ## 読まれなくなる通知を作らないための決めごと
  *
@@ -41,13 +42,17 @@ export const MORNING_BRIEFING_KIND = "morning-briefing";
 const BRIEFING_TITLE = "今日の見通し";
 
 /**
- * ツール呼び出しで一度返ってきた（`pause_turn`）ときに続きを頼む上限（#46と同じ考え方）。
+ * `codex exec` を待つ上限（#183）。
  *
- * 朝の見通しは複数の道具を順に叩くので、相談よりも `pause_turn` に当たりやすい。
- * #116で道具が6本（予定・天気、部屋、システム、支払予定、放置セッション、確認待ち）に
- * 増えたため、4から引き上げてある。
+ * 材料は6本（予定・天気、部屋、システム、支払予定、放置セッション、確認待ち）あり、
+ * **まとめて一度に呼ばせる**（`briefingServiceRules()` の指示と、Codexへ渡す接続の
+ * `supports_parallel_tool_calls=true`）。それでも順に呼ばれた回はそのぶん往復が増える
+ * （道具1回あたり約9秒。#131の実測）ので、歯止めとしてここで打ち切る。
+ *
+ * 自宅の取り込み（120秒。`home-profile.ts`）より長いのは、**誰も画面の前で待っていない**
+ * ため。打ち切られた日は記録を残さないので、次のcronの起動でやり直せる。
  */
-const MAX_TURNS = 8;
+const CODEX_TIMEOUT_MS = 180 * 1000;
 
 /**
  * 朝の見通しを、秘書の吹き出しの候補として残しておく時間（#93）。
@@ -103,35 +108,15 @@ export type BriefingOutcome = {
 };
 
 /**
- * 1回のAPI呼び出しで使ったトークン数（#51）。
+ * Codexへ渡す1本のプロンプト（#183）。
  *
- * **数える単位は「API呼び出し1回」**で、相談と同じ。`pause_turn` で頼み直した回は
- * その回数ぶん行ができる。
+ * **Codexにはシステムプロンプトを別に渡す口が無い。** お知らせ選定（`buildNoticePrompt()`）と
+ * 同じく、体裁・材料の指示（`briefingSystemPrompt()`）と依頼の文面を `---` で繋いで1本にする。
  *
- * **`/usage` で従量課金の節に入るのはここだけになった**（#133）。相談とお知らせ選定は
- * Codexへ移っており、同じテーブルへ入るが単価は引かれない。
+ * **依頼の文面はそのまま相談の1通目として保存される**ので、ここで足し引きしないこと（#79）。
  */
-async function recordUsage(userId: string, conversationId: string | null, message: Anthropic.Beta.BetaMessage) {
-  // 失敗しても通知は届けたい（#51と同じ方針）。飲むのは `recordApiUsage()` の側。
-  await recordApiUsage({
-    userId,
-    conversationId,
-    model: message.model,
-    usage: {
-      inputTokens: message.usage.input_tokens,
-      outputTokens: message.usage.output_tokens,
-      cacheWriteTokens: message.usage.cache_creation_input_tokens ?? 0,
-      cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
-    },
-  });
-}
-
-function textOf(message: Anthropic.Beta.BetaMessage): string {
-  return message.content
-    .filter((block): block is Anthropic.Beta.BetaTextBlock => block.type === "text")
-    .map((block) => block.text)
-    .join("")
-    .trim();
+function buildBriefingPrompt(labels: string[]): string {
+  return [briefingSystemPrompt(labels), "---", MORNING_BRIEFING_REQUEST].join("\n\n");
 }
 
 /**
@@ -139,6 +124,9 @@ function textOf(message: Anthropic.Beta.BetaMessage): string {
  *
  * **材料はすべて外部サービス（AIDE）から取る。** 繋いでいる接続が1つも無ければ道具が
  * 渡らず、書けるものが何も無いので呼び出す前に諦める（費用だけ掛かって中身が空になる）。
+ *
+ * 形は自宅の取り込み（`src/lib/home-profile.ts` の `refreshHomeProfile()`）に揃えてある。
+ * **失敗は投げる**——呼び出し元（`runFor()`）が捕まえて、その日の記録を残さずに戻る。
  */
 async function generateBriefing(userId: string): Promise<string> {
   const servers = await listConnectedServers(userId);
@@ -148,39 +136,34 @@ async function generateBriefing(userId: string): Promise<string> {
 
   // **書き込みの道具は設定によらず常に止める**（#78・#79）。相談側は設定で渡せるが、
   // ここは利用者のいないところで動いており、登録の前に復唱して確かめる相手がいない。
-  const { mcpServers, tools } = toMcpRequestParts(servers, false);
-  const client = getAnthropicClient();
+  const { mcpServers } = toCodexMcpServers(servers, false);
 
-  const turns: Anthropic.Beta.BetaMessageParam[] = [
-    { role: "user", content: [{ type: "text", text: MORNING_BRIEFING_REQUEST }] },
-  ];
+  const result = await runCodexExec({
+    model: BRIEFING_MODEL,
+    prompt: buildBriefingPrompt(servers.map((server) => server.label)),
+    signal: AbortSignal.timeout(CODEX_TIMEOUT_MS),
+    mcpServers,
+  });
 
-  let answer = "";
-
-  for (let turn = 0; turn < MAX_TURNS; turn += 1) {
-    const message = await client.beta.messages.create({
-      betas: [MCP_BETA],
-      mcp_servers: mcpServers,
-      tools,
-      model: BRIEFING_MODEL,
-      // 道具の呼び出しぶんも `max_tokens` から出る（#46）。本文の200文字だけを見て
-      // 詰めると、道具を2回叩いた時点で本文へ回るぶんが尽きる。
-      max_tokens: BRIEFING_MAX_OUTPUT_TOKENS + MCP_TOKEN_ALLOWANCE,
-      system: briefingSystemPrompt(servers.map((server) => server.label)),
-      messages: turns,
-    });
-
-    // 相談はまだ作っていないので conversationId は付けない（#51は「1呼び出し＝1行」で、
-    // 相談への紐付けは任意）。黙った回でも入力ぶんはもう使い終わっている。
-    await recordUsage(userId, null, message);
-
-    answer = textOf(message);
-    if (message.stop_reason !== "pause_turn") break;
-
-    turns.push({ role: "assistant", content: message.content });
+  // 相談はまだ作っていないので conversationId は付けない（#51は「1呼び出し＝1行」で、
+  // 相談への紐付けは任意）。**打ち切られた回は `usage` がnullで行が作られない**——
+  // `turn.completed` が届いておらず、そこまでの消費量が分からないため（#133）。
+  if (result.usage) {
+    await recordApiUsage({ userId, conversationId: null, model: BRIEFING_MODEL, usage: result.usage });
   }
 
-  return answer;
+  // 打ち切りは上限に掛かったときにしか起きない（この経路に利用者からの割り込みは無い）。
+  if (result.interrupted) {
+    throw new Error(`朝の見通しの生成が${CODEX_TIMEOUT_MS / 1000}秒で返らなかった`);
+  }
+  if (result.errorMessage) {
+    throw new Error(result.errorMessage);
+  }
+
+  // **`text` ではなく `reply` を読む**（#131）。道具を呼んだ回は「確認します」のような前置きが
+  // 別の `agent_message` として先に届くので、`text`（全部の連結）を通知の本文にすると
+  // 前置きごとロック画面へ出る。
+  return result.reply.trim();
 }
 
 type BriefingUser = { id: string; briefingHour: number; briefingMinute: number };

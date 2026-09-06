@@ -1,12 +1,15 @@
-import Anthropic from "@anthropic-ai/sdk";
-
 import type { ReplyStyle } from "@/lib/chat-model";
+import { jstTodayLabel } from "@/lib/day-key";
 
 /**
- * 返答の生成に使うモデルの定義は `@/lib/chat-model` にある（#71）。
+ * 秘書としての振る舞い（体裁の指示・依頼の文面）の置き場。**サーバー専用。**
  *
- * このモジュールはAnthropic SDKを引き込むため、モデルを選ぶ画面からはimportできない。
- * 単価・選べるモデル・既定値はそちらへ置き、ここには体裁の指示と上限トークンだけを残す。
+ * **ファイル名に反して、もうAnthropic SDKは使っていない**（#183で朝の見通しもCodexへ移り、
+ * アプリからClaudeを呼ぶ経路が無くなった）。ここに残っているのは提供元に依らない
+ * プロンプトだけで、相談・お知らせ選定・要約・朝の見通しがそろってここから読む。
+ *
+ * 返答の生成に使うモデルの定義は `@/lib/chat-model` にある（#71）。単価・選べるモデル・
+ * 既定値はそちら（クライアントからもimportする）へ置く。
  */
 
 /**
@@ -51,27 +54,10 @@ export function historyWindowSkip(totalMessages: number): number {
 }
 
 /**
- * リモートMCPサーバーへ繋ぐためのベータ指定（#46）。
- *
- * この機能はまだベータで、指定しないと `mcp_servers` ごと弾かれる。
- * 前の版（`mcp-client-2025-04-04`）は非推奨で、ツールの絞り込みの書き方が違う。
- */
-export const MCP_BETA = "mcp-client-2025-11-20";
-
-/**
- * 外部サービスへ繋いでいるときに、上限トークンへ上乗せするぶん（#46）。
- *
- * `max_tokens` は本文だけでなくツール呼び出しのぶんも含む。特に音声モードの1200は
- * 「聞くだけの返答を短く保つ」ための値で、ツールを2回呼んだだけで本文へ回るぶんが
- * 尽きる。体裁の指示は据え置いたまま、呼び出しに使う余地だけをここで足す。
- */
-export const MCP_TOKEN_ALLOWANCE = 4000;
-
-/**
  * 返答をどう受け取るか（#27）。定義は `@/lib/chat-model` にあり、ここでは読み直すだけ。
  *
  * モデルを選ぶ画面（クライアント）と、返答を作る側（サーバー）の両方が同じ型を使うため、
- * Anthropic SDKを引き込まない側に本体を置いてある。
+ * クライアントからimportできる側（`@/lib/chat-model`）に本体を置いてある。
  */
 export type { ReplyStyle };
 
@@ -129,12 +115,20 @@ const VOICE_FORMAT_RULES = [
  *
  * `writeToolsWithheld` は、こちらが書き込みの道具を止めたかどうか。止めたことを伝えないと、
  * 道具が見当たらないまま「登録しておきました」と答えてしまう。
+ *
+ * `hints` は繋いでいる接続先ごとの指示（#184。`MCP_PRESETS` の `hints`）。共通の指示の後ろに
+ * そのまま並べる。接続の増減でしか変わらないので、キャッシュ（#56）の切れ方は今までと同じ。
  */
-function connectedServiceRules(labels: string[], writeToolsWithheld: boolean): string[] {
+function connectedServiceRules(
+  labels: string[],
+  hints: string[],
+  writeToolsWithheld: boolean,
+): string[] {
   if (labels.length === 0) return [];
 
   return [
     `${labels.join("・")}に繋がっていて、その中のデータを取ってくる道具が使えます`,
+    ...hints,
     "残高・予定・部屋の状態・記録の中身など、手元に無い事実を尋ねられたら、推測せず道具で調べてから答える",
     // 道具を1回呼ぶごとに返答が約9秒遅れる（#131）。要らない回に呼ばせず、要る回は1度で済ませる。
     "会話の中にすでにある情報や、事実を要しない話（雑談・相談・言い直し）では道具を呼ばない。道具を呼ぶたびに返事が遅れる",
@@ -150,28 +144,29 @@ function connectedServiceRules(labels: string[], writeToolsWithheld: boolean): s
   ];
 }
 
+/**
+ * 相談のシステムプロンプト。
+ *
+ * **今日の日付を入れる**（#184）。無いと「明後日」「来週の月曜」を予定の道具へ渡す日付に
+ * 落とせない。日付だけで時刻は入れない（`jstTodayLabel()`。往復ごとにキャッシュが切れるため）。
+ * `now` を外から渡せるのは、日付をまたぐ検証で実時計に縛られないため。
+ */
 export function secretarySystemPrompt(
   style: ReplyStyle,
   connectedLabels: string[] = [],
   writeToolsWithheld = false,
+  connectedHints: string[] = [],
+  now: Date = new Date(),
 ): string {
   const rules = [
+    `今日は ${jstTodayLabel(now)} です（日本時間）。「明日」「来週」のような相対の日付はここから数える`,
     ...COMMON_RULES,
-    ...connectedServiceRules(connectedLabels, writeToolsWithheld),
+    ...connectedServiceRules(connectedLabels, connectedHints, writeToolsWithheld),
     ...(style === "voice" ? VOICE_FORMAT_RULES : TEXT_FORMAT_RULES),
   ];
 
   return `${SECRETARY_INTRO}\n\n${rules.map((rule) => `- ${rule}`).join("\n")}`;
 }
-
-/**
- * 朝の見通し（#79）で使う体裁と上限。
- *
- * 相談の返答と違い、**読むのは端末の通知**（ロック画面・通知センター）。見出しも箇条書きも
- * 表示されず、長い本文は途中で切られる。音声モードに近いが、聞くのではなく一目で読むため
- * 「話し言葉」ではなく短い平叙文に寄せる。
- */
-export const BRIEFING_MAX_OUTPUT_TOKENS = 1500;
 
 /**
  * 「今日は知らせることが無い」と判断したときにモデルへ返させる合図（#79）。
@@ -202,15 +197,22 @@ export const MORNING_BRIEFING_REQUEST =
  * 復唱して確認する」（#78）という、**相手がその場にいる前提**の指示で、利用者のいない朝の
  * 生成には噛み合わない。復唱しても答える人がいない。
  *
- * **書き込みの道具は設定によらず常に止める**（`toMcpRequestParts(servers, false)`）。
+ * **書き込みの道具は設定によらず常に止める**（`toCodexMcpServers(servers, false)`）。
  * 確認を取る相手がいない場面で、取り消せない結果が残る道具を渡す理由が無い。
+ *
+ * **道具はまとめて一度に呼ばせる**（#183）。Codexへ渡す接続には
+ * `supports_parallel_tool_calls=true` が付いている（`src/lib/codex.ts`）が、まとめるかどうかを
+ * 決めるのはモデルなので、指示の側にも書く。順に呼ばれると**道具の数だけ往復が増え**、
+ * 1回が9秒×6本ぶん伸びる（#131の実測）。
  */
 function briefingServiceRules(labels: string[]): string[] {
   if (labels.length === 0) return [];
 
   return [
     `${labels.join("・")}に繋がっていて、その中のデータを取ってくる道具が使えます`,
+    "必要な道具は順に呼ばず、まとめて一度に呼ぶ。順に呼ぶとそのぶん時間がかかる",
     "記録の追加・登録・変更をする道具は呼ばない。これは利用者のいないところで動いており、確かめる相手がいない",
+    "道具を呼ぶ前に「確認します」のような前置きを書かない。本文だけを返す",
   ];
 }
 
@@ -251,6 +253,11 @@ const BRIEFING_MATERIAL_RULES = [
  * **道具を必ず使わせる。** 手元には何の材料も無く、繋いでいる外部サービス（AIDE）から
  * 取ってこないと書けない。相談のときと違って利用者が続きを促せないので、
  * 「取れなかったので分かりません」で終わらせないことも明示する。
+ *
+ * **#183でCodexへ渡すようになった。** Codexにはシステムプロンプトを別に渡す口が無いので、
+ * 呼び出し側（`src/lib/briefing.ts` の `buildBriefingPrompt()`）がこの文面と
+ * `MORNING_BRIEFING_REQUEST` を `---` で繋いで1本にする（お知らせ選定の
+ * `buildNoticePrompt()` と同じ形）。文面そのものは提供元に依らないので変えていない。
  */
 export function briefingSystemPrompt(connectedLabels: string[]): string {
   const rules = [
@@ -339,26 +346,4 @@ export function compactSystemPrompt(maxLength: number): string {
   const intro = `${SECRETARY_INTRO}\n\n利用者との記録が長くなってきたので、古いところを畳んで手元に残す覚え書きを作ります。`;
 
   return `${intro}\n\n${rules.map((rule) => `- ${rule}`).join("\n")}`;
-}
-
-let client: Anthropic | undefined;
-
-/**
- * Anthropicクライアントを返す。
- *
- * **呼び出しているのは朝の見通し（`src/lib/briefing.ts`）だけになった。** チャットは#128、
- * お知らせ選定は#132でCodexへ移っている。**それでも `ANTHROPIC_API_KEY` は本番に要る**——
- * 朝の見通しだけがまだClaudeを呼ぶため（#151で移せば不要になる）。
- *
- * モジュールの読み込み時ではなく呼び出し時に組み立てる。`ANTHROPIC_API_KEY` はビルド時には
- * 存在せず（CIもGitHub Actions上のビルドも値を持たない）、import時に検証すると
- * `next build` がこのモジュールを辿った時点で落ちるため。
- */
-export function getAnthropicClient(): Anthropic {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error("ANTHROPIC_API_KEY が設定されていません");
-  }
-
-  client ??= new Anthropic();
-  return client;
 }

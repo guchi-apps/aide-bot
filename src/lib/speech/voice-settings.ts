@@ -29,6 +29,14 @@ export type VoiceSettings = {
    * されているため、`NEXT_PUBLIC_*` に置くとJSバンドル越しに誰でも読める。端末ごとに入れる。
    */
   engineUrl: string;
+  /**
+   * 往復のあいだ、マイクの接続を掴んだままにする（#179）。
+   *
+   * iPhoneのホーム画面PWAで、読み上げのあとに開いたマイクが音を拾わなくなる症状の対策。
+   * 詳しい理由は `./mic-stream` に書いてある。**既定は入**——再現する端末で何もせずに
+   * 効いてほしいため。逆に聞き取りが壊れる可能性も残るので、その場で切り戻せるようにしてある。
+   */
+  holdMic: boolean;
 };
 
 export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
@@ -37,6 +45,7 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   voiceURI: null,
   rate: RATE_DEFAULT,
   engineUrl: "",
+  holdMic: true,
 };
 
 /**
@@ -67,6 +76,7 @@ function read(): VoiceSettings {
           : DEFAULT_VOICE_SETTINGS.rate,
       engineUrl:
         typeof parsed.engineUrl === "string" ? parsed.engineUrl : DEFAULT_VOICE_SETTINGS.engineUrl,
+      holdMic: parsed.holdMic ?? DEFAULT_VOICE_SETTINGS.holdMic,
     };
   } catch {
     // 壊れた値が残っていても画面は開けるようにする。

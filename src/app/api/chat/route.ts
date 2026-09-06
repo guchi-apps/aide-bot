@@ -10,7 +10,7 @@ import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
 import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { listConnectedServers, toCodexMcpServers, type ConnectedServer } from "@/lib/mcp/connections";
-import { writeToolsFor } from "@/lib/mcp/presets";
+import { hintsFor, writeToolsFor } from "@/lib/mcp/presets";
 import { writeToolsAllowed } from "@/lib/mcp/write-tools";
 import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
 import { TOOL_CALL_INPUT_LIMIT, TOOL_CALL_OUTPUT_LIMIT, truncateToolText } from "@/lib/tool-call";
@@ -24,11 +24,13 @@ import { recordApiUsage } from "@/lib/usage";
  * 繋いだ外部サービス（MCP）の道具は#131で戻した——`listConnectedServers()` で引いた接続を
  * `runCodexExec()` に渡し、Codex自身がリモートMCPへ繋ぐ（`-c mcp_servers.…`。`@/lib/codex`）。
  * 書き込みの道具の絞り込み（#78）はCodexの `disabled_tools`、記録（#81）はJSONLの
- * `mcp_tool_call` から取る。**朝の見通し（#79）はまだAnthropic側のMCPコネクタのまま**（#151）。
+ * `mcp_tool_call` から取る。**#183で朝の見通し（#79）も同じ形へ移り、Anthropicを呼ぶ経路は
+ * 無くなった。**
  *
  * **使用量（`ApiUsage`）の記録は#133で戻した。** Codexはサブスク定額で費用が付かないが、
  * `codex exec --json` の `turn.completed` がトークン数を返すため、`/usage` の「相談・お知らせ」
- * の節に量として出す。**費用が0になるのは単価表を引かないから**で、記録しないからではない
+ * の節（#183から「相談・お知らせ・朝の見通し」）に量として出す。**費用が0になるのは単価表を
+ * 引かないから**で、記録しないからではない
  * （`billingKind()`。`@/lib/chat-model`）。
  *
  * **`codex exec` はトークン単位でストリーミングしない**（`@/lib/codex`）。応答が完結して
@@ -192,10 +194,12 @@ function buildCodexPrompt(
   topics: string,
   connectedLabels: string[],
   writeToolsWithheld: boolean,
+  connectedHints: string[],
 ): string {
   // 繋いでいる接続の名前と「書き込みの道具を止めている」ことを体裁の指示に含める（#46・#78）。
   // 接続の増減はまれなので、プレフィックスの先頭側が変わることは受け入れる。
-  const system = secretarySystemPrompt(style, connectedLabels, writeToolsWithheld);
+  // 接続先ごとの指示（#184）も同じ場所に入る。今日の日付もここ（1日1回だけ変わる）。
+  const system = secretarySystemPrompt(style, connectedLabels, writeToolsWithheld, connectedHints);
   const conversation = buildConversationText(history);
 
   return [
@@ -341,6 +345,8 @@ export async function POST(request: Request) {
     topics,
     servers.map((server) => server.label),
     withheldTools.length > 0,
+    // 繋いでいる接続先の指示（#184）。プリセットに無い接続先ぶんは空。
+    servers.flatMap((server) => hintsFor(server.url)),
   );
 
   // 次に割り込んでくるリクエストへ「この生成の後片付けが終わった」と伝えるための錠（#48）。

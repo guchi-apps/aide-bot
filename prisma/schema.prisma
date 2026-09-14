@@ -24,6 +24,13 @@ model User {
   briefingHour   Int @default(7)
   briefingMinute Int @default(0)
 
+  /// 起きた合図（#233。`POST /api/briefing/wake`）を受け付けるトークンのSHA-256。nullなら受け付けない。
+  /// 本体は発行した直後の応答にしか出さない（`src/lib/wake-token.ts`）。
+  wakeTokenHash      String?   @unique @db.VarChar(64)
+  wakeTokenCreatedAt DateTime?
+  /// 最後に合図を受け取った時刻。オートメーションが効いているかを設定の画面から読むためのもの。
+  wakeTokenUsedAt    DateTime?
+
   // 話題（#144）として仕入れるニュースの種類。`general` / `life` / `tech` をカンマで繋いだ文字列で、
   // 正は `src/lib/topic-categories.ts`。空文字なら仕入れない。Cookieにしないのは、仕入れが
   // 利用者の画面とは別のタイミング（応答後のバックグラウンド）で走り、そこで読む必要があるため。

@@ -10,7 +10,7 @@ import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { listConnectedServers, toCodexMcpServers } from "@/lib/mcp/connections";
 import { ingestNotice } from "@/lib/notices";
-import { sendPushToUser, usersWithSubscriptions } from "@/lib/push/subscriptions";
+import { countSubscriptions, sendPushToUser, usersWithSubscriptions } from "@/lib/push/subscriptions";
 import { recordApiUsage } from "@/lib/usage";
 
 /**
@@ -155,28 +155,70 @@ async function generateBriefing(userId: string): Promise<string> {
 type BriefingUser = { id: string; briefingHour: number; briefingMinute: number };
 
 /**
+ * 起きた合図（#233）を受け付ける下限。日本時間の4:00。
+ *
+ * 睡眠の判定はdayspanに任せている（ショートカットがdayspanの応答を見て分岐する）が、それを
+ * 組み忘れた・夜ふかし中にリマインダーを止めた、という合図で送ると、`NotificationLog` の抑制で
+ * **その日の分を夜中に使い切る。** 取り返しが付かない側なので、サーバーでも弾いておく。
+ */
+const WAKE_EARLIEST_MINUTE = 4 * 60;
+
+/**
+ * いま朝の見通しを作っている利用者（#233）。
+ *
+ * 起きた合図（`/api/briefing/wake`）とcronが重なると、同じ日に2回生成しうる。今日ぶんの記録
+ * （`NotificationLog`）は**送り終えてから**書くので、生成に掛かる最大180秒のあいだは抑制が
+ * 効かない。プロセス内のSetで足りるのは、PM2で1プロセスしか動かさないため（`compact.ts` の
+ * `running` と同じ前提）。
+ */
+const inFlight = new Set<string>();
+
+/** その日の朝の見通しをすでに扱ったか（送った・黙った、のどちらも含む）。 */
+async function handledOn(userId: string, dedupeKey: string): Promise<boolean> {
+  const log = await db.notificationLog.findUnique({
+    where: { userId_kind_dedupeKey: { userId, kind: MORNING_BRIEFING_KIND, dedupeKey } },
+    select: { id: true },
+  });
+  return log !== null;
+}
+
+/**
  * 1人ぶんの朝の見通しを作って届ける。
  *
  * 抑制は**生成の前**に見る。まず設定時刻を過ぎているか（軽い・DBを引かない判定）を見て、
  * 次にすでに今日ぶんの記録があるか（#121で追加する前からの判定）を見る。どちらも
  * APIを1回も叩かずに戻れるため、cronが同じ日に何度叩かれても費用は掛からない。
+ *
+ * **起きた合図から走らせるとき（#233）は設定時刻を見ない。** 設定時刻は、合図を送っている日には
+ * 「遅くともこの時刻」の意味になる。
  */
-async function runFor({ id: userId, briefingHour, briefingMinute }: BriefingUser, now: Date): Promise<BriefingOutcome> {
-  const targetMinute = briefingHour * 60 + briefingMinute;
-  if (jstMinuteOfDay(now) < targetMinute) {
+async function runFor(
+  { id: userId, briefingHour, briefingMinute }: BriefingUser,
+  now: Date,
+  options: { ignoreScheduledTime?: boolean } = {},
+): Promise<BriefingOutcome> {
+  if (!options.ignoreScheduledTime && jstMinuteOfDay(now) < briefingHour * 60 + briefingMinute) {
     return { userId, status: "skipped", delivered: 0, detail: "設定時刻前" };
   }
 
+  if (inFlight.has(userId)) {
+    return { userId, status: "skipped", delivered: 0, detail: "生成中" };
+  }
+
+  inFlight.add(userId);
+  try {
+    return await deliverFor(userId, now);
+  } finally {
+    inFlight.delete(userId);
+  }
+}
+
+async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
   // 抑制の鍵は日本時間の日付。VPSはJSTだが、CIやマイグレーションの実行環境はUTCで動くことが
   // あり、日付の境目だけがずれると**同じ日に2本出る**（#79）。
   const dedupeKey = jstDayKey(now);
 
-  const already = await db.notificationLog.findUnique({
-    where: { userId_kind_dedupeKey: { userId, kind: MORNING_BRIEFING_KIND, dedupeKey } },
-    select: { id: true },
-  });
-
-  if (already) {
+  if (await handledOn(userId, dedupeKey)) {
     return { userId, status: "skipped", delivered: 0, detail: `${dedupeKey} は送信済み` };
   }
 
@@ -308,4 +350,66 @@ export async function runMorningBriefing(now = new Date()): Promise<BriefingOutc
   }
 
   return outcomes;
+}
+
+export type WakeSignalCheck =
+  | { accepted: true; message: string }
+  | { accepted: false; status: "too_early" | "running" | "already_sent" | "no_device"; message: string };
+
+/**
+ * 起きた合図（#233）で朝の見通しを作ってよいかを、**生成を仕掛ける前に**確かめる。
+ *
+ * どれかに当たれば生成せず、理由をショートカットの通知に出る文で返す。とくに購読の確認は、
+ * cronの経路（`runMorningBriefing()` が `usersWithSubscriptions()` で絞る）には元からあるが
+ * `runFor()` には無い。見ないまま走らせると、どの端末にも届かないのにCodexの利用枠を使い、
+ * `NotificationLog` にその日の分を記録して使い切る。
+ */
+export async function checkWakeSignal(userId: string, now: Date): Promise<WakeSignalCheck> {
+  if (jstMinuteOfDay(now) < WAKE_EARLIEST_MINUTE) {
+    return {
+      accepted: false,
+      status: "too_early",
+      message: "4時より前の合図なので、朝のお知らせはまだお届けしません。",
+    };
+  }
+
+  if (inFlight.has(userId)) {
+    return { accepted: false, status: "running", message: "今日の見通しは、いままとめているところです。" };
+  }
+
+  const [sent, devices] = await Promise.all([handledOn(userId, jstDayKey(now)), countSubscriptions(userId)]);
+
+  if (sent) {
+    return { accepted: false, status: "already_sent", message: "今日の見通しは、もうお届けしています。" };
+  }
+
+  if (devices === 0) {
+    return {
+      accepted: false,
+      status: "no_device",
+      message: "通知を受け取る端末が登録されていないため、お届けできません。設定の画面で通知をオンにしてください。",
+    };
+  }
+
+  return {
+    accepted: true,
+    message: "おはようございます。今日の見通しをまとめて、通知でお届けしますね。",
+  };
+}
+
+/**
+ * 起きた合図から朝の見通しを作って届ける（#233）。**例外を外へ出さない。**
+ *
+ * 呼び出し元は応答を返した後の `after()` で、投げても伝える相手がいない。結果はログにだけ残す
+ * （本文は残さない。`/api/briefing` の応答と同じ理由）。
+ */
+export async function runWakeBriefing(user: BriefingUser, now: Date): Promise<void> {
+  try {
+    const { status, delivered, detail } = await runFor(user, now, { ignoreScheduledTime: true });
+    console.info(
+      `[aide-bot] 起きた合図からの朝の見通し: ${status}（${delivered}台）${detail ? ` ${detail}` : ""}`,
+    );
+  } catch (error) {
+    console.error(`[aide-bot] 起きた合図からの朝の見通しに失敗した: ${user.id}`, error);
+  }
 }

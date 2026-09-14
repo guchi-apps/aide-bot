@@ -64,7 +64,7 @@ const URGENT_NOTICE_KIND = "urgent-notice";
 /**
  * 通知を押して開いた相談の1通目（USER）に置く固定の文言。
  *
- * `POST /api/chat` の `toPromptMessages()`（#79）は履歴の先頭がUSERであることを前提にしており、
+ * `POST /api/chat` の `buildConversationText()`（#79）は履歴の先頭がUSERであることを前提にしており、
  * ASSISTANTから始まる履歴は先頭を落として渡す。ここはモデルを呼ばずに積む側の文面をそのまま
  * 出す設計（#93「黙っている間の費用は0円」）なので、朝の見通し（`MORNING_BRIEFING_REQUEST`）
  * のような「実際にモデルへ渡した依頼」ではなく、続けて話しかけたときにモデルが読む文脈として
@@ -359,7 +359,7 @@ function parseChoice(answer: string, candidates: number): Choice | null {
  * `codex exec` を待つ上限（#132）。
  *
  * 実測（サブPC・`gpt-5.6-luna`）では3.5〜5.3秒で返る。上限を置くのは、返らなくなったときに
- * `/api/notices/current` の応答がそのまま止まるため——この経路は「話す」画面から1分ごとに
+ * `/api/notices/current` の応答がそのまま止まるため——この経路は「話す」画面から3分ごとに
  * 叩かれるので、詰まったリクエストが積み上がる。実測の10倍以上を取って、遅いだけの回を
  * 切らない値にしてある。
  */

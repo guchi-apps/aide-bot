@@ -15,6 +15,9 @@ import { startOfMonth } from "@/lib/usage";
  * 画面を開いているだけで費用が積み上がる。時刻・曜日・相談の記録・使用量・未読の件数という、
  * **すでにDBにあるものだけ**から組み立てる。
  *
+ * **口調は秘書の人格（`@/lib/persona`。#226）に手で揃える。** モデルを呼ばないので話し方の決まりは
+ * 効かない。一人称は「わたし」、丁寧で温かく、押しつけない。
+ *
  * 材料が定型なので、長く見ていれば同じ文が戻ってくる。それでも「常に何か話している」は
  * 成立するので、まずこの範囲で出す。
  *
@@ -49,7 +52,7 @@ type Cached = {
  */
 const cache = new Map<string, Cached>();
 
-/** 日本時間での時・曜日・日付。サーバーのタイムゾーンに頼らない（#79の `jstDateKey()` と同じ理由）。 */
+/** 日本時間での時・曜日・日付。サーバーのタイムゾーンに頼らない（#79の `jstDayKey()` と同じ理由）。 */
 function jstParts(now: Date): { hour: number; weekday: number; date: string } {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Tokyo",
@@ -87,16 +90,16 @@ function timeSlot(hour: number): "night" | "morning" | "noon" | "evening" | "lat
 
 const SLOT_LINE: Record<ReturnType<typeof timeSlot>, string> = {
   morning: "おはようございます。今日はどんな一日にしましょうか",
-  noon: "お昼どきですね。もう何か召し上がりましたか",
+  noon: "お昼どきですね。ひと息つけていますか",
   evening: "夕方になりました。今日はいかがでしたか",
   night: "今日もお疲れさまでした。話し足りないことはありませんか",
-  late: "もう遅い時間ですね。無理はなさらず",
+  late: "もう遅い時間ですね。無理はなさらず、ゆっくり休んでくださいね",
 };
 
 const WEEKDAY_LINE = [
   "日曜日ですね。明日からに備えて、ゆっくりされてください",
   "月曜日ですね。今週の予定は決まっていますか",
-  "火曜日ですね。今週はここからです",
+  "火曜日ですね。今週も一緒に進めていきましょう",
   "水曜日ですね。ちょうど週の折り返しです",
   "木曜日ですね。あと少しで週末です",
   "金曜日ですね。週末の予定は決まっていますか",
@@ -123,10 +126,10 @@ function daysBetween(from: Date, to: Date): number {
 
 /** 相談の記録から作る一言。まだ1件も無い人にも何か言えるようにしておく。 */
 function conversationLine(lastTalkedAt: Date | null, now: Date): string {
-  if (!lastTalkedAt) return "まだ一度もお話ししていませんね。下のマイクから始められます";
+  if (!lastTalkedAt) return "はじめまして。下のマイクを押してもらえれば、いつでもお話を伺います";
 
   const days = daysBetween(lastTalkedAt, now);
-  if (days <= 0) return "さっきの続きでも、まったく別の話でも大丈夫です";
+  if (days <= 0) return "さっきの続きでも、まったく別の話でも大丈夫ですよ";
   if (days === 1) return "昨日ぶりですね。おかえりなさい";
   if (days >= 30) return "ずいぶんお久しぶりです。おかえりなさい";
 
@@ -161,7 +164,7 @@ async function personalLines(userId: string, now: Date): Promise<string[]> {
   const lines = [conversationLine(lastConversation?.updatedAt ?? null, now)];
 
   if (monthlyCount > 0) {
-    lines.push(`今月は${monthlyCount}回話しかけていただきました`);
+    lines.push(`今月は${monthlyCount}回お話しできました。いつもありがとうございます`);
   }
 
   if (unreadCount > 0) {

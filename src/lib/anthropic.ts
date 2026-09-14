@@ -1,8 +1,10 @@
 import type { ReplyStyle } from "@/lib/chat-model";
 import { jstTodayLabel } from "@/lib/day-key";
+import { SECRETARY_INTRO, SECRETARY_VOICE_RULES } from "@/lib/persona";
 
 /**
  * 秘書としての振る舞い（体裁の指示・依頼の文面）の置き場。**サーバー専用。**
+ * 人格そのもの（身元の一文・話し方）は `@/lib/persona` にある（#226）。
  *
  * **ファイル名に反して、もうAnthropic SDKは使っていない**（#183で朝の見通しもCodexへ移り、
  * アプリからClaudeを呼ぶ経路が無くなった）。ここに残っているのは提供元に依らない
@@ -54,16 +56,6 @@ export function historyWindowSkip(totalMessages: number): number {
 }
 
 /**
- * 返答をどう受け取るか（#27）。定義は `@/lib/chat-model` にあり、ここでは読み直すだけ。
- *
- * モデルを選ぶ画面（クライアント）と、返答を作る側（サーバー）の両方が同じ型を使うため、
- * クライアントからimportできる側（`@/lib/chat-model`）に本体を置いてある。
- */
-export type { ReplyStyle };
-
-const SECRETARY_INTRO = `あなたは利用者ひとりに付く秘書です。プライベートの相談相手として、日本語で応対します。`;
-
-/**
  * 割り込まれた返答の末尾へ足す注記（#48）。
  *
  * 利用者は返答の途中でも次の発言を送れる。途中で切れた返答をそのまま履歴へ入れると、
@@ -74,7 +66,7 @@ export const INTERRUPTED_NOTE = "（この返答は利用者に遮られ、こ�
 
 /** 受け取り方によらない、秘書としての振る舞い。 */
 const COMMON_RULES = [
-  "結論から書く。前置き・相槌・気遣いの一文で行数を使わない",
+  "結論から書く。前置きや相槌で行数を使わない（気遣いの一言は、話し方の決まりどおり結論の後に添える）",
   "期日・金額・手続きの名前など、実際に動くために要る具体を落とさない",
   "判断に必要な情報が足りないときは、推測で埋めずに何が要るかを聞く",
   "確かでないことは確かでないと言う。それらしい数字・制度名・期限を作らない",
@@ -168,6 +160,9 @@ function connectedServiceRules(
  * **今日の日付を入れる**（#184）。無いと「明後日」「来週の月曜」を予定の道具へ渡す日付に
  * 落とせない。日付だけで時刻は入れない（`jstTodayLabel()`。往復ごとにキャッシュが切れるため）。
  * `now` を外から渡せるのは、日付をまたぐ検証で実時計に縛られないため。
+ *
+ * **話し方（`SECRETARY_VOICE_RULES`。#226）は体裁の指示より前に置く。** 体裁（文字数・読み上げ）を
+ * 後ろに置き、ぶつかったときにそちらが勝つようにしてある。
  */
 export function secretarySystemPrompt(
   style: ReplyStyle,
@@ -179,6 +174,7 @@ export function secretarySystemPrompt(
   const rules = [
     `今日は ${jstTodayLabel(now)} です（日本時間）。「明日」「来週」のような相対の日付はここから数える`,
     ...COMMON_RULES,
+    ...SECRETARY_VOICE_RULES,
     ...connectedServiceRules(connectedLabels, connectedHints, writeToolsWithheld),
     ...(style === "voice" ? VOICE_FORMAT_RULES : TEXT_FORMAT_RULES),
   ];
@@ -283,6 +279,7 @@ export function briefingSystemPrompt(connectedLabels: string[]): string {
     "道具で取れなかった項目は書かない。それらしい数字や予定を作らない",
     `知らせる価値があることが1つも無ければ、本文を書かずに ${BRIEFING_SKIP_TOKEN} とだけ返す。無理に何か書かない`,
     ...briefingServiceRules(connectedLabels),
+    ...SECRETARY_VOICE_RULES,
     ...BRIEFING_FORMAT_RULES,
   ];
 
@@ -329,6 +326,7 @@ export function noticeSystemPrompt(): string {
     "1行目は「選んだ候補の番号」だけを書く。時間を逃すと意味が無くなるものを選んだときは、" +
       `番号の後ろに半角スペースを空けて ${NOTICE_URGENT_MARK} と書く`,
     "2行目に、画面の吹き出しへ出す文をそのまま書く。40文字前後・長くても2文",
+    ...SECRETARY_VOICE_RULES,
     "見出し・箇条書き・記号の装飾・URL・絵文字は使わない。画面の狭い吹き出しに1〜2行で収まる文にする",
     "3行目以降は書かない。前置きも説明も付けない",
   ];
@@ -346,6 +344,9 @@ export function noticeSystemPrompt(): string {
  *
  * `noticeSystemPrompt()` と同じくCodexへ渡すが、このモジュールに置いてあるのは秘書としての
  * 振る舞い（`SECRETARY_INTRO`）を共有しているため。Anthropic SDKを使うかどうかとは関係ない。
+ *
+ * **話し方（`SECRETARY_VOICE_RULES`。#226）は載せない。** 要約は以後ずっとプロンプトに載り、
+ * 口調や労いの一言が混ざると後から消せない。身元の一文だけを使う。
  *
  * **落としてよいものを名指しする。** 「要点をまとめて」だけだと、決まったことより会話の
  * 流れを残しがちで、往復を重ねるほど「何を頼んだか」が薄まる。

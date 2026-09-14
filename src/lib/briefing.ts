@@ -5,6 +5,7 @@ import {
 } from "@/lib/anthropic";
 import { BRIEFING_MODEL } from "@/lib/chat-model";
 import { runCodexExec } from "@/lib/codex";
+import { jstDayKey } from "@/lib/day-key";
 import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { listConnectedServers, toCodexMcpServers } from "@/lib/mcp/connections";
@@ -63,24 +64,9 @@ const CODEX_TIMEOUT_MS = 180 * 1000;
 const BRIEFING_NOTICE_LIFETIME_MS = 6 * 60 * 60 * 1000;
 
 /**
- * 日本時間での日付（`2026-08-26`）。抑制の鍵に使う。
- *
- * サーバーのタイムゾーンに頼らない。VPSはJSTだが、`prisma migrate` の実行環境やCIは
- * UTCで動くことがあり、日付の境目だけがずれると**同じ日に2本出る**。
- */
-export function jstDateKey(now: Date): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Tokyo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(now);
-}
-
-/**
  * 日本時間での「その日の何分目か」（0〜1439）。#121で時刻を設定できるようにするために追加。
  *
- * サーバーのタイムゾーンに頼らない（`jstDateKey()` と同じ理由）。
+ * サーバーのタイムゾーンに頼らない（`jstDayKey()` と同じ理由）。
  */
 function jstMinuteOfDay(now: Date): number {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -181,7 +167,9 @@ async function runFor({ id: userId, briefingHour, briefingMinute }: BriefingUser
     return { userId, status: "skipped", delivered: 0, detail: "設定時刻前" };
   }
 
-  const dedupeKey = jstDateKey(now);
+  // 抑制の鍵は日本時間の日付。VPSはJSTだが、CIやマイグレーションの実行環境はUTCで動くことが
+  // あり、日付の境目だけがずれると**同じ日に2本出る**（#79）。
+  const dedupeKey = jstDayKey(now);
 
   const already = await db.notificationLog.findUnique({
     where: { userId_kind_dedupeKey: { userId, kind: MORNING_BRIEFING_KIND, dedupeKey } },

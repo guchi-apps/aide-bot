@@ -631,7 +631,7 @@ async function main() {
   console.log(`[aide-bot] 通知の購読を投入しました: ${subscriptionCount}件`);
 
   // 朝の見通し（#79）。抑制の記録（NotificationLog）も対で入れる。**日付の鍵は日本時間**で
-  // 作る（src/lib/briefing.ts の jstDateKey と同じ）。ずれると、シード投入した日に
+  // 作る（src/lib/day-key.ts の jstDayKey と同じ）。ずれると、シード投入した日に
   // 実際の朝の見通しがもう1本届いてしまう。
   const dedupeKey = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Tokyo",

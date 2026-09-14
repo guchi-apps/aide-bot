@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { APP_VERSION } from "@/lib/app-version";
 import { db } from "@/lib/db";
 import { isNoticeIngestAuthorized, parseNoticeInput } from "@/lib/notice-ingest";
 import { ingestNotice } from "@/lib/notices";
@@ -72,12 +73,8 @@ function textResult(text: string, isError = false) {
   return { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) };
 }
 
-function toolInput(toolName: string, args: Record<string, unknown>): unknown {
-  const tool = TOOLS.find((candidate) => candidate.name === toolName);
-  if (!tool) return null;
-
-  const title = typeof args.title === "string" ? args.title.trim() : "";
-  const summary = typeof args.summary === "string" ? args.summary.trim() : "";
+/** `callTool()` がツール名と title/summary を確かめた後にだけ呼ぶ。 */
+function toolInput(toolName: string, args: Record<string, unknown>, title: string, summary: string): unknown {
   const recommendedAction = typeof args.recommendedAction === "string" ? args.recommendedAction.trim() : "";
   return {
     email: args.email,
@@ -102,7 +99,7 @@ async function callTool(name: string, rawArgs: unknown) {
   const summary = typeof args.summary === "string" ? args.summary.trim() : "";
   if (title === "" || summary === "") return textResult("title と summary が要ります。", true);
 
-  const parsed = parseNoticeInput(toolInput(name, args));
+  const parsed = parseNoticeInput(toolInput(name, args, title, summary));
   if (typeof parsed === "string") return textResult(parsed, true);
 
   const user = await db.user.findUnique({ where: { email: parsed.email }, select: { id: true } });
@@ -132,7 +129,7 @@ export async function POST(request: Request) {
     return response(body.id, {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "aide-bot", version: "0.10.0" },
+      serverInfo: { name: "aide-bot", version: APP_VERSION },
     });
   }
   if (body.method === "tools/list") return response(body.id, { tools: TOOLS });

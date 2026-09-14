@@ -38,11 +38,14 @@ type Props = {
 /**
  * 状態の文言。**吹き出しは秘書が喋っている形なので、状態の説明ではなく話し言葉にする。**
  * 読み上げソフトはこの文字列をそのまま読む（`aria-live="polite"`）。
+ *
+ * 口調は秘書の人格（`@/lib/persona`。#226）に手で揃える。**変えたらCLAUDE.mdの「聞き取りを
+ * マイク無しで確かめる」も直す**——検証手順がこの文字列で状態を読んでいる。
  */
 const STATUS_LABEL: Record<RobotState, string> = {
   idle: "どうぞ、話しかけてください",
-  listening: "聞いています",
-  thinking: "考えています",
+  listening: "はい、聞いていますよ",
+  thinking: "少し考えますね",
   preparing: "声を用意しています",
   speaking: "お話ししています",
 };

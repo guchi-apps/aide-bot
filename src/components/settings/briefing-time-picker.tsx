@@ -80,6 +80,7 @@ export function BriefingTimePicker({ initial }: Props) {
         <h3 className="text-sm font-medium">お知らせの時間</h3>
         <p className="mt-1.5 text-[0.8125rem] leading-relaxed text-muted">
           朝のお知らせを届ける時刻です。時刻を変えると、次の朝からその時刻を基準に届きます。
+          下の「起きたら届ける」で合図を送っている日は、それより前でも起きた時点で届きます。
         </p>
       </header>
 

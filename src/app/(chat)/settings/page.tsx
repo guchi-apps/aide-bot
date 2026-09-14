@@ -5,6 +5,7 @@ import { ConnectionList } from "@/components/settings/connection-list";
 import { HomeProfileCard } from "@/components/settings/home-profile-card";
 import { ModelPicker } from "@/components/settings/model-picker";
 import { NotificationSettings } from "@/components/settings/notification-settings";
+import { WakeTriggerCard } from "@/components/settings/wake-trigger-card";
 import { WriteToolPicker } from "@/components/settings/write-tool-picker";
 import { getCurrentUser } from "@/lib/auth-user";
 import { selectedChatModels } from "@/lib/chat-model-server";
@@ -19,6 +20,23 @@ export const metadata = { title: "設定" };
 
 // 接続の状態は認可から戻った直後に変わる。選んでいるモデルもCookie次第なのでキャッシュさせない。
 export const dynamic = "force-dynamic";
+
+/**
+ * 時刻を日本時間の「9月14日 07:02」の形にする。
+ *
+ * サーバー側で整形して渡す（クライアントで作ると端末のタイムゾーンで出て、ハイドレーションでもずれる）。
+ */
+function jstDateTimeLabel(at: Date | null): string | null {
+  if (!at) return null;
+
+  return new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(at);
+}
 
 type Props = {
   searchParams: Promise<{ error?: string; connected?: string }>;
@@ -48,15 +66,7 @@ export default async function SettingsPage({ searchParams }: Props) {
 
   // 自宅の情報（#167）。取り込んだ時刻はサーバー側で日本時間へ整形して渡す
   // （クライアントで作ると端末のタイムゾーンで出て、ハイドレーションでもずれる）。
-  const homeProfileFetchedAt = user.homeProfileFetchedAt
-    ? new Intl.DateTimeFormat("ja-JP", {
-        timeZone: "Asia/Tokyo",
-        month: "long",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      }).format(user.homeProfileFetchedAt)
-    : null;
+  const homeProfileFetchedAt = jstDateTimeLabel(user.homeProfileFetchedAt);
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
@@ -75,6 +85,12 @@ export default async function SettingsPage({ searchParams }: Props) {
         <NotificationSettings publicKey={pushPublicKey()} initialDeviceCount={deviceCount} />
 
         <BriefingTimePicker initial={{ hour: user.briefingHour, minute: user.briefingMinute }} />
+
+        {/* 起きた合図（#233）。トークンの本体はDBに無いので、発行済みかどうかは時刻で渡す。 */}
+        <WakeTriggerCard
+          issuedAtLabel={user.wakeTokenHash ? jstDateTimeLabel(user.wakeTokenCreatedAt) : null}
+          usedAtLabel={user.wakeTokenHash ? jstDateTimeLabel(user.wakeTokenUsedAt) : null}
+        />
 
         <ModelPicker initial={models} />
 

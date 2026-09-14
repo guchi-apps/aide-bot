@@ -134,7 +134,7 @@ export type ChatModelOption = {
  *
  * Sol＝旗艦（いちばん賢い）、Terra＝GPT-5.5相当の中位、Luna＝いちばん速く安いモデル
  * （出典: https://openai.com/index/gpt-5-6/）。サブスクの利用枠（5時間ローリング＋週次）は
- * モデルが重いほど早く減るため、既定は「話す」をLuna・「書く」をSolに割り当てる。
+ * モデルが重いほど早く減るため、「話す」「書く」ごとに選べる（既定は両方Sol。`DEFAULT_CHAT_MODEL`）。
  */
 export const CHAT_MODELS: ChatModelOption[] = [
   { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "いちばん賢い" },

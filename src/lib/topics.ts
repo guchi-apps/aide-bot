@@ -6,6 +6,7 @@ import { TOPIC_MODEL } from "@/lib/chat-model";
 import { runCodexExec } from "@/lib/codex";
 import { db } from "@/lib/db";
 import { safeNoticeUrl } from "@/lib/notice-url";
+import { SECRETARY_INTRO, SECRETARY_VOICE_RULES } from "@/lib/persona";
 import {
   TOPIC_CATEGORIES,
   isTopicCategoryId,
@@ -264,11 +265,14 @@ function buildTopicPrompt(categories: TopicCategoryId[], now: Date): string {
     '"lead": "秘書の一言（50文字以内）", "url": "https://...", "source": "媒体名", "publishedOn": "YYYY-MM-DD"}]';
 
   return [
-    "あなたは利用者ひとりに付く秘書です。利用者が雑談の話題にできそうな最近のニュースを、ウェブ検索で集めてください。",
+    `${SECRETARY_INTRO}利用者が雑談の話題にできそうな最近のニュースを、ウェブ検索で集めてください。`,
     "集める種類:",
     chosen.map((category) => `- ${category.id}（${category.label}）: ${category.scope}`).join("\n"),
     "決まりごと:",
     rules.map((rule) => `- ${rule}`).join("\n"),
+    // lead は吹き出しにそのまま出る秘書の一言なので、話し方を揃える（#226）。
+    // title・summary は記事の要約で、口調を持ち込まない。
+    `lead の話し方:\n${SECRETARY_VOICE_RULES.map((rule) => `- ${rule}`).join("\n")}`,
     `出力の形:\n${shape}`,
   ].join("\n\n");
 }

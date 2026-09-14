@@ -3,6 +3,7 @@ import { runCodexExec } from "@/lib/codex";
 import { db } from "@/lib/db";
 import { listConnectedServers, toCodexMcpServers } from "@/lib/mcp/connections";
 import { MCP_PRESETS } from "@/lib/mcp/presets";
+import { SECRETARY_INTRO } from "@/lib/persona";
 import { recordApiUsage } from "@/lib/usage";
 
 /**
@@ -25,7 +26,7 @@ import { recordApiUsage } from "@/lib/usage";
  * 2. cronが叩く `/api/briefing`（#79）の起動時に、前回から1日あいていれば1回だけ
  *
  * 話題（#144）のように「話す」画面の問い合わせへは相乗りさせない。あちらは1時間ごとに
- * 走らせたいもので、こちらは1日1回で足りる——1分ごとに叩かれる経路へ判定を足すと、
+ * 走らせたいもので、こちらは1日1回で足りる——3分ごとに叩かれる経路へ判定を足すと、
  * 何も取り込まない回のDBアクセスだけが積み上がる。
  */
 
@@ -101,7 +102,9 @@ function buildHomeProfilePrompt(): string {
   ];
 
   return [
-    "あなたは利用者ひとりに付く秘書です。利用者のNotionを調べて、これから相談に答えるときに" +
+    // 身元の一文だけを使い、話し方（#226）は載せない。覚え書きは取り込み直すまで相談の
+    // プロンプトに載り続けるので、口調が混ざると後から消せない。
+    `${SECRETARY_INTRO}利用者のNotionを調べて、これから相談に答えるときに` +
       "手元へ置いておく「自宅と暮らしの前提」の覚え書きを作ってください。",
     `覚え書きに入れるもの（Notionで見つかったものだけ。見つからない項目はその行ごと書かない）:\n${wanted
       .map((item) => `- ${item}`)

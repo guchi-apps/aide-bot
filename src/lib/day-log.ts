@@ -1,3 +1,5 @@
+import { cache } from "react";
+
 import type { ChatEntry } from "@/components/chat/types";
 import { dayEnd, dayHeading, dayStart, jstDayKey, monthLabel } from "@/lib/day-key";
 import { db } from "@/lib/db";
@@ -34,8 +36,11 @@ const CARRY_OVER_MIN_ENTRIES = 8;
  * **1利用者につき1本**。`findFirst` と `create` の間で競合すると2本目ができうるが、
  * 利用者1人・PM2で1プロセスという前提（#48の `pendingGenerations` と同じ）では起こらない。
  * それでも2本できた場合に古い方を使い続けるよう、`createdAt` の昇順で引く。
+ *
+ * **`React.cache` で包んである**（#226）。`(chat)/layout.tsx` とページが同じ描画の中で呼ぶため。
+ * Route Handler・cron（`/api/chat`・`briefing.ts`・`notices.ts`）からの呼び出しには効かない。
  */
-export async function primaryConversation(userId: string): Promise<{
+export const primaryConversation = cache(async function primaryConversation(userId: string): Promise<{
   id: string;
   summary: string | null;
   summarizedCount: number;
@@ -52,7 +57,7 @@ export async function primaryConversation(userId: string): Promise<{
     data: { userId, isPrimary: true, title: PRIMARY_CONVERSATION_TITLE },
     select: { id: true, summary: true, summarizedCount: true },
   });
-}
+});
 
 /** 左メニューに並べる1日ぶん。 */
 export type DaySummary = {

@@ -19,6 +19,8 @@
 #   CODEX_STUB_DELAY_MS    返すまでの待ち（既定800ms。実物の間合いを真似たいとき）
 #   CODEX_STUB_ARGV_FILE   渡された引数の書き出し先。`-c mcp_servers.…` や
 #                          `disabled_tools` が実際に渡っているかを確かめるのに使う
+#   CODEX_STUB_STDIN_FILE  標準入力で渡されたプロンプトの書き出し先（#244。プロンプトは引数では
+#                          なく標準入力で届く。引数の書き出しには載らない）
 set -euo pipefail
 
 REPLY="${CODEX_STUB_REPLY:-はい、承知しました。これは開発用のスタブが返している固定の返答です。続けて話しかけてみてください。}"
@@ -26,6 +28,10 @@ DELAY_MS="${CODEX_STUB_DELAY_MS:-800}"
 
 if [ -n "${CODEX_STUB_ARGV_FILE:-}" ]; then
   printf '%s\n' "$@" >"${CODEX_STUB_ARGV_FILE}"
+fi
+
+if [ -n "${CODEX_STUB_STDIN_FILE:-}" ]; then
+  cat >"${CODEX_STUB_STDIN_FILE}"
 fi
 
 sleep "$(awk "BEGIN { printf \"%.3f\", ${DELAY_MS} / 1000 }")"

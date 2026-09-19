@@ -85,6 +85,99 @@ export type CodexToolCallEvent = {
   errorMessage: string | null;
 };
 
+/**
+ * Codexの子プロセスへ渡してよい環境変数の名前（#258）。**許可リストで拾う。**
+ *
+ * 子プロセスへ `process.env` を丸ごと渡すと、本番では `next start` が読み込んだ `DATABASE_URL`・
+ * `VAPID_PRIVATE_KEY`・`BRIEFING_TRIGGER_TOKEN`・`NOTICE_INGEST_TOKEN` などがそのまま入る。
+ * `--sandbox read-only` はファイルや環境変数を**読む**ことを止めないので、モデルが `env` を
+ * 実行すれば値が見える。モデルへ食わせる文字列は外から来る（`--search` のニュース・MCPの道具の
+ * 結果）ため、プロンプトインジェクションが入るとシークレットが外へ出る筋が成り立つ。
+ *
+ * **ここに足すのは「Codexが自分で動くのに要るもの」だけ。** アプリの設定値（`DATABASE_URL` など）
+ * や、他のアプリのシークレットは足さない。足りずに動かなくなったときは、値を足す前に
+ * 「Codexのどの機能がそれを読むのか」を確かめる。
+ *
+ * - `PATH`・`HOME`・`USER`・`LOGNAME`・`SHELL`：実行ファイルの解決と、`~/.codex/auth.json`
+ *   （ChatGPTの認証情報）の場所の解決。`CODEX_HOME` を置いていない環境では `HOME` が要る
+ * - `CODEX_` で始まるもの：`CODEX_HOME`（認証情報の置き場）・`CODEX_CA_CERTIFICATE` など、
+ *   Codex自身の設定。開発のスタブ（`scripts/codex-stub.sh`）が読む `CODEX_STUB_*` もここで通る。
+ *   `CODEX_BIN`（アプリが読む起動コマンド）も入るが、実行ファイルの場所でありシークレットではない
+ * - `XDG_*`：設定・キャッシュ・ランタイムの置き場（Linuxでの `HOME` 以外の解決先）
+ * - `LANG`・`LC_*`・`TZ`・`TMPDIR`・`TERM`：ロケール・時刻・一時ファイル
+ * - プロキシ（`HTTP_PROXY` など）・証明書（`SSL_CERT_*`・`NODE_EXTRA_CA_CERTS`）：ChatGPTへ
+ *   出ていくための設定。プロキシのURLに資格情報が入る環境では、それも子へ渡ることになる
+ *   （そうした環境でだけ効く。そうでなければ値そのものが無い）
+ */
+const CODEX_ENV_ALLOW_NAMES: ReadonlySet<string> = new Set([
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "LANG",
+  "TZ",
+  "TMPDIR",
+  "TERM",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+]);
+
+/** 前方一致で通す名前。 */
+const CODEX_ENV_ALLOW_PREFIXES = ["CODEX_", "XDG_", "LC_"];
+
+/** プロキシの設定は大文字・小文字の両方が使われる。 */
+const CODEX_ENV_PROXY_NAMES = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
+
+function isCodexEnvAllowed(name: string): boolean {
+  if (CODEX_ENV_ALLOW_NAMES.has(name)) return true;
+  if (CODEX_ENV_ALLOW_PREFIXES.some((prefix) => name.startsWith(prefix))) return true;
+  return CODEX_ENV_PROXY_NAMES.includes(name.toUpperCase());
+}
+
+/**
+ * Codexの子プロセスへ渡す環境変数を組み立てる（#258）。許可リストに載っている名前だけを
+ * `base`（既定は `process.env`）から拾い、`extra`（MCPのアクセストークン）を足す。
+ *
+ * `extra` は許可リストを通さない——呼び出し側（`mcpOverrides()`）が `AIDE_BOT_MCP_TOKEN_*` を
+ * 自分で組み立てたもので、`base` から来る値ではない。
+ */
+export function codexChildEnv(
+  base: Record<string, string | undefined>,
+  extra: Record<string, string> = {},
+): NodeJS.ProcessEnv {
+  // `spawn` の `env` は、Next.jsの型定義が `NODE_ENV` を必須にした `ProcessEnv`。子へ渡す値に
+  // `NODE_ENV` は含めない（許可リストに無い）ので、型の上だけ合わせる。
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(base)) {
+    if (value !== undefined && isCodexEnvAllowed(name)) env[name] = value;
+  }
+  return { ...env, ...extra } as NodeJS.ProcessEnv;
+}
+
+/**
+ * **モデルが実行するシェル**へ渡す環境の絞り込み（#258）。`codexChildEnv()` の絞り込みとは別の層。
+ *
+ * 子プロセスの環境を絞っても、Codexは自分が持っている環境をそのままモデルのシェルへ渡す。
+ * 実測（サブPC・`codex-cli 0.152.1`・2026-09-19）で、`AIDE_BOT_MCP_TOKEN_*`（接続先へ繋ぐための
+ * アクセストークン。Codex本体が `bearer_token_env_var` で読む）が、モデルが実行した `env` に
+ * そのまま出た。**トークン名に `TOKEN` が入っていても既定の除外は効かなかった。**
+ * また、ログインシェルが読み込む利用者のプロファイルが足す変数（`OP_SERVICE_ACCOUNT_TOKEN` など）も
+ * 出た。**そこはアプリの `process.env` ではないので、`codexChildEnv()` では塞げない。**
+ *
+ * - `shell_environment_policy.inherit="core"`：`PATH`・`HOME` などの最小限だけを渡す。
+ *   MCPのトークンはCodex本体が読むもので、モデルのシェルには要らない（この設定でも接続先へ
+ *   繋がる。下の実測）
+ * - `allow_login_shell=false`：利用者のシェルのプロファイル（`~/.profile` など）を読ませない
+ */
+const CODEX_SHELL_POLICY_ARGS = [
+  "-c",
+  'shell_environment_policy.inherit="core"',
+  "-c",
+  "allow_login_shell=false",
+];
+
 /** アクセストークンを載せる環境変数の名前。引数にも設定ファイルにも出さないため。 */
 function tokenEnvVar(name: string): string {
   return `AIDE_BOT_MCP_TOKEN_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
@@ -252,6 +345,8 @@ export async function runCodexExec(params: {
         "--ignore-user-config",
         "-c",
         "features.apps=false",
+        // モデルのシェルへ渡す環境を最小に絞る（#258。下の `CODEX_SHELL_POLICY_ARGS`）。
+        ...CODEX_SHELL_POLICY_ARGS,
         ...mcp.args,
         "-C",
         tmpdir(),
@@ -259,7 +354,11 @@ export async function runCodexExec(params: {
         "-",
       ],
       // トークンも本文も、引数に載せると `ps` や起動ログに出る。環境変数・標準入力で渡す。
-      { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...mcp.env } },
+      // **環境変数は `process.env` を丸ごと渡さず、許可リストで絞る**（#258。`codexChildEnv()`）。
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: codexChildEnv(process.env, mcp.env),
+      },
     );
 
     // 子が入力を読み切る前に終わる（起動失敗・中断）と、書き込みが `EPIPE` で落ちる。

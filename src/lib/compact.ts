@@ -1,6 +1,7 @@
 import { compactSystemPrompt } from "@/lib/anthropic";
 import { COMPACT_MODEL } from "@/lib/chat-model";
 import { runCodexExec } from "@/lib/codex";
+import { selectFoldable } from "@/lib/compact-budget";
 import { db } from "@/lib/db";
 import { recordApiUsage } from "@/lib/usage";
 
@@ -57,13 +58,6 @@ const running = new Set<string>();
 class StaleFoldError extends Error {}
 
 const STALE_FOLD_MESSAGE = "[aide-bot] 記録の要約を書く前に、畳む範囲が変わっていたので捨てた";
-
-/** 畳む対象の発言を、モデルへ渡す1本のテキストにする。 */
-function foldedText(messages: { role: "USER" | "ASSISTANT"; content: string }[]): string {
-  return messages
-    .map((message) => `${message.role === "USER" ? "利用者" : "秘書"}: ${message.content}`)
-    .join("\n\n");
-}
 
 function buildPrompt(previous: string | null, folded: string): string {
   return [
@@ -123,9 +117,13 @@ export async function compactIfNeeded(conversationId: string, userId: string): P
     // 数の食い違ったまま `summarizedCount` を進める方が害が大きい。
     if (messages.length !== foldCount) return false;
 
+    // 1回に畳む量には上限がある（#244）。入りきらなかったぶんは `summarizedCount` が進まない
+    // まま残り、次の往復で続きから畳まれる。
+    const folded = selectFoldable(messages);
+
     const result = await runCodexExec({
       model: COMPACT_MODEL,
-      prompt: buildPrompt(summary, foldedText(messages)),
+      prompt: buildPrompt(summary, folded.text),
       signal: AbortSignal.timeout(CODEX_TIMEOUT_MS),
     });
 
@@ -158,20 +156,24 @@ export async function compactIfNeeded(conversationId: string, userId: string): P
       // 消されて件数が戻っている。どちらも読んだ範囲は畳む対象ではなくなっているので捨てる。
       const updated = await tx.conversation.updateMany({
         where: { id: conversationId, summarizedCount },
-        data: { summary: next, summarizedCount: summarizedCount + foldCount },
+        data: { summary: next, summarizedCount: summarizedCount + folded.count },
       });
       if (updated.count === 0) return false;
 
       // 件数が同じでも、畳もうとした範囲の中の発言が消されていれば、範囲がずれて
       // 畳んでいない発言まで畳んだことになる（まだ畳んでいない日を消した場合。件数は動かない）。
+      // 上限（#244）で一部しか畳めなかった回は、実際に畳んだ `folded.count` 件だけを見る。
       const current = await tx.message.findMany({
         where: { conversationId },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         skip: summarizedCount,
-        take: foldCount,
+        take: folded.count,
         select: { id: true },
       });
-      if (current.length !== foldCount || current.some((message, index) => message.id !== messages[index].id)) {
+      if (
+        current.length !== folded.count ||
+        current.some((message, index) => message.id !== messages[index].id)
+      ) {
         // 上の書き込みごと取り消す。
         throw new StaleFoldError();
       }

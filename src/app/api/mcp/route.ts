@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { APP_VERSION } from "@/lib/app-version";
 import { db } from "@/lib/db";
-import { isNoticeIngestAuthorized, parseNoticeInput } from "@/lib/notice-ingest";
+import { isNoticeIngestAuthorized, NOTICE_BODY_MAX, NOTICE_TITLE_MAX, parseNoticeInput } from "@/lib/notice-ingest";
 import { ingestNotice } from "@/lib/notices";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +15,13 @@ type JsonRpcRequest = {
   method?: unknown;
   params?: unknown;
 };
+
+/**
+ * 保存される `body` は title・summary・推奨アクションをつないだもの（`composeBody()`）で、上限は
+ * それぜんぶを合わせた長さに掛かる。フィールドごとの `maxLength` だけでは表せないので、呼ぶ側が
+ * 読む説明文にも書く。
+ */
+const BODY_LIMIT_NOTE = `title・summary・recommendedAction を合わせて${NOTICE_BODY_MAX}文字以内にすること（title は本文の先頭にも入るため2回数える）。`;
 
 const TOOLS = [
   {
@@ -40,13 +47,21 @@ function noticeSchema(kind: string) {
     additionalProperties: false,
     properties: {
       email: { type: "string", description: "登録先のGoogleアカウントのメールアドレス" },
-      title: { type: "string", description: "情報の短いタイトル" },
-      summary: { type: "string", description: "利用者へ知らせる要約" },
+      title: { type: "string", maxLength: NOTICE_TITLE_MAX, description: "情報の短いタイトル" },
+      summary: {
+        type: "string",
+        maxLength: NOTICE_BODY_MAX,
+        description: `利用者へ知らせる要約。${BODY_LIMIT_NOTE}`,
+      },
       source: { type: "string", description: "情報源（例: gmail, calendar）" },
       dedupeKey: { type: "string", description: "同じ情報を重複登録しないための安定したキー" },
       priority: { type: "string", enum: ["LOW", "NORMAL", "URGENT"] },
       url: { type: ["string", "null"], description: "元データへのリンク" },
-      recommendedAction: { type: "string", description: "推奨アクション。無ければ空文字" },
+      recommendedAction: {
+        type: "string",
+        maxLength: NOTICE_BODY_MAX,
+        description: `推奨アクション。無ければ空文字。${BODY_LIMIT_NOTE}`,
+      },
       showAt: { type: ["string", "null"], description: "表示開始時刻（ISO 8601）" },
       expiresAt: { type: ["string", "null"], description: "表示期限（ISO 8601）" },
     },
@@ -73,16 +88,20 @@ function textResult(text: string, isError = false) {
   return { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) };
 }
 
-/** `callTool()` がツール名と title/summary を確かめた後にだけ呼ぶ。 */
-function toolInput(toolName: string, args: Record<string, unknown>, title: string, summary: string): unknown {
-  const recommendedAction = typeof args.recommendedAction === "string" ? args.recommendedAction.trim() : "";
+/** 保存する `body`。title は先頭にも入る（#247の前からの形。変えると画面に出る文面が変わる）。 */
+function composeBody(title: string, summary: string, recommendedAction: string): string {
+  return [title, summary, recommendedAction ? `推奨アクション: ${recommendedAction}` : ""].filter(Boolean).join("\n");
+}
+
+/** `callTool()` がツール名と title/summary/body を確かめた後にだけ呼ぶ。 */
+function toolInput(toolName: string, args: Record<string, unknown>, title: string, body: string): unknown {
   return {
     email: args.email,
     source: args.source,
     kind: toolName === "aide_create_notification" ? "schedule" : toolName === "aide_create_task_candidate" ? "task" : "daily-brief",
     dedupeKey: args.dedupeKey,
     title,
-    body: [title, summary, recommendedAction ? `推奨アクション: ${recommendedAction}` : ""].filter(Boolean).join("\n"),
+    body,
     priority: args.priority,
     url: args.url,
     showAt: args.showAt,
@@ -98,8 +117,22 @@ async function callTool(name: string, rawArgs: unknown) {
   const title = typeof args.title === "string" ? args.title.trim() : "";
   const summary = typeof args.summary === "string" ? args.summary.trim() : "";
   if (title === "" || summary === "") return textResult("title と summary が要ります。", true);
+  if (title.length > NOTICE_TITLE_MAX) return textResult(`title は${NOTICE_TITLE_MAX}文字までです（いま${title.length}文字）。`, true);
 
-  const parsed = parseNoticeInput(toolInput(name, args, title, summary));
+  // `parseNoticeInput()` にも同じ上限があるが、そちらは `body` を名指しする。ツールの入力に `body` は
+  // 無く、呼ぶ側はどの項目を縮めればよいか分からない（#247）ので、ここで先に項目名で返す。
+  const recommendedAction = typeof args.recommendedAction === "string" ? args.recommendedAction.trim() : "";
+  const body = composeBody(title, summary, recommendedAction);
+  if (body.length > NOTICE_BODY_MAX) {
+    const over = body.length - NOTICE_BODY_MAX;
+    return textResult(
+      `title・summary・recommendedAction を合わせて${NOTICE_BODY_MAX}文字までです（title は本文の先頭にも入るため2回数えます）。` +
+        `いまは${body.length}文字で、${over}文字超えています。summary か recommendedAction を${over}文字以上短くして、もう一度呼んでください。`,
+      true,
+    );
+  }
+
+  const parsed = parseNoticeInput(toolInput(name, args, title, body));
   if (typeof parsed === "string") return textResult(parsed, true);
 
   const user = await db.user.findUnique({ where: { email: parsed.email }, select: { id: true } });

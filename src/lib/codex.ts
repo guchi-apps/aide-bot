@@ -207,9 +207,13 @@ type CodexEvent = {
  * - `--skip-git-repo-check`：Next.jsのRoute Handlerのカレントディレクトリはgitリポジトリの
  *   中だが、Codexにリポジトリの中身を読ませる理由が無いため、作業ディレクトリは
  *   `os.tmpdir()` に切り離す（`-C`）
- * - プロンプトは引数で渡し、標準入力は`ignore`にする。標準入力をパイプすると
- *   「Reading additional input from stdin...」という案内とともにその内容がプロンプトへ
- *   追記される仕様があるため
+ * - **プロンプトは引数ではなく標準入力で渡す（#244）。** 引数は `-` にして `child.stdin` へ
+ *   書く（`codex exec --help` の「`-` なら標準入力から読む」）。引数で渡すとLinuxの1本あたりの
+ *   上限（`MAX_ARG_STRLEN`＝128KiB。日本語はUTF-8で3バイトなので約4.3万文字）を超えた時点で
+ *   `spawn` が同期で `E2BIG` を投げ、相談もcompactも同じ会話で失敗し続ける。会話の本文が
+ *   `ps` に見えてしまうのも避けられる。**引数に本文を残したまま標準入力もパイプすると
+ *   「Reading additional input from stdin...」の案内とともに標準入力が `<stdin>` ブロックとして
+ *   追記される**ので、引数は必ず `-` にする
  * - `search` を立てると `--search`（ウェブ検索）を付ける（#144）。**このフラグは `exec` の
  *   サブコマンドではなく `codex` 本体の引数**なので、`exec` より前に置く（`codex exec --help`
  *   には出ず、`codex --help` にだけ出る）。読み取り専用のサンドボックスと両立する（実測）
@@ -251,11 +255,17 @@ export async function runCodexExec(params: {
         ...mcp.args,
         "-C",
         tmpdir(),
-        prompt,
+        // 本文は標準入力から渡す（上のコメント）。
+        "-",
       ],
-      // トークンは環境変数で渡す。引数に載せると `ps` や起動ログに出る。
-      { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...mcp.env } },
+      // トークンも本文も、引数に載せると `ps` や起動ログに出る。環境変数・標準入力で渡す。
+      { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...mcp.env } },
     );
+
+    // 子が入力を読み切る前に終わる（起動失敗・中断）と、書き込みが `EPIPE` で落ちる。
+    // 握りつぶさないとプロセスごと未処理の例外で落ちる。失敗は `error` / `close` 側で扱う。
+    child.stdin.on("error", () => {});
+    child.stdin.end(prompt);
 
     let text = "";
     const messages: string[] = [];

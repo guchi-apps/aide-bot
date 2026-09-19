@@ -546,6 +546,14 @@ Claudeを呼ぶ場所は1つも無い**。移せるようになったのは#131�
   既存のHTTP入口と同じ `ingestNotice()`・重複排除を通す。他アプリは同じMariaDBに同居しているので
   直接INSERTさせることもできるが、それをやると**このスキーマが外部の実装に固定され**、
   列を1つ足すたびに全アプリを直すことになる。宛先は `email`（`User.email` は一意）
+- **MCPの3ツールの入力に `body` は無い**（#247）。`title` / `summary` / `recommendedAction` を
+  `composeBody()`（`src/app/api/mcp/route.ts`）でつないで `body`（上限500文字）にしており、
+  **title は本文の先頭にも入る**ので2回数える。`parseNoticeInput()` が超過を返すと `body` を
+  名指しし、呼ぶ側（ChatGPTのスケジュール）はどの項目を縮めればよいか分からず、そのお知らせは
+  登録されない。**そのため `callTool()` が先に、項目名と超過した文字数つきで断る**。上限は
+  `NOTICE_BODY_MAX` / `NOTICE_TITLE_MAX`（`src/lib/notice-ingest.ts`）に1か所で持ち、
+  ツールの `inputSchema` の `maxLength` と説明文にも同じ値を出す。切り詰めて受け付ける形は
+  採らなかった——`aide_save_daily_brief` の後半（推奨アクション等）が黙って落ちるため
 - **未読が0件ならモデルを呼ばない。黙っている間の費用は0円。** これが「10分ごとに走る」を
   許容できる唯一の理由なので、候補が無くても定型文を出すような形へ変えないこと
 - **黙った回（`NO_NOTICE`）も「叩いた」ものとして残す**（`lastRuns`。プロセス内のMap。

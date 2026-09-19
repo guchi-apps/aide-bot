@@ -54,6 +54,11 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # 外から来た値の判定（`safe-path.ts`・`notice-url.ts`）と、それを二重に持つ
+      # `public/sw.js` の結果が一致することを確かめる（#248）。
+      - name: Test
+        run: pnpm test:unit
+
       - name: Build
         run: pnpm build:ci
         env:

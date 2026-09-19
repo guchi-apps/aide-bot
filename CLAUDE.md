@@ -66,7 +66,8 @@ scripts/          開発・デプロイ補助スクリプト
   読まれ、上の判定を素通りする。パスとして正当な値ならこれらは必ずパーセントエンコード
   されているので、制御文字・空白（`<= 0x20` と `0x7f`）を含む値はまとめて受け付けない
 - **`public/sw.js` の `safeTarget()` にも同じ判定を二重に持っている**（ビルドを通らない素のJSで
-  importできない。#137から続く制約）。**片方だけ直さないこと**
+  importできない。#137から続く制約）。**片方だけ直さないこと**——`pnpm test:unit` の
+  `test/sw-parity.test.ts` が `sw.js` を読み込んで、同じ入力を流した結果を突き合わせる（#248）
 
 ### 開発用ログイン（Cookieバイパス）
 
@@ -694,7 +695,8 @@ Claudeを呼ぶ場所は1つも無い**。移せるようになったのは#131�
   DBに残っているため。このモジュールはクライアントコンポーネントからimportするので、
   Prismaや `next/headers` に触れるものを持ち込まない
 - **`public/sw.js` に同じ判定を二重に持っている**（`safeTarget()`）。ビルドを通らない素のJSで
-  importできないため。**片方だけ直さないこと**
+  importできないため。**片方だけ直さないこと**——判定を直したら `test/cases.ts` の表へ入力を足す
+  （`pnpm test:unit` が3か所に同じ表を流す。#248）
 - **`WindowClient.navigate()` は同一オリジンのURLしか受け付けない。** 別オリジンを渡すと
   拒否されて**何も起きない**（通知を押しても画面が変わらない）。`notificationclick` では
   `new URL(target, self.location.origin).origin` で見て、別オリジンなら開いているタブを
@@ -1619,11 +1621,33 @@ AIDEのREADME「認可の分離」）。#184で足したのは、その道具を
 ```bash
 pnpm lint        # ESLint
 pnpm typecheck   # tsc --noEmit
+pnpm test:unit   # node --test（test/**/*.test.ts）
 pnpm build:ci    # prisma generate && next build
 ```
 
-CI（`.github/workflows/ci.yml`）はこの3つを実行する。ビルドは外部サービスへ接続しないため、
-`DATABASE_URL` と `NEXT_PUBLIC_SUPABASE_*` はCI専用のプレースホルダーでよい。
+CI（`.github/workflows/ci.yml`）はこの4つを実行する。`pnpm test` は `lint`・`typecheck`・`test:unit` を
+まとめて流す。ビルドは外部サービスへ接続しないため、`DATABASE_URL` と `NEXT_PUBLIC_SUPABASE_*` は
+CI専用のプレースホルダーでよい。
+
+### 単体テスト（`test/`。#248）
+
+**依存は足していない。** Nodeの標準の `node --test` と、型を剥がして `.ts` を直接読む機能
+（Node 22.18以降）だけで動く。`@/` の解決は `test/alias-hooks.mjs`（`--import` で登録）が受け持つ。
+
+- **対象は「外から来た値を判定する関数」と、ずれると静かに壊れる件数の計算。** いまは
+  `isInternalPath()` / `safeInternalPath()`・`safeNoticeUrl()`・`public/sw.js` の `safeTarget()`
+  との一致・`historyWindowSkip()`。**PrismaやSupabaseへ触れるモジュールはimportしない**
+  （テストからDBへ繋がない）。`parseChoice()`（`notices.ts`）や `deleteDay()` の件数計算は
+  そのままでは入れられない——DBに触れるモジュールの中にあるため、テストしたいなら純粋な関数として
+  切り出してから足す
+- **入力の表は `test/cases.ts` に1つだけ置き、3か所に流す。** `sw.js` は `node:vm` で読み込んで
+  `safeTarget()` を取り出す（`sw.js` をexportさせたり書き換えたりしない）。**判定を直したら、
+  この表へ入力を足す**
+- **`isInternalPath()` が通した値は `new URL(値, オリジン).origin` が変わらない**という性質そのものも、
+  1文字・2文字の組み合わせの総当たりで確かめている。表に無い入力の穴を拾うための保険
+- テストファイルは `tsc`（`pnpm typecheck`）の対象にも入る。`.ts` 拡張子付きの相対importを
+  書けるよう、`tsconfig.json` に `allowImportingTsExtensions` を足してある（`noEmit` なので影響しない）
+- **書いてよい構文はNodeが型を剥がせるものだけ**（`enum`・`namespace`・パラメータプロパティは不可）
 
 ### 返答の生成をサブスク枠を使わずに確かめる
 

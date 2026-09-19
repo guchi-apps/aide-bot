@@ -286,6 +286,14 @@ export async function POST(request: Request) {
     }),
   ]);
 
+  // ここまでの待ち（生成の畳み待ち・保存）のあいだに、次の発言で割り込まれていることがある（#259）。
+  // 発言は保存したので次の往復の履歴には残る。返答を作る相手はもういないので、履歴の組み立て・
+  // 接続の読み出し（トークン更新で外へ出ることがある）・生成の準備はやらずに抜ける。
+  // 錠（`pendingGenerations`）はまだ置いていないので、外す後片付けも要らない。
+  if (request.signal.aborted) {
+    return fail("リクエストが中断されました。", 499);
+  }
+
   // 窓の先頭は `HISTORY_WINDOW_STEP` の刻みでしか動かさない。1発言ずつ滑らせると
   // 往復のたびにプレフィックスの先頭が変わり、Codex側のキャッシュ（実測で確認済み。
   // `turn.completed` の `usage.cached_input_tokens`）が効きにくくなる。

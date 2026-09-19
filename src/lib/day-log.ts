@@ -4,6 +4,7 @@ import { cache } from "react";
 import type { ChatEntry } from "@/components/chat/types";
 import { dayEnd, dayHeading, dayStart, jstDayKey, monthLabel } from "@/lib/day-key";
 import { db } from "@/lib/db";
+import { removedFromSummary } from "@/lib/summary-range";
 
 /**
  * 連続セッションと、その日ごとの取り出し（#157）。**サーバー専用**（Prismaを引き込む）。
@@ -309,9 +310,7 @@ export async function deleteDay(conversationId: string, dayKey: string): Promise
     `;
     if (!row) return 0;
 
-    // 畳んだ範囲は「いちばん古い `summarizedCount` 件」で、日付の範囲も時刻で連続している。
-    // したがって、消す日より前にある発言の数を引けば、消すぶんのうち何件が畳んだ範囲に
-    // 入っていたかがそのまま出る。
+    // 消すぶんのうち何件が畳んだ範囲に入っていたか（考え方は `removedFromSummary()` を参照）。
     const [olderCount, dayCount] = await Promise.all([
       tx.message.count({ where: { conversationId, createdAt: { lt: from } } }),
       tx.message.count({ where: { conversationId, createdAt } }),
@@ -319,14 +318,14 @@ export async function deleteDay(conversationId: string, dayKey: string): Promise
 
     if (dayCount === 0) return 0;
 
-    const removedFromSummary = Math.max(0, Math.min(row.summarizedCount - olderCount, dayCount));
+    const removed = removedFromSummary(row.summarizedCount, olderCount, dayCount);
 
     const deleted = await tx.message.deleteMany({ where: { conversationId, createdAt } });
     await tx.toolCall.updateMany({ where: { conversationId, createdAt }, data: { conversationId: null } });
-    if (removedFromSummary > 0) {
+    if (removed > 0) {
       await tx.conversation.update({
         where: { id: conversationId },
-        data: { summarizedCount: { decrement: removedFromSummary } },
+        data: { summarizedCount: { decrement: removed } },
       });
     }
 

@@ -1691,10 +1691,13 @@ CI専用のプレースホルダーでよい。
 
 - **対象は「外から来た値を判定する関数」と、ずれると静かに壊れる件数の計算。** いまは
   `isInternalPath()` / `safeInternalPath()`・`safeNoticeUrl()`・`public/sw.js` の `safeTarget()`
-  との一致・`historyWindowSkip()`。**PrismaやSupabaseへ触れるモジュールはimportしない**
-  （テストからDBへ繋がない）。`parseChoice()`（`notices.ts`）や `deleteDay()` の件数計算は
-  そのままでは入れられない——DBに触れるモジュールの中にあるため、テストしたいなら純粋な関数として
-  切り出してから足す
+  との一致・`historyWindowSkip()`・`parseNoticeInput()`（`notice-ingest.ts`）・`parseChoice()`
+  （`notice-choice.ts`）・`removedFromSummary()`（`summary-range.ts`。`deleteDay()` が畳んだ範囲から
+  引く件数。#265）。**PrismaやSupabaseへ触れるモジュールはimportしない**（テストからDBへ繋がない）。
+  **DBに触れるモジュールの中にある計算をテストしたいなら、純粋な関数として別ファイルへ切り出す**
+  （#265で `parseChoice()` を `notices.ts` から、`removedFromSummary()` を `day-log.ts` から出した。
+  `deleteDay()` 本体——行のロックと `decrement`——はDBが要るのでテストの外）。
+  `@prisma/client` の `NoticePriority` のように、生成物を実行時にimportするだけのものは素のNodeでも読める
 - **入力の表は `test/cases.ts` に1つだけ置き、3か所に流す。** `sw.js` は `node:vm` で読み込んで
   `safeTarget()` を取り出す（`sw.js` をexportさせたり書き換えたりしない）。**判定を直したら、
   この表へ入力を足す**

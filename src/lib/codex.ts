@@ -172,6 +172,11 @@ export type CodexResult = {
   usage: CodexUsage | null;
 };
 
+/** 中断で終わった回の結果。起動前に中断されていた回（#259）と、実行中に打ち切った回で同じ形を返す。 */
+function interruptedResult(): CodexResult {
+  return { text: "", reply: "", messages: [], interrupted: true, errorMessage: null, usage: null };
+}
+
 /** `codex exec --json` が出すJSONLの1行。実際に使う項目だけを緩く宣言する。 */
 type CodexEvent = {
   type: string;
@@ -231,6 +236,14 @@ export async function runCodexExec(params: {
   onToolCall?: (event: CodexToolCallEvent) => void;
 }): Promise<CodexResult> {
   const { model, prompt, signal, search = false, mcpServers = [], onToolCall } = params;
+
+  // 呼ばれる前にすでに中断されていたら、起動しない（#259）。`abort` イベントは中断の瞬間に
+  // 一度だけ発火し、後から付けたリスナーには届かない。`/api/chat` はここへ来るまでに
+  // 発言の保存・接続の読み出しなどを待つので、その間に割り込まれると、下の `onAbort` は
+  // 二度と呼ばれず、打ち切ったはずの生成が最後まで走って利用枠を使い、返答が
+  // `interrupted: false` で保存される。
+  if (signal.aborted) return interruptedResult();
+
   const mcp = mcpOverrides(mcpServers);
 
   return new Promise((resolve) => {
@@ -357,7 +370,7 @@ export async function runCodexExec(params: {
 
     child.on("close", (code) => {
       if (interrupted) {
-        finish({ text: "", reply: "", messages: [], interrupted: true, errorMessage: null, usage: null });
+        finish(interruptedResult());
         return;
       }
 

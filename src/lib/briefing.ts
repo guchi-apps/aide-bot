@@ -254,21 +254,28 @@ async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
   // 履歴を読み返したときに秘書が突然しゃべり出したように見える（#79）。
   const conversation = await primaryConversation(userId);
 
+  // **発言の時刻は、受けた時刻（`now`）ではなく書き込む直前に取り直す**（#261）。`now` は
+  // 生成を始める前の値で、Codexの往復（最大180秒）のあいだに利用者が話しかけると、
+  // その発言より前へ見通しが割り込み、画面の並びも次の往復でモデルへ渡す履歴も実際の
+  // 順序と食い違う。抑制の鍵（`dedupeKey`）と吹き出しの期限は日付・基準時刻の話なので
+  // `now` のまま。
+  const savedAt = new Date();
+
   await db.$transaction([
     db.message.createMany({
       data: [
-        { conversationId: conversation.id, role: "USER", content: MORNING_BRIEFING_REQUEST, createdAt: now },
+        { conversationId: conversation.id, role: "USER", content: MORNING_BRIEFING_REQUEST, createdAt: savedAt },
         // 同じ時刻だと並び順が不定になる。1秒ずらして返答を後ろに固定する。
         {
           conversationId: conversation.id,
           role: "ASSISTANT",
           content: text,
-          createdAt: new Date(now.getTime() + 1000),
+          createdAt: new Date(savedAt.getTime() + 1000),
         },
       ],
     }),
     // 最後に話した時刻（#101のひとりごとが読む）。発言を足しただけでは動かない。
-    db.conversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } }),
+    db.conversation.update({ where: { id: conversation.id }, data: { updatedAt: savedAt } }),
   ]);
 
   const delivered = await sendPushToUser(userId, {

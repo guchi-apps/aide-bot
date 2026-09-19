@@ -189,6 +189,20 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
   **端末から手で叩くときは、プロンプトを引数に置いたまま `< /dev/null` を付けるか、`-` を付けて
   `printf '…' | codex exec … -` で渡す**——標準入力がパイプされていて引数も付いていると、
   プロンプトが二重になるか、JSONLが1行も出ないまま待ち続けて「Codexが固まった」に見える（#132で実測）
+- **子プロセスの環境変数は許可リストで絞る**（#258。`codexChildEnv()`、`src/lib/codex.ts`）。
+  `process.env` を丸ごと渡すと、本番では `next start` が読み込んだ `DATABASE_URL`・`VAPID_PRIVATE_KEY`・
+  `BRIEFING_TRIGGER_TOKEN`・`NOTICE_INGEST_TOKEN` がモデルの実行する `env` に見える（`--sandbox read-only` は
+  読むことを止めない）。**モデルへ食わせる文字列は外から来る**（`--search` のニュース・MCPの道具の結果）ので、
+  プロンプトインジェクションが入るとシークレットが外へ出る。渡すのは `PATH`・`HOME`・`CODEX_*`（認証情報の
+  置き場 `CODEX_HOME` を含む）・`XDG_*`・ロケール・プロキシ・証明書だけで、MCPのアクセストークン
+  （`AIDE_BOT_MCP_TOKEN_*`）はそこへ足す。**Codexが動かなくなったら値を足す前に、Codexのどの機能が
+  その変数を読むのかを確かめる**（`test/codex-env.test.ts` が名前の表で固定している）
+- **モデルのシェルへ渡す環境は、子プロセスの環境とは別に絞る**（#258）。`shell_environment_policy.inherit="core"`
+  と `allow_login_shell=false` を常に付ける。実測（`codex-cli 0.152.1`）で、**子プロセスの環境を絞っても
+  `AIDE_BOT_MCP_TOKEN_*` はモデルの `env` にそのまま出た**（名前に `TOKEN` が入っていても既定の除外は
+  効かない）。ログインシェルが読む利用者のプロファイルが足す変数（`OP_SERVICE_ACCOUNT_TOKEN` など）も出た。
+  MCPのトークンを読むのはCodex本体なので、この設定でも接続先へ繋がり道具も呼べる（スタブMCPで
+  `initialize`・`tools/list`・`tools/call` のすべてに `Authorization: Bearer` が付くことを実測）
 - **`codex exec --search` でウェブ検索させられる**（`Enable live web search. When enabled,
   the native Responses web_search tool is available`）。**まだ使っていない**が、外部情報を
   取らせたくなったとき、検索用のサービスを新たに契約する前にこちらを検討すること——

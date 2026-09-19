@@ -571,6 +571,10 @@ Claudeを呼ぶ場所は1つも無い**。移せるようになったのは#131�
   使い切る。当たった理由は応答の `message` で返す（ショートカットの「通知を表示」へそのまま流せる）
 - **生成は応答の後（`after()`）。** Codexの往復は最大180秒で、ショートカットは待てない。届いたかは
   Pushで分かる
+- **履歴へ差し込む時刻は、生成が終わった後に取り直す**（#261。`deliverFor()` の `savedAt`）。
+  受けた時刻（`now`）のまま保存すると、生成の最大180秒のあいだに利用者が話しかけた発言より前へ
+  見通しが割り込み、画面の並びも次の往復でモデルへ渡す履歴も実際の順序と食い違う。**抑制の鍵
+  （`jstDayKey(now)`）と吹き出しの期限は `now` のまま**——日付と基準時刻の話で、書き込んだ時刻ではない
 - **合図とcronが重なっても生成は1本**（`briefing.ts` の `inFlight`）。今日の記録は送り終えてから
   書くので、生成中の最大180秒は `NotificationLog` の抑制が効かない。PM2で1プロセスという前提は
   `compact.ts` と同じ
@@ -1699,10 +1703,13 @@ CI専用のプレースホルダーでよい。
 
 - **対象は「外から来た値を判定する関数」と、ずれると静かに壊れる件数の計算。** いまは
   `isInternalPath()` / `safeInternalPath()`・`safeNoticeUrl()`・`public/sw.js` の `safeTarget()`
-  との一致・`historyWindowSkip()`。**PrismaやSupabaseへ触れるモジュールはimportしない**
-  （テストからDBへ繋がない）。`parseChoice()`（`notices.ts`）や `deleteDay()` の件数計算は
-  そのままでは入れられない——DBに触れるモジュールの中にあるため、テストしたいなら純粋な関数として
-  切り出してから足す
+  との一致・`historyWindowSkip()`・`parseNoticeInput()`（`notice-ingest.ts`）・`parseChoice()`
+  （`notice-choice.ts`）・`removedFromSummary()`（`summary-range.ts`。`deleteDay()` が畳んだ範囲から
+  引く件数。#265）。**PrismaやSupabaseへ触れるモジュールはimportしない**（テストからDBへ繋がない）。
+  **DBに触れるモジュールの中にある計算をテストしたいなら、純粋な関数として別ファイルへ切り出す**
+  （#265で `parseChoice()` を `notices.ts` から、`removedFromSummary()` を `day-log.ts` から出した。
+  `deleteDay()` 本体——行のロックと `decrement`——はDBが要るのでテストの外）。
+  `@prisma/client` の `NoticePriority` のように、生成物を実行時にimportするだけのものは素のNodeでも読める
 - **入力の表は `test/cases.ts` に1つだけ置き、3か所に流す。** `sw.js` は `node:vm` で読み込んで
   `safeTarget()` を取り出す（`sw.js` をexportさせたり書き換えたりしない）。**判定を直したら、
   この表へ入力を足す**

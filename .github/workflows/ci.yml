@@ -54,8 +54,9 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # 外から来た値の判定（`safe-path.ts`・`notice-url.ts`）と、それを二重に持つ
-      # `public/sw.js` の結果が一致することを確かめる（#248）。
+      # 外から来た値の判定（`safe-path.ts`・`notice-url.ts`・`notice-ingest.ts`）と、それを二重に持つ
+      # `public/sw.js` の結果が一致すること、静かに壊れる件数の計算（履歴の窓・要約の畳んだ範囲）を
+      # 確かめる（#248・#265）。
       - name: Test
         run: pnpm test:unit
 

@@ -99,6 +99,19 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   認証を抜けても開発DBが空なら画面は空のままで検証にならない
 - シークレットの実値はコミット・PR本文・Issueコメント・ログのいずれにも書かない
 
+## Route Handlerのリクエスト本文（#262）
+
+**本文はJSONの `null` でも「読めた」ことになる。** `request.json()` は本文が `null` なら `null` を返す
+ので、`(await request.json()) as Body` と型を当てたまま `body.x` を読むと、`null` のときだけTypeErrorで
+500になる。画面からは出ない入力（手で叩いた・外部アプリ）だが、呼ぶ側は500からは原因を切り分けられない。
+
+- **オブジェクトとして読むのは `readJsonObject()`（`src/lib/json-body.ts`）に閉じる。** JSONとして
+  読めない・`null`・数値・文字列・配列はまとめて `null` を返すので、呼び出し側は400を返す。
+  新しいRoute Handlerで本文を読むときは `request.json()` を直接呼ばない
+- **MCP（`/api/mcp`）だけは形の違う本文を400ではなくJSON-RPCの `-32600`（`id` は `null`）で返す。**
+  JSONとして読めない本文は従来どおり400。呼ぶ側がJSON-RPCの応答として読めるようにするため
+- `POST /api/notices` は `parseNoticeInput()` が同じ判定を持っているので `request.json()` のまま
+
 ## チャット（相談）
 
 - **相談は利用者につき1本の `Conversation` に積み続ける**（#157でテーマ別スレッドをやめた。
@@ -176,6 +189,20 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
   **端末から手で叩くときは、プロンプトを引数に置いたまま `< /dev/null` を付けるか、`-` を付けて
   `printf '…' | codex exec … -` で渡す**——標準入力がパイプされていて引数も付いていると、
   プロンプトが二重になるか、JSONLが1行も出ないまま待ち続けて「Codexが固まった」に見える（#132で実測）
+- **子プロセスの環境変数は許可リストで絞る**（#258。`codexChildEnv()`、`src/lib/codex.ts`）。
+  `process.env` を丸ごと渡すと、本番では `next start` が読み込んだ `DATABASE_URL`・`VAPID_PRIVATE_KEY`・
+  `BRIEFING_TRIGGER_TOKEN`・`NOTICE_INGEST_TOKEN` がモデルの実行する `env` に見える（`--sandbox read-only` は
+  読むことを止めない）。**モデルへ食わせる文字列は外から来る**（`--search` のニュース・MCPの道具の結果）ので、
+  プロンプトインジェクションが入るとシークレットが外へ出る。渡すのは `PATH`・`HOME`・`CODEX_*`（認証情報の
+  置き場 `CODEX_HOME` を含む）・`XDG_*`・ロケール・プロキシ・証明書だけで、MCPのアクセストークン
+  （`AIDE_BOT_MCP_TOKEN_*`）はそこへ足す。**Codexが動かなくなったら値を足す前に、Codexのどの機能が
+  その変数を読むのかを確かめる**（`test/codex-env.test.ts` が名前の表で固定している）
+- **モデルのシェルへ渡す環境は、子プロセスの環境とは別に絞る**（#258）。`shell_environment_policy.inherit="core"`
+  と `allow_login_shell=false` を常に付ける。実測（`codex-cli 0.152.1`）で、**子プロセスの環境を絞っても
+  `AIDE_BOT_MCP_TOKEN_*` はモデルの `env` にそのまま出た**（名前に `TOKEN` が入っていても既定の除外は
+  効かない）。ログインシェルが読む利用者のプロファイルが足す変数（`OP_SERVICE_ACCOUNT_TOKEN` など）も出た。
+  MCPのトークンを読むのはCodex本体なので、この設定でも接続先へ繋がり道具も呼べる（スタブMCPで
+  `initialize`・`tools/list`・`tools/call` のすべてに `Authorization: Bearer` が付くことを実測）
 - **`codex exec --search` でウェブ検索させられる**（`Enable live web search. When enabled,
   the native Responses web_search tool is available`）。**まだ使っていない**が、外部情報を
   取らせたくなったとき、検索用のサービスを新たに契約する前にこちらを検討すること——
@@ -199,6 +226,12 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
 - **書き込み先の正は `primaryConversation()`（`src/lib/day-log.ts`）。** `/api/chat` は
   リクエストからスレッドのIDを受け取らない。**他人のスレッドへ書き込む入口がそもそも無く
   なった**ので、#24からあった「必ず `userId` との組で引く」の手当ては要らない
+- **「1本」は主キーで守っている**（#264）。`(userId, isPrimary)` は `isPrimary: false` の行が複数あって
+  よいので一意制約にできない。**作るときのidを `main_<userId>` に決め打ち**し、同時に来て主キーの
+  重複（`P2002`）に当たった側は引き直す。**まず `findFirst` で引く形は変えない**——#157より後に
+  作られた利用者の連続セッションは `cuid()` のidで、決め打ちのidだけで引くと見つけられず2本目を
+  作る。`upsert` にもしない（MySQLのPrismaはSELECT→INSERTで、同じ競合で結局 `P2002` に当たる）。
+  idの規則は統合のマイグレーション・`scripts/seed-ci-db.mjs` と同じ
 - **画面は3つ。** 今日の記録（`/`。話しかけられるのはここだけ）・過去の日（`/d/<日付>`。
   読むだけ）・古い通知の受け皿（`/c/<ID>`。`/` へリダイレクトするだけ）。**`/c/<ID>` を
   消さないこと**——朝の見通し（#79）と急ぎのお知らせ（#115）のWeb Pushは端末のペイロードに
@@ -319,6 +352,14 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
   「短く言い切った返答」と見分けが付かず、続きを最初から言い直す
 - **#157で「新しい相談の1通目を割り込むとスレッドがもう1本作られる」という手当ては要らなく
   なった。** 書き込み先はサーバー側が決める1本で、リクエストにIDを載せていない
+- **割り込みは、生成が始まる前にすでに届いていることがある**（#259）。`request.signal` の `abort` は
+  中断の瞬間に一度だけ発火し、後から付けたリスナーには届かない。`/api/chat` は `runCodexExec()` へ
+  来るまでに畳み待ち（最大5秒）・発言の保存・接続の読み出しを待つので、その間に次の発言で
+  割り込まれると、リスナーを付けただけの実装では**打ち切ったはずの生成が最後まで走り、
+  `interrupted: false` で保存され、遮った返答が次の発言より下に並ぶ**。`runCodexExec()` の先頭で
+  `signal.aborted` を見て起動せず `interrupted: true` を返し、`/api/chat` も発言を保存した直後に
+  同じ判定で抜ける（錠は置く前なので外す後片付けは無い）。`test/codex-abort.test.ts` が、
+  中断済みの `signal` でスタブが起動されないことを確かめる
 - **「話す」では読み上げ中にマイクを開かない方針を変えていない。** 割り込みは「押した瞬間に
   黙ってから聞き取りを開く」形で、読み上げ中もマイクを開きっぱなしにする常時バージインは
   採っていない（自分の声を拾って往復が止まらなくなるため）
@@ -557,6 +598,10 @@ Claudeを呼ぶ場所は1つも無い**。移せるようになったのは#131�
   使い切る。当たった理由は応答の `message` で返す（ショートカットの「通知を表示」へそのまま流せる）
 - **生成は応答の後（`after()`）。** Codexの往復は最大180秒で、ショートカットは待てない。届いたかは
   Pushで分かる
+- **履歴へ差し込む時刻は、生成が終わった後に取り直す**（#261。`deliverFor()` の `savedAt`）。
+  受けた時刻（`now`）のまま保存すると、生成の最大180秒のあいだに利用者が話しかけた発言より前へ
+  見通しが割り込み、画面の並びも次の往復でモデルへ渡す履歴も実際の順序と食い違う。**抑制の鍵
+  （`jstDayKey(now)`）と吹き出しの期限は `now` のまま**——日付と基準時刻の話で、書き込んだ時刻ではない
 - **合図とcronが重なっても生成は1本**（`briefing.ts` の `inFlight`）。今日の記録は送り終えてから
   書くので、生成中の最大180秒は `NotificationLog` の抑制が効かない。PM2で1プロセスという前提は
   `compact.ts` と同じ
@@ -877,7 +922,11 @@ Anthropic（従量課金）で、**#183以降に積まれるのは前者だけ**
   （`after()`）に `refreshTopicsIfStale()` を呼び、前回から1時間（失敗後は15分）あいていれば
   バックグラウンドで1回走る。「利用者が開いていないときに動くのは朝の見通しだけ」を崩さない。
   前回の時刻はプロセス内のMap（`attempts`）に成否を問わず残し、再起動直後だけDBの `fetchedAt`
-  を見る——DBだけだと0件・失敗の回で時刻が進まず、3分ごとの問い合わせのたびに仕入れ直す
+  を見る——DBだけだと0件・失敗の回で時刻が進まず、3分ごとの問い合わせのたびに仕入れ直す。
+  **「走っている」印（`running`）は、同期の判定を通った直後、DBを見る前に立てる**（#263）。
+  DBを2回待った後に立てると、その窓に別の端末の問い合わせが重なって二重に仕入れる（1回が約38万
+  トークン）。DBを見て走らせないと決まった回（種類が0件・DB上は仕入れたばかり・前処理の失敗）は
+  印を前回の記録へ戻す。compactの `running` や朝の見通しの `inFlight` と同じ形
 - **`--search` は `exec` のサブコマンドではなく `codex` 本体の引数。** `codex exec --help` には
   出ず、`codex --help` にだけ出る。`spawn` の引数は `["--search", "exec", ...]` の順
   （`runCodexExec({ search: true })`）。読み取り専用のサンドボックスと両立する
@@ -1681,10 +1730,14 @@ CI専用のプレースホルダーでよい。
 
 - **対象は「外から来た値を判定する関数」と、ずれると静かに壊れる件数の計算。** いまは
   `isInternalPath()` / `safeInternalPath()`・`safeNoticeUrl()`・`public/sw.js` の `safeTarget()`
-  との一致・`historyWindowSkip()`。**PrismaやSupabaseへ触れるモジュールはimportしない**
-  （テストからDBへ繋がない）。`parseChoice()`（`notices.ts`）や `deleteDay()` の件数計算は
-  そのままでは入れられない——DBに触れるモジュールの中にあるため、テストしたいなら純粋な関数として
-  切り出してから足す
+  との一致・`historyWindowSkip()`・`readJsonObject()`（#262）・`parseNoticeInput()`
+  （`notice-ingest.ts`）・`parseChoice()`（`notice-choice.ts`）・`removedFromSummary()`
+  （`summary-range.ts`。`deleteDay()` が畳んだ範囲から引く件数。#265）。**PrismaやSupabaseへ触れる
+  モジュールはimportしない**（テストからDBへ繋がない）。**DBに触れるモジュールの中にある計算を
+  テストしたいなら、純粋な関数として別ファイルへ切り出す**（#265で `parseChoice()` を
+  `notices.ts` から、`removedFromSummary()` を `day-log.ts` から出した。`deleteDay()` 本体
+  ——行のロックと `decrement`——はDBが要るのでテストの外）。`@prisma/client` の `NoticePriority`
+  のように、生成物を実行時にimportするだけのものは素のNodeでも読める
 - **入力の表は `test/cases.ts` に1つだけ置き、3か所に流す。** `sw.js` は `node:vm` で読み込んで
   `safeTarget()` を取り出す（`sw.js` をexportさせたり書き換えたりしない）。**判定を直したら、
   この表へ入力を足す**

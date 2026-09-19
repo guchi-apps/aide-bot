@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { APP_VERSION } from "@/lib/app-version";
 import { db } from "@/lib/db";
+import { isJsonObject } from "@/lib/json-body";
 import { isNoticeIngestAuthorized, NOTICE_BODY_MAX, NOTICE_TITLE_MAX, parseNoticeInput } from "@/lib/notice-ingest";
 import { ingestNotice } from "@/lib/notices";
 
@@ -145,12 +146,17 @@ async function callTool(name: string, rawArgs: unknown) {
 export async function POST(request: Request) {
   if (!isNoticeIngestAuthorized(request)) return NextResponse.json({ error: "認証が必要です。" }, { status: 401 });
 
-  let body: JsonRpcRequest;
+  let raw: unknown;
   try {
-    body = await request.json();
+    raw = await request.json();
   } catch {
     return NextResponse.json({ error: "JSONとして読めませんでした。" }, { status: 400 });
   }
+
+  // 本文が `null` だと `body.jsonrpc` を読んだ時点でTypeErrorになり、呼ぶ側には500しか見えない（#262）。
+  // JSONとして読めたが形が違うものは、JSON-RPCのエラーで返す（`id` は取れないのでnull）。
+  if (!isJsonObject(raw)) return errorResponse(null, -32600, "JSON-RPCリクエストが不正です。");
+  const body: JsonRpcRequest = raw;
 
   if (body.jsonrpc !== "2.0" || typeof body.method !== "string") {
     return errorResponse(body.id, -32600, "JSON-RPCリクエストが不正です。");

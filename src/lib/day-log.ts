@@ -1,8 +1,10 @@
+import { Prisma } from "@prisma/client";
 import { cache } from "react";
 
 import type { ChatEntry } from "@/components/chat/types";
 import { dayEnd, dayHeading, dayStart, jstDayKey, monthLabel } from "@/lib/day-key";
 import { db } from "@/lib/db";
+import { removedFromSummary } from "@/lib/summary-range";
 
 /**
  * 連続セッションと、その日ごとの取り出し（#157）。**サーバー専用**（Prismaを引き込む）。
@@ -33,31 +35,62 @@ const CARRY_OVER_MIN_ENTRIES = 8;
 /**
  * 連続セッションを取り出す。無ければ作る（#157）。
  *
- * **1利用者につき1本**。`findFirst` と `create` の間で競合すると2本目ができうるが、
- * 利用者1人・PM2で1プロセスという前提（#48の `pendingGenerations` と同じ）では起こらない。
- * それでも2本できた場合に古い方を使い続けるよう、`createdAt` の昇順で引く。
+ * **1利用者につき1本**。`(userId, isPrimary)` には一意制約が無い（`isPrimary: false` の行が
+ * 複数あってよいため、その組へは張れない）ので、**作るときのidを `main_<userId>` に決め打ち
+ * して主キーで守る**（#264。統合のマイグレーション `20260903120000_merge_conversations` と
+ * 同じ規則）。新しい利用者の初回表示では、ページの描画と `/api/notices/current` などが
+ * 同時にここへ来る。どちらも `findFirst` が空で `create` へ進んでも、後から来た側は主キーの
+ * 重複（`P2002`）で落ちるので、捕まえて引き直す。
+ *
+ * **`upsert` にしていない。** MySQLのPrismaは `upsert` をSELECT→INSERTで組み立てるので
+ * 原子的ではなく、同じ競合で結局 `P2002` に当たる。**まず `findFirst` で引く形も変えない**——
+ * #157より後に作られた利用者の連続セッションは `cuid()` のidで、`main_<userId>` を決め打ちで
+ * 引くとその行を見つけられずに2本目を作ってしまう。
+ *
+ * それでも2本できていた場合（決め打ちの導入前に競合した行）に古い方を使い続けるよう、
+ * `createdAt` の昇順で引く。
  *
  * **`React.cache` で包んである**（#226）。`(chat)/layout.tsx` とページが同じ描画の中で呼ぶため。
- * Route Handler・cron（`/api/chat`・`briefing.ts`・`notices.ts`）からの呼び出しには効かない。
+ * Route Handler・cron（`/api/chat`・`briefing.ts`・`notices.ts`）からの呼び出しには効かない
+ * ——**その経路どうしの競合を止めているのは上の主キー**。
  */
 export const primaryConversation = cache(async function primaryConversation(userId: string): Promise<{
   id: string;
   summary: string | null;
   summarizedCount: number;
 }> {
-  const existing = await db.conversation.findFirst({
-    where: { userId, isPrimary: true },
-    orderBy: { createdAt: "asc" },
-    select: { id: true, summary: true, summarizedCount: true },
-  });
+  const find = () =>
+    db.conversation.findFirst({
+      where: { userId, isPrimary: true },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, summary: true, summarizedCount: true },
+    });
 
+  const existing = await find();
   if (existing) return existing;
 
-  return db.conversation.create({
-    data: { userId, isPrimary: true, title: PRIMARY_CONVERSATION_TITLE },
-    select: { id: true, summary: true, summarizedCount: true },
-  });
+  try {
+    return await db.conversation.create({
+      data: { id: primaryConversationId(userId), userId, isPrimary: true, title: PRIMARY_CONVERSATION_TITLE },
+      select: { id: true, summary: true, summarizedCount: true },
+    });
+  } catch (error) {
+    // 同時に来た別のリクエストが先に作った。作られた行をそのまま使う。
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const created = await find();
+      if (created) return created;
+    }
+    throw error;
+  }
 });
+
+/**
+ * 連続セッションを作るときのid。統合のマイグレーションと、開発DBのシード
+ * （`scripts/seed-ci-db.mjs`。プレーンJSでimportできないため同じ規則を二重に持つ）と揃える。
+ */
+export function primaryConversationId(userId: string): string {
+  return `main_${userId}`;
+}
 
 /** 左メニューに並べる1日ぶん。 */
 export type DaySummary = {
@@ -277,9 +310,7 @@ export async function deleteDay(conversationId: string, dayKey: string): Promise
     `;
     if (!row) return 0;
 
-    // 畳んだ範囲は「いちばん古い `summarizedCount` 件」で、日付の範囲も時刻で連続している。
-    // したがって、消す日より前にある発言の数を引けば、消すぶんのうち何件が畳んだ範囲に
-    // 入っていたかがそのまま出る。
+    // 消すぶんのうち何件が畳んだ範囲に入っていたか（考え方は `removedFromSummary()` を参照）。
     const [olderCount, dayCount] = await Promise.all([
       tx.message.count({ where: { conversationId, createdAt: { lt: from } } }),
       tx.message.count({ where: { conversationId, createdAt } }),
@@ -287,14 +318,14 @@ export async function deleteDay(conversationId: string, dayKey: string): Promise
 
     if (dayCount === 0) return 0;
 
-    const removedFromSummary = Math.max(0, Math.min(row.summarizedCount - olderCount, dayCount));
+    const removed = removedFromSummary(row.summarizedCount, olderCount, dayCount);
 
     const deleted = await tx.message.deleteMany({ where: { conversationId, createdAt } });
     await tx.toolCall.updateMany({ where: { conversationId, createdAt }, data: { conversationId: null } });
-    if (removedFromSummary > 0) {
+    if (removed > 0) {
       await tx.conversation.update({
         where: { id: conversationId },
-        data: { summarizedCount: { decrement: removedFromSummary } },
+        data: { summarizedCount: { decrement: removed } },
       });
     }
 

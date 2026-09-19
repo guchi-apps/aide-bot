@@ -1,6 +1,7 @@
 import { compactSystemPrompt } from "@/lib/anthropic";
 import { COMPACT_MODEL } from "@/lib/chat-model";
 import { runCodexExec } from "@/lib/codex";
+import { selectFoldable } from "@/lib/compact-budget";
 import { db } from "@/lib/db";
 import { recordApiUsage } from "@/lib/usage";
 
@@ -52,13 +53,6 @@ const CODEX_TIMEOUT_MS = 120 * 1000;
  * 動かさないため（`pendingGenerations`。`src/app/api/chat/route.ts` と同じ前提）。
  */
 const running = new Set<string>();
-
-/** 畳む対象の発言を、モデルへ渡す1本のテキストにする。 */
-function foldedText(messages: { role: "USER" | "ASSISTANT"; content: string }[]): string {
-  return messages
-    .map((message) => `${message.role === "USER" ? "利用者" : "秘書"}: ${message.content}`)
-    .join("\n\n");
-}
 
 function buildPrompt(previous: string | null, folded: string): string {
   return [
@@ -114,9 +108,13 @@ export async function compactIfNeeded(params: {
     // 数の食い違ったまま `summarizedCount` を進める方が害が大きい。
     if (messages.length !== foldCount) return false;
 
+    // 1回に畳む量には上限がある（#244）。入りきらなかったぶんは `summarizedCount` が進まない
+    // まま残り、次の往復で続きから畳まれる。
+    const folded = selectFoldable(messages);
+
     const result = await runCodexExec({
       model: COMPACT_MODEL,
-      prompt: buildPrompt(summary, foldedText(messages)),
+      prompt: buildPrompt(summary, folded.text),
       signal: AbortSignal.timeout(CODEX_TIMEOUT_MS),
     });
 
@@ -143,7 +141,7 @@ export async function compactIfNeeded(params: {
 
     await db.conversation.update({
       where: { id: conversationId },
-      data: { summary: next, summarizedCount: summarizedCount + foldCount },
+      data: { summary: next, summarizedCount: summarizedCount + folded.count },
     });
 
     return true;

@@ -34,6 +34,29 @@ import { recordApiUsage } from "@/lib/usage";
 export const HOME_PROFILE_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * 取り込みに失敗した後に空ける間隔。
+ *
+ * 失敗した回は `homeProfileFetchedAt` を進めない（進めると、前に取り込めた覚え書きがあるのに
+ * 次の取り込みが1日後になり、直った後も古いままになる）。そのぶんcronの起動（30分ごと）の
+ * たびに「取り込み直す」と判定され、Notionの検索が上限（120秒）に掛かり続ける状況では
+ * Codexが1日に最大48回走ってサブスクの利用枠を削る。話題の仕入れ（`topics.ts` の
+ * `TOPIC_RETRY_INTERVAL_MS`）にある失敗後の間隔を、こちらにも置く。
+ *
+ * あちらの15分より長いのは、走らせる相手がcronで（3分ごとの問い合わせと違い）利用者が
+ * 待っておらず、覚え書きは年単位で変わらない前提のため。**設定の画面のボタンは見ない**
+ * ——利用者が押したときは、失敗の直後でもやり直せてよい。
+ */
+export const HOME_PROFILE_RETRY_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * 取り込みに失敗した時刻。**プロセス内にだけ持つ**（`topics.ts` の `attempts` と同じ置き方）。
+ *
+ * 列にしないのは、失っても1回余分に走るだけで済み、マイグレーションを増やすほどの
+ * ものではないため。PM2で1プロセスしか動かさない前提は #48 と同じ。
+ */
+const failedAt = new Map<string, number>();
+
+/**
  * 保存する覚え書きの上限。
  *
  * 相談のプロンプトへ毎回載る（＝毎往復の入力トークンになる）ので、モデルへの指示
@@ -189,11 +212,18 @@ export async function refreshHomeProfileIfStale(userId: string, now = new Date()
     return "取り込み済み";
   }
 
+  const lastFailedAt = failedAt.get(userId);
+  if (lastFailedAt !== undefined && now.getTime() - lastFailedAt < HOME_PROFILE_RETRY_INTERVAL_MS) {
+    return "失敗後の待機中";
+  }
+
   try {
     const result = await refreshHomeProfile(userId, now);
+    failedAt.delete(userId);
     return result.status === "saved" ? "取り込んだ" : "Notionに見当たらない";
   } catch (error) {
     // ここで失敗しても、前に取り込んだ覚え書きはそのまま使える。
+    failedAt.set(userId, now.getTime());
     console.error("[aide-bot] 自宅の情報の取り込みに失敗した", error);
     return error instanceof Error ? `失敗: ${error.message}` : "失敗";
   }

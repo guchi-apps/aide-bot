@@ -20,6 +20,10 @@ export function isNoticeIngestAuthorized(request: Request): boolean {
 
 const LIMITS = { source: 40, kind: 40, dedupeKey: 120, url: 500 } as const;
 
+/** 本文とタイトルの上限。MCPの入口（`src/app/api/mcp/route.ts`）が、利用者向けの案内でも同じ値を使う。 */
+export const NOTICE_BODY_MAX = 500;
+export const NOTICE_TITLE_MAX = 120;
+
 function shortString(value: unknown, max: number): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -56,11 +60,11 @@ export function parseNoticeInput(raw: unknown): { input: NoticeInput; email: str
   const dedupeKey = shortString(value.dedupeKey, LIMITS.dedupeKey);
   if (!dedupeKey) return `dedupeKey が要ります（${LIMITS.dedupeKey}文字まで）。`;
 
-  const body = shortString(value.body, 500);
-  if (!body) return "body が要ります（500文字まで）。";
+  const body = shortString(value.body, NOTICE_BODY_MAX);
+  if (!body) return `body が要ります（${NOTICE_BODY_MAX}文字まで）。`;
 
-  const title = value.title === undefined || value.title === null ? undefined : shortString(value.title, 120);
-  if (title === null) return "title が長すぎます（120文字まで）。";
+  const title = value.title === undefined || value.title === null ? undefined : shortString(value.title, NOTICE_TITLE_MAX);
+  if (title === null) return `title が長すぎます（${NOTICE_TITLE_MAX}文字まで）。`;
 
   // 押したときの遷移先（#137）。**`href` や `openWindow()` へそのまま渡る値**なので、
   // 長さだけでなく形も見る（`javascript:` などを保存しない）。判定は `safeNoticeUrl()` に

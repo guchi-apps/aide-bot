@@ -46,6 +46,13 @@ scripts/          開発・デプロイ補助スクリプト
 - 利用できるのは `ALLOWED_GOOGLE_EMAILS` に列挙したGoogleアカウントのみ。判定は
   `isAllowedEmail()`（`src/lib/allowed-users.ts`）に閉じてあるので、公開範囲を変えるときはここだけを直す。
   **未設定時は全員拒否**（設定漏れで誰でも入れる状態にしないため）
+- **判定を通すのはログインの瞬間だけではない**（#246）。Supabaseのセッションはリフレッシュトークンで
+  更新され続け、`User` 行も残るので、ログイン時だけ見ていると**リストから外しても使い続けられる**。
+  `getCurrentUser()` が引いた `User.email` に `isAllowedEmail()` を通してnullを返し（未ログイン扱い）、
+  `src/lib/supabase/middleware.ts` が `getUser()` の `email` で同じ判定をして**セッションごと破棄**
+  （`signOut()`）して `/login?error=not_allowed` へ戻す。**片方だけにしないこと**——`getCurrentUser()`
+  だけだと、ページが `/login` へ送り、middlewareが「ログイン済みは `/login` からトップへ」で送り返して
+  リダイレクトが終わらない。開発用ログイン（Cookieバイパス）は対象外
 - ログイン・ログアウトの導線はクライアントJSに依存させない。開始は `/auth/signin`（Route Handlerが
   認可URLを組み立てて302）、ログアウトはフォームのPOSTで `/auth/signout`。
   ハイドレーション前でも押せるようにするため

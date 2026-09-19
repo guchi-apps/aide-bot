@@ -11,6 +11,7 @@ import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { listConnectedServers, toCodexMcpServers, type ConnectedServer } from "@/lib/mcp/connections";
 import { hintsFor, writeToolsFor } from "@/lib/mcp/presets";
+import { readJsonObject } from "@/lib/json-body";
 import { writeToolsAllowed } from "@/lib/mcp/write-tools";
 import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
 import { TOOL_CALL_INPUT_LIMIT, TOOL_CALL_OUTPUT_LIMIT, truncateToolText } from "@/lib/tool-call";
@@ -252,10 +253,8 @@ export async function POST(request: Request) {
     return fail("ログインが必要です。", 401);
   }
 
-  let body: ChatRequestBody;
-  try {
-    body = (await request.json()) as ChatRequestBody;
-  } catch {
+  const body: ChatRequestBody | null = await readJsonObject(request);
+  if (!body) {
     return fail("リクエストの形式が正しくありません。", 400);
   }
 
@@ -285,6 +284,14 @@ export async function POST(request: Request) {
       data: { updatedAt: new Date() },
     }),
   ]);
+
+  // ここまでの待ち（生成の畳み待ち・保存）のあいだに、次の発言で割り込まれていることがある（#259）。
+  // 発言は保存したので次の往復の履歴には残る。返答を作る相手はもういないので、履歴の組み立て・
+  // 接続の読み出し（トークン更新で外へ出ることがある）・生成の準備はやらずに抜ける。
+  // 錠（`pendingGenerations`）はまだ置いていないので、外す後片付けも要らない。
+  if (request.signal.aborted) {
+    return fail("リクエストが中断されました。", 499);
+  }
 
   // 窓の先頭は `HISTORY_WINDOW_STEP` の刻みでしか動かさない。1発言ずつ滑らせると
   // 往復のたびにプレフィックスの先頭が変わり、Codex側のキャッシュ（実測で確認済み。

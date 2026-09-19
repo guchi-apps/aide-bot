@@ -11,6 +11,7 @@ import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { listConnectedServers, toCodexMcpServers, type ConnectedServer } from "@/lib/mcp/connections";
 import { hintsFor, writeToolsFor } from "@/lib/mcp/presets";
+import { readJsonObject } from "@/lib/json-body";
 import { writeToolsAllowed } from "@/lib/mcp/write-tools";
 import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
 import { TOOL_CALL_INPUT_LIMIT, TOOL_CALL_OUTPUT_LIMIT, truncateToolText } from "@/lib/tool-call";
@@ -252,10 +253,8 @@ export async function POST(request: Request) {
     return fail("ログインが必要です。", 401);
   }
 
-  let body: ChatRequestBody;
-  try {
-    body = (await request.json()) as ChatRequestBody;
-  } catch {
+  const body: ChatRequestBody | null = await readJsonObject(request);
+  if (!body) {
     return fail("リクエストの形式が正しくありません。", 400);
   }
 

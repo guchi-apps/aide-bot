@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth-user";
 import { db } from "@/lib/db";
+import { readJsonObject } from "@/lib/json-body";
 import { parseTopicCategories, serializeTopicCategories } from "@/lib/topic-categories";
 
 /**
@@ -24,10 +25,8 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "ログインが必要です。" }, { status: 401 });
   }
 
-  let body: Body;
-  try {
-    body = (await request.json()) as Body;
-  } catch {
+  const body: Body | null = await readJsonObject(request);
+  if (!body) {
     return NextResponse.json({ error: "リクエストの形式が正しくありません。" }, { status: 400 });
   }
 

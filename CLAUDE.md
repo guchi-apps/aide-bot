@@ -99,6 +99,19 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   認証を抜けても開発DBが空なら画面は空のままで検証にならない
 - シークレットの実値はコミット・PR本文・Issueコメント・ログのいずれにも書かない
 
+## Route Handlerのリクエスト本文（#262）
+
+**本文はJSONの `null` でも「読めた」ことになる。** `request.json()` は本文が `null` なら `null` を返す
+ので、`(await request.json()) as Body` と型を当てたまま `body.x` を読むと、`null` のときだけTypeErrorで
+500になる。画面からは出ない入力（手で叩いた・外部アプリ）だが、呼ぶ側は500からは原因を切り分けられない。
+
+- **オブジェクトとして読むのは `readJsonObject()`（`src/lib/json-body.ts`）に閉じる。** JSONとして
+  読めない・`null`・数値・文字列・配列はまとめて `null` を返すので、呼び出し側は400を返す。
+  新しいRoute Handlerで本文を読むときは `request.json()` を直接呼ばない
+- **MCP（`/api/mcp`）だけは形の違う本文を400ではなくJSON-RPCの `-32600`（`id` は `null`）で返す。**
+  JSONとして読めない本文は従来どおり400。呼ぶ側がJSON-RPCの応答として読めるようにするため
+- `POST /api/notices` は `parseNoticeInput()` が同じ判定を持っているので `request.json()` のまま
+
 ## チャット（相談）
 
 - **相談は利用者につき1本の `Conversation` に積み続ける**（#157でテーマ別スレッドをやめた。
@@ -1703,13 +1716,14 @@ CI専用のプレースホルダーでよい。
 
 - **対象は「外から来た値を判定する関数」と、ずれると静かに壊れる件数の計算。** いまは
   `isInternalPath()` / `safeInternalPath()`・`safeNoticeUrl()`・`public/sw.js` の `safeTarget()`
-  との一致・`historyWindowSkip()`・`parseNoticeInput()`（`notice-ingest.ts`）・`parseChoice()`
-  （`notice-choice.ts`）・`removedFromSummary()`（`summary-range.ts`。`deleteDay()` が畳んだ範囲から
-  引く件数。#265）。**PrismaやSupabaseへ触れるモジュールはimportしない**（テストからDBへ繋がない）。
-  **DBに触れるモジュールの中にある計算をテストしたいなら、純粋な関数として別ファイルへ切り出す**
-  （#265で `parseChoice()` を `notices.ts` から、`removedFromSummary()` を `day-log.ts` から出した。
-  `deleteDay()` 本体——行のロックと `decrement`——はDBが要るのでテストの外）。
-  `@prisma/client` の `NoticePriority` のように、生成物を実行時にimportするだけのものは素のNodeでも読める
+  との一致・`historyWindowSkip()`・`readJsonObject()`（#262）・`parseNoticeInput()`
+  （`notice-ingest.ts`）・`parseChoice()`（`notice-choice.ts`）・`removedFromSummary()`
+  （`summary-range.ts`。`deleteDay()` が畳んだ範囲から引く件数。#265）。**PrismaやSupabaseへ触れる
+  モジュールはimportしない**（テストからDBへ繋がない）。**DBに触れるモジュールの中にある計算を
+  テストしたいなら、純粋な関数として別ファイルへ切り出す**（#265で `parseChoice()` を
+  `notices.ts` から、`removedFromSummary()` を `day-log.ts` から出した。`deleteDay()` 本体
+  ——行のロックと `decrement`——はDBが要るのでテストの外）。`@prisma/client` の `NoticePriority`
+  のように、生成物を実行時にimportするだけのものは素のNodeでも読める
 - **入力の表は `test/cases.ts` に1つだけ置き、3か所に流す。** `sw.js` は `node:vm` で読み込んで
   `safeTarget()` を取り出す（`sw.js` をexportさせたり書き換えたりしない）。**判定を直したら、
   この表へ入力を足す**

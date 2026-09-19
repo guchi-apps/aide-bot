@@ -1,6 +1,7 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+import { isAllowedEmail } from "@/lib/allowed-users";
 import { SUPABASE_USER_ID_HEADER } from "@/lib/auth-header";
 import {
   CI_BYPASS_COOKIE_NAME,
@@ -61,11 +62,17 @@ export async function updateSession(request: NextRequest) {
     );
   }
 
+  // セッションは有効でも、許可リスト（ALLOWED_GOOGLE_EMAILS）から外れたアカウント（#246）。
+  // 許可の判定はログインの瞬間（/auth/callback）にしか無かったため、リフレッシュトークンで
+  // 更新され続けるセッションは、リストから外しても使い続けられた。判定に要るのは
+  // getUser()が返したメールアドレスだけなので、Supabaseへの往復は増えない。
+  const notAllowed = !!user && !isAllowedEmail(user.email);
+
   // 検証済みのユーザーIDを後段へ渡し、ページ側が同じ検証を繰り返さずに済むようにする。
   // auth.getUser()は毎回Supabaseへ往復するため、1リクエストで2回叩くと待ち時間がそのまま倍になる。
-  // 詐称を防ぐため、未ログインのときは値を残さず消す。
+  // 詐称を防ぐため、未ログインのときは値を残さず消す。許可外のアカウントも同じ扱いにする。
   const requestHeaders = new Headers(request.headers);
-  if (user) {
+  if (user && !notAllowed) {
     requestHeaders.set(SUPABASE_USER_ID_HEADER, user.id);
   } else {
     requestHeaders.delete(SUPABASE_USER_ID_HEADER);
@@ -83,9 +90,21 @@ export async function updateSession(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
+  // 許可外のアカウントは、ログイン画面以外ではセッションごと破棄して /login へ戻す。
+  // ここで破棄しないと、ページ側（getCurrentUser()がnull → /login）と下の「ログイン済みが
+  // /login を開いたらトップへ」が互いに送り返し合い、リダイレクトが終わらなくなる。
+  // /api/* は破棄せず素通しにする（ヘッダーは消してあるので各ハンドラが401を返す）。
+  // 開き直された画面遷移の側でこの分岐に来て、そこで破棄される。
+  if (notAllowed && !isPublicPath(pathname) && !pathname.startsWith("/api/")) {
+    await supabase.auth.signOut();
+    return withRefreshedCookies(
+      NextResponse.redirect(new URL("/login?error=not_allowed", getRequestOrigin(request))),
+    );
+  }
+
   // ログイン済みユーザーが /login を開いた場合（ブラウザの「戻る」操作等）は
   // ログイン画面を再表示せずトップへ送る。
-  if (pathname === "/login" && user) {
+  if (pathname === "/login" && user && !notAllowed) {
     const target = safeInternalPath(request.nextUrl.searchParams.get("callbackUrl"), "/");
     return withRefreshedCookies(NextResponse.redirect(new URL(target, getRequestOrigin(request))));
   }

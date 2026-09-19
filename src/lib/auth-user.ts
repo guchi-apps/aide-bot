@@ -1,6 +1,7 @@
 import { cookies, headers } from "next/headers";
 import { cache } from "react";
 
+import { isAllowedEmail } from "@/lib/allowed-users";
 import { SUPABASE_USER_ID_HEADER } from "@/lib/auth-header";
 import {
   CI_BYPASS_COOKIE_NAME,
@@ -35,5 +36,13 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   const supabaseUserId = (await headers()).get(SUPABASE_USER_ID_HEADER);
   if (!supabaseUserId) return null;
 
-  return db.user.findUnique({ where: { supabaseUserId } });
+  const user = await db.user.findUnique({ where: { supabaseUserId } });
+
+  // 許可リストの判定は /auth/callback（ログインの瞬間）だけでなく、ここでも毎回通す（#246）。
+  // Supabaseのセッションはリフレッシュトークンで更新され続け、`User` 行も残るので、
+  // ALLOWED_GOOGLE_EMAILS から外しただけではログイン済みのアカウントが使い続けられる。
+  // DB行は引き終えているので往復は増えない。開発用ログインの分岐は上で先に返しており対象外。
+  if (!user || !isAllowedEmail(user.email)) return null;
+
+  return user;
 });

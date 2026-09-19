@@ -1,6 +1,7 @@
 import { compactSystemPrompt } from "@/lib/anthropic";
 import { COMPACT_MODEL } from "@/lib/chat-model";
 import { runCodexExec } from "@/lib/codex";
+import { selectFoldable } from "@/lib/compact-budget";
 import { db } from "@/lib/db";
 import { recordApiUsage } from "@/lib/usage";
 
@@ -53,12 +54,10 @@ const CODEX_TIMEOUT_MS = 120 * 1000;
  */
 const running = new Set<string>();
 
-/** 畳む対象の発言を、モデルへ渡す1本のテキストにする。 */
-function foldedText(messages: { role: "USER" | "ASSISTANT"; content: string }[]): string {
-  return messages
-    .map((message) => `${message.role === "USER" ? "利用者" : "秘書"}: ${message.content}`)
-    .join("\n\n");
-}
+/** 書く手前で、畳もうとした発言が変わっていたと分かったときに、トランザクションを巻き戻すための印。 */
+class StaleFoldError extends Error {}
+
+const STALE_FOLD_MESSAGE = "[aide-bot] 記録の要約を書く前に、畳む範囲が変わっていたので捨てた";
 
 function buildPrompt(previous: string | null, folded: string): string {
   return [
@@ -78,26 +77,30 @@ function buildPrompt(previous: string | null, folded: string): string {
  * 呼び出し元は返答を返し終えた後の後始末で、ここで投げても伝える相手がいない。畳めなかった
  * 回は `summarizedCount` を進めないので、次の往復でやり直せる（#79「生成に失敗した日は
  * 記録を残さない」と同じ考え方）。
+ *
+ * **要約と件数は呼び出し元から受け取らず、ここで読み直す**（#245）。呼び出し元が往復の
+ * 頭で読んだ値は、Codexを待つあいだ（最大120秒）に古くなる。別の往復が先に畳み終えていれば、
+ * 古い要約から同じ範囲を畳み直して先の要約を上書きし、日単位の削除（`deleteDay()`）が
+ * 件数を戻していれば、古い件数へ足して書き戻して**畳んでいない発言を読み飛ばさせる。**
  */
-export async function compactIfNeeded(params: {
-  userId: string;
-  conversationId: string;
-  /** いまの要約。まだ一度も畳んでいなければnull。 */
-  summary: string | null;
-  /** すでに要約へ畳んだ発言の数。 */
-  summarizedCount: number;
-  /** その相談の発言の総数。 */
-  totalMessages: number;
-}): Promise<boolean> {
-  const { userId, conversationId, summary, summarizedCount, totalMessages } = params;
-
-  const pending = totalMessages - summarizedCount;
-  if (pending <= COMPACT_THRESHOLD) return false;
+export async function compactIfNeeded(conversationId: string, userId: string): Promise<boolean> {
   if (running.has(conversationId)) return false;
 
   running.add(conversationId);
 
   try {
+    const conversation = await db.conversation.findUnique({
+      where: { id: conversationId },
+      select: { summary: true, summarizedCount: true },
+    });
+    if (!conversation) return false;
+
+    const { summary, summarizedCount } = conversation;
+    const totalMessages = await db.message.count({ where: { conversationId } });
+
+    const pending = totalMessages - summarizedCount;
+    if (pending <= COMPACT_THRESHOLD) return false;
+
     const foldCount = pending - COMPACT_KEEP;
 
     // 並びは `/api/chat` の履歴と同じキーで固定する。揺れると、畳んだ発言と履歴へ渡す
@@ -107,16 +110,20 @@ export async function compactIfNeeded(params: {
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       skip: summarizedCount,
       take: foldCount,
-      select: { role: true, content: true },
+      select: { id: true, role: true, content: true },
     });
 
     // 数え直した結果が合わなければ何もしない。畳む対象が変わっているということなので、
     // 数の食い違ったまま `summarizedCount` を進める方が害が大きい。
     if (messages.length !== foldCount) return false;
 
+    // 1回に畳む量には上限がある（#244）。入りきらなかったぶんは `summarizedCount` が進まない
+    // まま残り、次の往復で続きから畳まれる。
+    const folded = selectFoldable(messages);
+
     const result = await runCodexExec({
       model: COMPACT_MODEL,
-      prompt: buildPrompt(summary, foldedText(messages)),
+      prompt: buildPrompt(summary, folded.text),
       signal: AbortSignal.timeout(CODEX_TIMEOUT_MS),
     });
 
@@ -141,13 +148,47 @@ export async function compactIfNeeded(params: {
     // 送る要約が伸び続ける。要約は畳むためのものなので、必ずここで切る。
     const next = Array.from(text).slice(0, SUMMARY_MAX_LENGTH).join("");
 
-    await db.conversation.update({
-      where: { id: conversationId },
-      data: { summary: next, summarizedCount: summarizedCount + foldCount },
+    // Codexを待っているあいだに畳む対象が変わっていないかを、書く手前で確かめる。
+    // 相談の行を握ってから見るので、同時に動く日単位の削除（`deleteDay()`）とは
+    // どちらかが先に終わっており、後から来た側は先の結果を見て決める。
+    const written = await db.$transaction(async (tx) => {
+      // 読んだときの件数のままでなければ、その間に別の往復が畳んだか、畳んだ範囲の日が
+      // 消されて件数が戻っている。どちらも読んだ範囲は畳む対象ではなくなっているので捨てる。
+      const updated = await tx.conversation.updateMany({
+        where: { id: conversationId, summarizedCount },
+        data: { summary: next, summarizedCount: summarizedCount + folded.count },
+      });
+      if (updated.count === 0) return false;
+
+      // 件数が同じでも、畳もうとした範囲の中の発言が消されていれば、範囲がずれて
+      // 畳んでいない発言まで畳んだことになる（まだ畳んでいない日を消した場合。件数は動かない）。
+      // 上限（#244）で一部しか畳めなかった回は、実際に畳んだ `folded.count` 件だけを見る。
+      const current = await tx.message.findMany({
+        where: { conversationId },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        skip: summarizedCount,
+        take: folded.count,
+        select: { id: true },
+      });
+      if (
+        current.length !== folded.count ||
+        current.some((message, index) => message.id !== messages[index].id)
+      ) {
+        // 上の書き込みごと取り消す。
+        throw new StaleFoldError();
+      }
+
+      return true;
     });
 
-    return true;
+    if (!written) console.error(STALE_FOLD_MESSAGE);
+
+    return written;
   } catch (error) {
+    if (error instanceof StaleFoldError) {
+      console.error(STALE_FOLD_MESSAGE);
+      return false;
+    }
     console.error("[aide-bot] 記録の要約に失敗した", error);
     return false;
   } finally {

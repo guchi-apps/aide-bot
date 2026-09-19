@@ -46,6 +46,13 @@ scripts/          開発・デプロイ補助スクリプト
 - 利用できるのは `ALLOWED_GOOGLE_EMAILS` に列挙したGoogleアカウントのみ。判定は
   `isAllowedEmail()`（`src/lib/allowed-users.ts`）に閉じてあるので、公開範囲を変えるときはここだけを直す。
   **未設定時は全員拒否**（設定漏れで誰でも入れる状態にしないため）
+- **判定を通すのはログインの瞬間だけではない**（#246）。Supabaseのセッションはリフレッシュトークンで
+  更新され続け、`User` 行も残るので、ログイン時だけ見ていると**リストから外しても使い続けられる**。
+  `getCurrentUser()` が引いた `User.email` に `isAllowedEmail()` を通してnullを返し（未ログイン扱い）、
+  `src/lib/supabase/middleware.ts` が `getUser()` の `email` で同じ判定をして**セッションごと破棄**
+  （`signOut()`）して `/login?error=not_allowed` へ戻す。**片方だけにしないこと**——`getCurrentUser()`
+  だけだと、ページが `/login` へ送り、middlewareが「ログイン済みは `/login` からトップへ」で送り返して
+  リダイレクトが終わらない。開発用ログイン（Cookieバイパス）は対象外
 - ログイン・ログアウトの導線はクライアントJSに依存させない。開始は `/auth/signin`（Route Handlerが
   認可URLを組み立てて302）、ログアウトはフォームのPOSTで `/auth/signout`。
   ハイドレーション前でも押せるようにするため
@@ -66,7 +73,8 @@ scripts/          開発・デプロイ補助スクリプト
   読まれ、上の判定を素通りする。パスとして正当な値ならこれらは必ずパーセントエンコード
   されているので、制御文字・空白（`<= 0x20` と `0x7f`）を含む値はまとめて受け付けない
 - **`public/sw.js` の `safeTarget()` にも同じ判定を二重に持っている**（ビルドを通らない素のJSで
-  importできない。#137から続く制約）。**片方だけ直さないこと**
+  importできない。#137から続く制約）。**片方だけ直さないこと**——`pnpm test:unit` の
+  `test/sw-parity.test.ts` が `sw.js` を読み込んで、同じ入力を流した結果を突き合わせる（#248）
 
 ### 開発用ログイン（Cookieバイパス）
 
@@ -156,12 +164,18 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
   （セッションを永続化しない）・`--ignore-user-config`（利用者の`~/.codex/config.toml`の
   MCP設定等を持ち込ませない）・`--skip-git-repo-check` を付け、作業ディレクトリ（`-C`）も
   プロジェクトのルートではなく `os.tmpdir()` に切り離す
-- **標準入力は`ignore`にする。** プロンプトを引数で渡していても標準入力がパイプされていると
-  「Reading additional input from stdin...」という案内とともにその内容がプロンプトへ
-  追記される仕様があるため（stderrに出る。stdoutのJSONLには混ざらない）。
-  **端末やスクリプトから手で叩いて確かめるときは `< /dev/null` を付ける**——付け忘れると
-  JSONLが1行も出ないまま待ち続け、「Codexが固まった」に見える（#132で実測。同じプロンプトが
-  切り離せば3.5秒、切り離さなければ3分で打ち切りになった）
+- **プロンプトは引数ではなく標準入力で渡す**（#244）。引数は `-` にして `child.stdin.end(prompt)`
+  （`stdio: ["pipe", …]`）。**引数で渡すとLinuxの1本あたりの上限（`MAX_ARG_STRLEN`＝128KiB）を
+  超えた時点で `spawn` が同期で `E2BIG` を投げる。** 日本語はUTF-8で3バイトなので約4.3万文字で、
+  `MAX_MESSAGE_LENGTH`（8,000文字）の長文が数回続けば履歴の窓だけで超える。超えると相談もcompactも
+  同じ会話で失敗し続け、`summarizedCount` が進まないまま窓だけが滑る。本文が `ps` に見えるのも
+  同じ理由で避けたかった。**引数に本文を残したまま標準入力もパイプすると**「Reading additional
+  input from stdin...」の案内とともに標準入力が `<stdin>` ブロックとして追記される（`codex exec --help`
+  にもある）ので、**引数は必ず `-`。** 子が入力を読む前に終わると書き込みが `EPIPE` になるため、
+  `child.stdin` の `error` は握りつぶしている（失敗は `error` / `close` 側で扱う）。
+  **端末から手で叩くときは、プロンプトを引数に置いたまま `< /dev/null` を付けるか、`-` を付けて
+  `printf '…' | codex exec … -` で渡す**——標準入力がパイプされていて引数も付いていると、
+  プロンプトが二重になるか、JSONLが1行も出ないまま待ち続けて「Codexが固まった」に見える（#132で実測）
 - **`codex exec --search` でウェブ検索させられる**（`Enable live web search. When enabled,
   the native Responses web_search tool is available`）。**まだ使っていない**が、外部情報を
   取らせたくなったとき、検索用のサービスを新たに契約する前にこちらを検討すること——
@@ -234,6 +248,12 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
   窓のあいだにすき間ができる**。compactが失敗し続けて窓が滑った回にはすき間ができるが、
   そこは次にcompactが通ったときに要約へ入る（compactは `summarizedCount` の続きから畳むため、
   読み飛ばされた発言も対象に含まれる）
+- **1回に畳む量にはバイト数の上限がある**（#244。`src/lib/compact-budget.ts` の `FOLD_MAX_BYTES`＝
+  48KiB。1件の本文は `FOLD_MESSAGE_MAX_CHARS`＝8,000文字で切る）。compactが失敗し続けた相談では
+  畳む発言が何十件にも溜まり、全部を1本のプロンプトへ入れると120秒の上限に掛かって同じように
+  失敗し続ける。**入りきらなかったぶんは `summarizedCount` が進まないまま残り、次の往復で続きから
+  畳まれる**——進める数は `foldCount` ではなく実際に畳めた件数（`selectFoldable().count`）。
+  古い方から途切れなく取ること（飛ばして詰めると、畳んだ範囲と履歴の窓の境目にすき間ができる）
 - **モデルは `COMPACT_MODEL`（`gpt-5.6-terra`）。** ここだけ中位にしてあるのは、落とすものを
   選び損ねた要約が以後ずっと文脈として使われ、あとから直す機会が無いため
 - **要約はプロンプトの「履歴の前」に置く**（最近の話題（#144）は後ろ）。畳んだ発言の代わりを
@@ -246,6 +266,13 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
   畳んだ2件を含む日を消した後、残っていた最古の2件が履歴から落ちた）
 - **二重起動を止める**（プロセス内のSet）。割り込み（#48）で往復が重なると同じ相談へ2回走り、
   `summarizedCount` が2回進んで**まだ畳んでいない発言まで要約済みになる**
+- **要約と件数は呼び出し元から渡さず、`compactIfNeeded()` が畳む直前に読み直す**（#245）。
+  Codexを待つ最大120秒のあいだに、別の往復が先に畳み終える・畳んだ範囲の日が消されて件数が戻る、
+  のどちらかが起きうる。往復の頭で読んだ値から絶対値で書くと、前者は先の要約を古い要約から
+  畳み直して上書きし、後者は**戻された件数を押し戻して畳んでいない発言を読み飛ばさせる。**
+  書くのは `updateMany({ where: { id, summarizedCount: 読んだ値 } })` を1つのトランザクションに
+  入れ、件数が0なら捨てる。**件数が同じでも、畳もうとした範囲の発言のidが変わっていれば
+  巻き戻す**——まだ畳んでいない日を消された回は件数が動かず、CASだけでは素通りして範囲がずれる
 - **畳んだことは画面に出す**（`CompactedNote`）。出さないと「昔の話を覚えていない」が
   不具合に見える。記録そのものは日付の一覧から辿れて消えていない
 
@@ -260,6 +287,11 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
 - **ただし `ToolCall` は行として残るだけで、画面からは辿れなくなる。** これを読んでいるのは
   記録の画面（`src/lib/day-log.ts`）だけで、`conversationId` がnullになった行を出す導線は
   どこにも無い。「Zaimに何を登録したか」を後から見る必要が出たら、まずこの一覧を作ること
+- **`deleteDay()` は `summarizedCount` を引数で受け取らない**（#245）。相談の行を
+  `SELECT … FOR UPDATE` で握ってから読み直し、書くときは `decrement`。呼び出し元が先に読んだ値は
+  compactが進めた後だと古く、絶対値で書くとそのぶんを巻き戻す。握る行はcompactが最後に書くときに
+  更新する行と同じで、**どちらが先でも後から来た側が先の結果を見て決める。`update` で握らない**
+  ——`updatedAt`（最後に話した時刻。#101）が動く
 - **記録の無い日にはバツを出さない**（まだ話していない今日）。消すものが無い
 - **バツを隠すかどうかは幅ではなくホバーの有無で決める**（`[@media(hover:hover)]:opacity-0`）。
   Tailwindの `group-hover:` は `@media (hover: hover)` の中にしか出ないため、`md:opacity-0` で
@@ -546,6 +578,14 @@ Claudeを呼ぶ場所は1つも無い**。移せるようになったのは#131�
   既存のHTTP入口と同じ `ingestNotice()`・重複排除を通す。他アプリは同じMariaDBに同居しているので
   直接INSERTさせることもできるが、それをやると**このスキーマが外部の実装に固定され**、
   列を1つ足すたびに全アプリを直すことになる。宛先は `email`（`User.email` は一意）
+- **MCPの3ツールの入力に `body` は無い**（#247）。`title` / `summary` / `recommendedAction` を
+  `composeBody()`（`src/app/api/mcp/route.ts`）でつないで `body`（上限500文字）にしており、
+  **title は本文の先頭にも入る**ので2回数える。`parseNoticeInput()` が超過を返すと `body` を
+  名指しし、呼ぶ側（ChatGPTのスケジュール）はどの項目を縮めればよいか分からず、そのお知らせは
+  登録されない。**そのため `callTool()` が先に、項目名と超過した文字数つきで断る**。上限は
+  `NOTICE_BODY_MAX` / `NOTICE_TITLE_MAX`（`src/lib/notice-ingest.ts`）に1か所で持ち、
+  ツールの `inputSchema` の `maxLength` と説明文にも同じ値を出す。切り詰めて受け付ける形は
+  採らなかった——`aide_save_daily_brief` の後半（推奨アクション等）が黙って落ちるため
 - **未読が0件ならモデルを呼ばない。黙っている間の費用は0円。** これが「10分ごとに走る」を
   許容できる唯一の理由なので、候補が無くても定型文を出すような形へ変えないこと
 - **黙った回（`NO_NOTICE`）も「叩いた」ものとして残す**（`lastRuns`。プロセス内のMap。
@@ -694,7 +734,8 @@ Claudeを呼ぶ場所は1つも無い**。移せるようになったのは#131�
   DBに残っているため。このモジュールはクライアントコンポーネントからimportするので、
   Prismaや `next/headers` に触れるものを持ち込まない
 - **`public/sw.js` に同じ判定を二重に持っている**（`safeTarget()`）。ビルドを通らない素のJSで
-  importできないため。**片方だけ直さないこと**
+  importできないため。**片方だけ直さないこと**——判定を直したら `test/cases.ts` の表へ入力を足す
+  （`pnpm test:unit` が3か所に同じ表を流す。#248）
 - **`WindowClient.navigate()` は同一オリジンのURLしか受け付けない。** 別オリジンを渡すと
   拒否されて**何も起きない**（通知を押しても画面が変わらない）。`notificationclick` では
   `new URL(target, self.location.origin).origin` で見て、別オリジンなら開いているタブを
@@ -883,6 +924,12 @@ Anthropic（従量課金）で、**#183以降に積まれるのは前者だけ**
   とは別に呼ぶ）。設定時刻前で見通しが `skipped` の回でも取り込みは進む
 - **見つからなかった回（`NO_HOME_PROFILE`）も `homeProfileFetchedAt` は進め、本文は消さない。**
   進めないと次の起動でまた同じ検索が走り、消すと「前は取り込めていた覚え書き」まで失う
+- **失敗した回は `homeProfileFetchedAt` を進めない代わりに、失敗した時刻をプロセス内のMap
+  （`failedAt`）に持ち、6時間（`HOME_PROFILE_RETRY_INTERVAL_MS`）あけてからやり直す**（#249）。
+  進めないだけだとcronの起動（30分ごと）のたびに取り込みが走り、Notionの検索が120秒の上限に
+  掛かり続ける状況ではCodexが1日に最大48回回ってサブスクの利用枠を削る。列にしなかったのは、
+  失っても（再起動の直後）1回余分に走るだけで済むため（話題の `attempts` と同じ置き方）。
+  **設定の画面のボタンはこの間隔を見ない**——押したときは失敗の直後でもやり直せる
 - **読むのは `CodexResult.reply`（`text` ではない）。** 道具を呼んだ回は「調べます」の一言が
   別の `agent_message` として先に届く（#131）ので、`text` を保存すると前置きが覚え書きに混ざる
 - **書き込みの道具は設定によらず常に止める**（`toCodexMcpServers(servers, false)`）。朝の見通しと
@@ -1619,11 +1666,33 @@ AIDEのREADME「認可の分離」）。#184で足したのは、その道具を
 ```bash
 pnpm lint        # ESLint
 pnpm typecheck   # tsc --noEmit
+pnpm test:unit   # node --test（test/**/*.test.ts）
 pnpm build:ci    # prisma generate && next build
 ```
 
-CI（`.github/workflows/ci.yml`）はこの3つを実行する。ビルドは外部サービスへ接続しないため、
-`DATABASE_URL` と `NEXT_PUBLIC_SUPABASE_*` はCI専用のプレースホルダーでよい。
+CI（`.github/workflows/ci.yml`）はこの4つを実行する。`pnpm test` は `lint`・`typecheck`・`test:unit` を
+まとめて流す。ビルドは外部サービスへ接続しないため、`DATABASE_URL` と `NEXT_PUBLIC_SUPABASE_*` は
+CI専用のプレースホルダーでよい。
+
+### 単体テスト（`test/`。#248）
+
+**依存は足していない。** Nodeの標準の `node --test` と、型を剥がして `.ts` を直接読む機能
+（Node 22.18以降）だけで動く。`@/` の解決は `test/alias-hooks.mjs`（`--import` で登録）が受け持つ。
+
+- **対象は「外から来た値を判定する関数」と、ずれると静かに壊れる件数の計算。** いまは
+  `isInternalPath()` / `safeInternalPath()`・`safeNoticeUrl()`・`public/sw.js` の `safeTarget()`
+  との一致・`historyWindowSkip()`。**PrismaやSupabaseへ触れるモジュールはimportしない**
+  （テストからDBへ繋がない）。`parseChoice()`（`notices.ts`）や `deleteDay()` の件数計算は
+  そのままでは入れられない——DBに触れるモジュールの中にあるため、テストしたいなら純粋な関数として
+  切り出してから足す
+- **入力の表は `test/cases.ts` に1つだけ置き、3か所に流す。** `sw.js` は `node:vm` で読み込んで
+  `safeTarget()` を取り出す（`sw.js` をexportさせたり書き換えたりしない）。**判定を直したら、
+  この表へ入力を足す**
+- **`isInternalPath()` が通した値は `new URL(値, オリジン).origin` が変わらない**という性質そのものも、
+  1文字・2文字の組み合わせの総当たりで確かめている。表に無い入力の穴を拾うための保険
+- テストファイルは `tsc`（`pnpm typecheck`）の対象にも入る。`.ts` 拡張子付きの相対importを
+  書けるよう、`tsconfig.json` に `allowImportingTsExtensions` を足してある（`noEmit` なので影響しない）
+- **書いてよい構文はNodeが型を剥がせるものだけ**（`enum`・`namespace`・パラメータプロパティは不可）
 
 ### 返答の生成をサブスク枠を使わずに確かめる
 

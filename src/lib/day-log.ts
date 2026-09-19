@@ -256,36 +256,48 @@ export async function entriesForToday(conversationId: string, now: Date): Promis
  * 含む日を消した後、残っていた最古の2件が履歴から落ちた）。要約の本文はそのままにする
  * ——消した日のことが要約に残るが、次にcompactが走ったときに書き直される。
  *
+ * **`summarizedCount` は引数で受け取らず、相談の行を握ってから読み直す**（#245）。
+ * 呼び出し元が先に読んだ値は、最大120秒Codexを待つcompact（`compactIfNeeded()`）が
+ * 進めた後だと古く、そこから引いた絶対値で書くと**compactが進めたぶんを巻き戻して**
+ * 畳んでいない発言を読み飛ばさせる。行を握るのはcompactが最後に書く手前と同じ行なので、
+ * どちらが先でも、後から来た側は先の結果を見てから件数を決める。書くのも絶対値では
+ * なく `decrement`。
+ *
  * 戻り値は消した発言の数。0なら、その日には元から何も無かった。
  */
-export async function deleteDay(
-  conversation: { id: string; summarizedCount: number },
-  dayKey: string,
-): Promise<number> {
-  const conversationId = conversation.id;
+export async function deleteDay(conversationId: string, dayKey: string): Promise<number> {
   const from = dayStart(dayKey);
   const createdAt = { gte: from, lt: dayEnd(dayKey) };
 
-  // 畳んだ範囲は「いちばん古い `summarizedCount` 件」で、日付の範囲も時刻で連続している。
-  // したがって、消す日より前にある発言の数を引けば、消すぶんのうち何件が畳んだ範囲に
-  // 入っていたかがそのまま出る。
-  const [olderCount, dayCount] = await Promise.all([
-    db.message.count({ where: { conversationId, createdAt: { lt: from } } }),
-    db.message.count({ where: { conversationId, createdAt } }),
-  ]);
+  return db.$transaction(async (tx) => {
+    // `FOR UPDATE` で相談の行を握る。`update` で握ると `updatedAt`（最後に話した時刻。#101）まで
+    // 動いてしまうので、読み取りだけで握れるこちらにしてある。
+    const [row] = await tx.$queryRaw<{ summarizedCount: number }[]>`
+      SELECT \`summarizedCount\` FROM \`Conversation\` WHERE \`id\` = ${conversationId} FOR UPDATE
+    `;
+    if (!row) return 0;
 
-  if (dayCount === 0) return 0;
+    // 畳んだ範囲は「いちばん古い `summarizedCount` 件」で、日付の範囲も時刻で連続している。
+    // したがって、消す日より前にある発言の数を引けば、消すぶんのうち何件が畳んだ範囲に
+    // 入っていたかがそのまま出る。
+    const [olderCount, dayCount] = await Promise.all([
+      tx.message.count({ where: { conversationId, createdAt: { lt: from } } }),
+      tx.message.count({ where: { conversationId, createdAt } }),
+    ]);
 
-  const removedFromSummary = Math.max(0, Math.min(conversation.summarizedCount - olderCount, dayCount));
+    if (dayCount === 0) return 0;
 
-  const [deleted] = await db.$transaction([
-    db.message.deleteMany({ where: { conversationId, createdAt } }),
-    db.toolCall.updateMany({ where: { conversationId, createdAt }, data: { conversationId: null } }),
-    db.conversation.update({
-      where: { id: conversationId },
-      data: { summarizedCount: conversation.summarizedCount - removedFromSummary },
-    }),
-  ]);
+    const removedFromSummary = Math.max(0, Math.min(row.summarizedCount - olderCount, dayCount));
 
-  return deleted.count;
+    const deleted = await tx.message.deleteMany({ where: { conversationId, createdAt } });
+    await tx.toolCall.updateMany({ where: { conversationId, createdAt }, data: { conversationId: null } });
+    if (removedFromSummary > 0) {
+      await tx.conversation.update({
+        where: { id: conversationId },
+        data: { summarizedCount: { decrement: removedFromSummary } },
+      });
+    }
+
+    return deleted.count;
+  });
 }

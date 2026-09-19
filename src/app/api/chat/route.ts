@@ -519,16 +519,9 @@ export async function POST(request: Request) {
         // 長くなった記録を要約へ畳む（#157）。**返答を返し終えてから走らせる**——往復の中で
         // 待たせると、数十発言に一度だけ返事が数十秒遅れる相談ができる。畳めなかった回は
         // `summarizedCount` が進まないので、次の往復でやり直せる。
-        const totalMessages = messageCount + (answer.trim() === "" ? 0 : 1);
-        after(() =>
-          compactIfNeeded({
-            userId: user.id,
-            conversationId: conversation.id,
-            summary: conversation.summary,
-            summarizedCount: conversation.summarizedCount,
-            totalMessages,
-          }),
-        );
+        // 要約と件数はここで渡さない。Codexを待つあいだに古くなるので、`compactIfNeeded()` が
+        // 畳む直前に読み直す（#245）。
+        after(() => compactIfNeeded(conversation.id, user.id));
       }
     },
   });

@@ -38,7 +38,7 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
   }
 
   const conversation = await primaryConversation(user.id);
-  const count = await deleteDay(conversation, date);
+  const count = await deleteDay(conversation.id, date);
 
   if (count === 0) {
     return NextResponse.json({ error: "その日の記録は見つかりませんでした。" }, { status: 404 });

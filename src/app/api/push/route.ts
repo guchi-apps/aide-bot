@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth-user";
+import { readJsonObject } from "@/lib/json-body";
 import { isPushConfigured } from "@/lib/push/config";
 import {
   countSubscriptions,
@@ -54,10 +55,8 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: Body;
-  try {
-    body = (await request.json()) as Body;
-  } catch {
+  const body: Body | null = await readJsonObject(request);
+  if (!body) {
     return NextResponse.json({ error: "リクエストの形式が正しくありません。" }, { status: 400 });
   }
 
@@ -81,10 +80,8 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "ログインが必要です。" }, { status: 401 });
   }
 
-  let body: Body;
-  try {
-    body = (await request.json()) as Body;
-  } catch {
+  const body: Body | null = await readJsonObject(request);
+  if (!body) {
     return NextResponse.json({ error: "リクエストの形式が正しくありません。" }, { status: 400 });
   }
 

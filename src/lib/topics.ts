@@ -402,7 +402,9 @@ async function fetchTopics(userId: string, categories: TopicCategoryId[], now: D
 /**
  * 仕入れが要るなら走らせる。**必ずすぐ戻る。** 応答を返した後（`after()`）から呼ぶ想定。
  *
- * 走らせない条件は上から順に軽いものから見る。
+ * 走らせない条件は上から順に軽いものから見る。**1・2の判定を通ったら、DBを見る前に同期的に
+ * 「走っている」印を立てる**（3・4のDBの待ちの間に重なった問い合わせが二重に走らせないため）。
+ * 3・4で止まった回は印を外す。
  *
  * 1. 同じ利用者の仕入れがまだ走っている
  * 2. 前回叩いてから間隔（成功なら1時間・失敗なら15分）があいていない（プロセス内の記録）
@@ -420,23 +422,43 @@ export function refreshTopicsIfStale(userId: string, now = new Date()): Promise<
     if (now.getTime() - attempt.at < interval) return Promise.resolve();
   }
 
-  const run = async () => {
-    const user = await db.user.findUnique({ where: { id: userId }, select: { topicCategories: true } });
-    const categories = parseTopicCategories(user?.topicCategories ?? "");
-    if (categories.length === 0) return;
+  // 「走っている」印は、ここまでの同期の判定を通った直後、DBを待つ前に立てる。DBを2回待った後に
+  // 立てると、その窓に別の端末の問い合わせが重なって両方が仕入れを始める（1回が約38万トークン。
+  // compactの `running` や朝の見通しの `inFlight` と同じく、判定の直後に同期的に印を立てる）。
+  // 走らせないと決まった回は `release()` で印を前回の記録へ戻す。
+  const previous = attempt;
+  attempts.set(userId, { at: now.getTime(), failed: false, running: true });
+  const release = () => {
+    if (previous) attempts.set(userId, previous);
+    else attempts.delete(userId);
+  };
 
-    const latest = await db.topic.findFirst({
-      where: { userId },
-      orderBy: { fetchedAt: "desc" },
-      select: { fetchedAt: true },
-    });
-    if (latest && now.getTime() - latest.fetchedAt.getTime() < TOPIC_REFRESH_INTERVAL_MS) {
-      // 再起動の直後など、プロセス内の記録は無いがDB上は仕入れたばかり。記録だけ復元して戻る。
-      attempts.set(userId, { at: latest.fetchedAt.getTime(), failed: false, running: false });
-      return;
+  const run = async () => {
+    let categories: ReturnType<typeof parseTopicCategories>;
+    try {
+      const user = await db.user.findUnique({ where: { id: userId }, select: { topicCategories: true } });
+      categories = parseTopicCategories(user?.topicCategories ?? "");
+      if (categories.length === 0) {
+        release();
+        return;
+      }
+
+      const latest = await db.topic.findFirst({
+        where: { userId },
+        orderBy: { fetchedAt: "desc" },
+        select: { fetchedAt: true },
+      });
+      if (latest && now.getTime() - latest.fetchedAt.getTime() < TOPIC_REFRESH_INTERVAL_MS) {
+        // 再起動の直後など、プロセス内の記録は無いがDB上は仕入れたばかり。記録だけ復元して戻る。
+        attempts.set(userId, { at: latest.fetchedAt.getTime(), failed: false, running: false });
+        return;
+      }
+    } catch (error) {
+      // 印を戻さないと、仕入れの前に落ちた回のあとずっと「走っている」ままになる。
+      release();
+      throw error;
     }
 
-    attempts.set(userId, { at: now.getTime(), failed: false, running: true });
     try {
       const count = await fetchTopics(userId, categories, now);
       console.log(`[aide-bot] 話題を${count}件仕入れた`);

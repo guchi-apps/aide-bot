@@ -1082,8 +1082,14 @@ Anthropic（従量課金）で、**#183以降に積まれるのは前者だけ**
 ## 音声対話（話す / 書く）
 
 **このアプリの本来の使い方は音声**で、文字入力は声を出せない場面と言い直しのために残している（#27）。
-どちらのモードでも同じ `Conversation` へ残り、`POST /api/chat` も共通。既定は「話す」で、
-選んだモードはCookie `aide-bot-talk-mode`（`src/lib/talk-mode.ts`）に持つ。
+どちらのモードでも同じ `Conversation` へ残り、`POST /api/chat` も共通。選んだモードはCookie
+`aide-bot-talk-mode`（`src/lib/talk-mode.ts`）に持つ。
+
+**#279で既定が「書く」になった。** 声は「書く」画面の下の「話しかける」（音声バー）から使う形に
+なっており、**ロボットの全画面（「話す」）はヘッダーの切り替えから今までどおり使える**。
+**往復そのもの（聞き取り・送信・読み上げ・開き直し）の実装は `useVoiceConversation()` の1か所**
+（`src/components/voice/use-voice-conversation.ts`）で、下の注記はどの画面から話しても同じように
+効く——以下の記述で「`voice-panel.tsx` が…」とあるものは、#279以降フック側にある。
 
 - **聞き取りはブラウザ内蔵のWeb Speech APIだけで行う**（`src/lib/speech/`）。
   音声を外部へ送らないので追加のAPIキーも実費も無い。対応はChrome / Edge / Safariに限られ、
@@ -1279,6 +1285,86 @@ Anthropic（従量課金）で、**#183以降に積まれるのは前者だけ**
   の `CertDomains` に `subpc.<tailnet>.ts.net` が入っている）。以前ここには「未有効」と書いてあり、
   #57 で実際に確かめて訂正した。**判断の前に `tailscale status --json | jq .CertDomains` を見ること**
   （`null` なら未有効で、管理画面での有効化が要る）
+
+### 「書く」画面から声で話す（音声バー。#279）
+
+**入力欄の隣のマイク（「話しかける」）を押すと、その場で声の往復に入る。** 記録の流れは後ろに
+そのまま残り、聞き取った発言も返答も同じ並びへ積まれる。既定のモードを「書く」にしたのと対で、
+「日常は文字で読み書きし、話したくなったら押す」という使い方に寄せたもの。
+
+- **往復は `useVoiceConversation()`（`src/components/voice/use-voice-conversation.ts`）に閉じる。**
+  「話す」の全画面（`voice-panel.tsx`）も音声バー（`src/components/chat/voice-bar.tsx`）も同じ
+  フックを呼ぶ。**2つに分けないこと**——iOSの実機でしか出ない手当て（#155・#164・#179・#197・
+  #205・#210）は、片方にだけ入った状態が必ず生まれる。画面側が持つのは見た目だけで、発言の
+  並べかたはコールバック（`onUserMessage` / `onReply` / `onRecord` / `onAssistantMessage`）で受ける
+- **音声バーは入力欄と入れ替える。2つ並べない**——スマホ（393×852）では、記録の見えるぶんが
+  バーの高さだけ削られる。やめる導線（「やめる」）はどの状態でも出しておく
+- **`prime()` は押された流れの中で、待たずに呼ぶ**（`openVoice()`）。iOSは画面を触った流れで一度
+  `speak()` を通しておかないと以降の読み上げが無音になる。**走っている文字の往復を待つのは
+  `prime()` の後**で、そこまでの返答が並び終えてからマイクを開く（#48の順序）
+- **文字と声は互いに割り込む。** 文字を送るときは声の往復（`pendingTurn()`）も待ってから発言を
+  足す。待たずに足すと、遮られた返答が自分の次の発言より下へ回る
+- **生成中の表示は1か所。** 返答が確定した時点で `answer` を空にしてあるので、読み上げだけが
+  続いている間は畳まれる——畳まないと同じ文が記録の流れと生成中の欄に二重に並ぶ
+- **聞き取りに対応していない端末（Firefox等）ではマイクを出さない。** 押しても開かないボタンを
+  置くと、使えないことが画面から分からない
+- 記録（#205）の1行目は、全画面が「画面を開いた（…）」、音声バーが**「音声バーを開いた（…）」**。
+  どちらで話していたのかが実機の記録から読めるように、文言を分けてある
+- **声の設定は `VoiceSettingsPanel`（`src/components/voice/voice-settings-panel.tsx`）に切り出し、
+  音声バーの歯車からも開く。** 「続けて話す」・読み上げる声・VOICEVOX ENGINE、そして
+  **聞き取りの記録**（#164・#179・#210）は「話す」画面の中にしか無かったので、既定が「書く」に
+  なると既定の画面から開けなくなる。記録はiOSの実機でしか出ない不具合を追う唯一の手掛かりで、
+  音声バーで往復するほど必要になる。**`absolute` で重ねる以上、`max-h-` と `overflow-y-auto` を
+  必ず付ける**（#179で画面外へ出て読めなかった）
+- **鳴っている「試し聞き」を止めるのは `cancelSample()`（`src/lib/speech/synthesis.ts`）。**
+  フックの `prime()`（マイクを押した回）と `stop()` が呼ぶ。設定がどの画面からも開けるように
+  なったので、**画面ごとに「押したら試し聞きを止める」を書かない**——足し忘れた画面だけ
+  鳴りっぱなしになる
+- **止めたら、持ち主（`VoiceSettingsPanel`）へ `onDone` で知らせる。** `Reader.cancel()` は
+  `onStart` も `onDrain` も鳴らさない（止めたのは利用者のため）が、パネルは合成待ちの間
+  「声を用意しています…」でボタンを無効にしており、**下ろす手は `onDone` だけ**。知らせないと、
+  マイクを押した回・止めた回にパネルを開いたまま固着する（#279の自動レビューが指摘した退行。
+  リファクタリング前は止める側が持ち主の状態を直接下ろしていた）。**この約束は
+  `SampleSlot`（`src/lib/speech/sample-slot.ts`）に閉じてあり、`test/sample-slot.test.ts` が固定する**
+  ——`synthesis.ts` は素のNodeでは読めない（パラメータプロパティを型剥がしできない）ので、契約の
+  部分だけを切り出した。**試し聞きの状態をパネルの中で `ref` に抱えて自分だけで止める形へ戻さない**
+  （外から止められた回に固まる）。手元では、合成に20秒かかるスタブENGINE（`/version`・
+  `/audio_query`・`/synthesis` だけ返し、CORSを開ける）をlocalStorageの `engineUrl` へ入れ、
+  「試し聞き」を押して合成待ちのままマイク／「読み上げを止める」を押すと再現できる
+
+### 「書く」画面の秘書の一言（#279）
+
+**`/api/notices/current` を叩いているのは吹き出しの輪（`useBubbleLine()`）だけ**で、そこには
+お知らせの選定（#93）・ひとりごと（#101）・**話題の仕入れ（#144）の唯一の起点**（応答後の
+`refreshTopicsIfStale()`）がぶら下がっている。既定を「書く」にした以上、**「書く」画面にも
+出し先が無いとこの輪ごと動かなくなる**ので、入力欄の上に1行で出す
+（`src/components/chat/secretary-line.tsx`）。
+
+- **「叩くが出さない」にはできない。** `resolveNotice()` は選んだ時点で `shownAt` を書くため、
+  出さずに叩くと**誰も読んでいないのにお知らせが消費される**（#114が一覧について名指しで
+  禁じている形）
+- **問い合わせは声かけ（#278）の1本を使い回す。** 「書く」画面は `useNudges()`
+  （`use-nudge.ts`）が同じ `/api/notices/current` を `?since=` 付きで叩いており、**応答には
+  お知らせ・ひとりごと・話題も全部載っている**（`notice` / `chatter` / `topics`）。`useNudges()` の
+  `onPayload` で受け取り、`ChatPanel` が `SecretaryLine` へ `payload` で渡す。**`SecretaryLine`
+  から `useBubbleLine()` を呼ばない**——同じ口を2本で叩くことになり、問い合わせ1回ごとに
+  `auth.getUser()` の往復が増える。「書く」は既定の画面なので、二重の問い合わせが常態になる。
+  輪の組み立て（差し込む位置・送る間隔・急ぎで止めること）は `useBubbleRing()`
+  （`use-notice.ts`）に切り出してあり、「話す」の `useBubbleLine()`（問い合わせ＋輪）と共有する
+- **開発では問い合わせが2回並ぶ**（React Strict Modeの二重実行）。本番は1回。**問い合わせが
+  2本になっていないかは、`since` の無い問い合わせが「書く」画面に混ざっていないかで見る**
+  （数では見られない）
+- **声の往復中は声かけの足し込みを見送る**（`useNudges(onNudge, status !== "idle" || voice.answering, …)`）。
+  声の往復は `ChatPanel` の `status` に現れないので、足さないと、声の返答が保存されるまでの
+  あいだに声かけが末尾へ入り、画面の並びだけが実際の順序と食い違う（#278が避けている形）。
+  聞き取り中は見送らない——利用者の発言は話し終えてから足すので、その前に入った声かけは
+  保存の順とも一致する
+- **呼びかけ（`call`）の枠だけは出さない。** 「どうぞ、話しかけてください」は入力欄の
+  プレースホルダーと同じことを言っており、常時1行ぶん記録が削られる
+- 読み上げソフトへ知らせるのは**お知らせだけ**（`aria-live`）。ひとりごと・話題は25秒ごとに
+  入れ替わるので、知らせると書いている手が止まる（#101と同じ理由）
+- 押せるのは末尾の「開く」だけで、判定は `safeNoticeUrl()` を通した値を出す `OpenLink`
+  （`speech-bubble.tsx` から共有。#137）
 
 ### 端末が聞き取りを中断する（`aborted`。#197）
 
@@ -1810,7 +1896,8 @@ CI専用のプレースホルダーでよい。
   `isInternalPath()` / `safeInternalPath()`・`safeNoticeUrl()`・`public/sw.js` の `safeTarget()`
   との一致・`historyWindowSkip()`・`readJsonObject()`（#262）・`parseNoticeInput()`
   （`notice-ingest.ts`）・`parseChoice()`（`notice-choice.ts`）・`removedFromSummary()`
-  （`summary-range.ts`。`deleteDay()` が畳んだ範囲から引く件数。#265）。**PrismaやSupabaseへ触れる
+  （`summary-range.ts`。`deleteDay()` が畳んだ範囲から引く件数。#265）・`SampleSlot`
+  （`sample-slot.ts`。試し聞きを止めたら持ち主へ知らせる約束。#279）。**PrismaやSupabaseへ触れる
   モジュールはimportしない**（テストからDBへ繋がない）。**DBに触れるモジュールの中にある計算を
   テストしたいなら、純粋な関数として別ファイルへ切り出す**（#265で `parseChoice()` を
   `notices.ts` から、`removedFromSummary()` を `day-log.ts` から出した。`deleteDay()` 本体
@@ -1871,7 +1958,19 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens
 動かせる**（#67）。ヘッドレスChromeを `--remote-debugging-port` 付きで起こし、CDPの
 `Page.addScriptToEvaluateOnNewDocument` で偽の `SpeechRecognition`（`start()` の回数を数え、
 `no-speech` → `end` を返すだけ）を仕込んでから開く。声の設定はlocalStorage
-（`aide-bot-voice-settings`）に先に書いておけば効く。
+（`aide-bot-voice-settings`）に先に書いておけば効く。**確定した文まで返させれば送信・返答・
+読み上げの後の開き直しまで通る**ので、偽物には `isFinal: true` の `onresult` も返させる（#279）。
+
+**#279から既定は「書く」なので、開いただけではロボットの画面は出ない。** 全画面の「話す」を
+確かめるなら**先に Cookie `aide-bot-talk-mode=voice` を置く**（ヘッダーの切り替えを押してもよいが、
+押した回は `ChatPanel` → `VoicePanel` の作り直しを挟むので、押した直後の1〜2秒は掴む要素が
+入れ替わる。実際に同じセッションの中で切り替えて確かめようとして、掴み損ねている）。
+
+**音声バー（「書く」画面）は、文言を読む場所が吹き出しとは別。** 「話しかける」（入力欄の隣の
+マイク）を押すとバーが開き、`[aria-live="polite"]` に出るのは**聞き取り中の文字**（まだ何も
+聞こえていなければ「お話しください…」）と、それ以外の状態の文言（`STATUS_LABEL`。吹き出しと
+同じ表）。**押すボタンは名前で選ぶ**——`form button[type="submit"]` のような形で選ぶと、左メニューの
+ログアウト（これもフォーム）を押してログイン画面へ飛ぶ（#279で実際に踏んだ）。
 
 **開発用ログインは、Cookieを差し込むよりログイン画面のフォームを押す方が確実**（#137で実測）。
 `Network.setCookie` に `domain: "localhost"` でも `url: "http://localhost:<ポート>/"` でも

@@ -12,6 +12,7 @@
  */
 
 import { noteRecognition } from "./recognition";
+import { SampleSlot } from "./sample-slot";
 import {
   forgetVoicevoxEngine,
   isVoicevoxPlaybackSupported,
@@ -683,10 +684,28 @@ function trimmedForSpeech(text: string): string | null {
 }
 
 /**
+ * いま鳴っている試し聞き（#279）。
+ *
+ * **持ち主は声の設定のパネルだが、止めたいのは別の場所から**——マイクを押した回（往復の始まり）
+ * と、止めた回。声の設定はどの画面からでも開けるようになったので、パネルの中に参照を抱えると
+ * 画面ごとに「押したら試し聞きを止める」を足して回ることになる。ここで1つだけ持つ。
+ *
+ * **止めたときに持ち主の「声を用意しています…」を下ろす約束は `SampleSlot` に閉じてある**
+ * （`Reader.cancel()` は `onStart` も `onDrain` も鳴らさないため。詳しくは `./sample-slot`）。
+ */
+const sampleSlot = new SampleSlot();
+
+/** 鳴っている試し聞きを止める。鳴っていなければ何もしない。持ち主へは `onDone` で知らせる。 */
+export function cancelSample(): void {
+  sampleSlot.cancel();
+}
+
+/**
  * 設定画面の「試し聞き」。選んだ声で1文だけ読む。返り値で途中で止められる。
  *
  * VOICEVOXの声は鳴り始めるまで数秒かかるため、押しても何も起きない時間ができる。
- * 呼ぶ側で `onPreparing` / `onDrain` を受け取ってボタンの表示を変えられるようにしてある。
+ * 呼ぶ側で `onPreparing` / `onDone` を受け取ってボタンの表示を変えられるようにしてある。
+ * **`onDone` は鳴り始めたとき・読み終えたときに加えて、`cancelSample()` で止められたときにも呼ぶ。**
  */
 export function speakSample(
   voiceURI: string | null,
@@ -701,9 +720,15 @@ export function speakSample(
     engineUrl: handlers.engineUrl,
     onPreparing: handlers.onPreparing,
     onStart: () => handlers.onDone?.(),
-    onDrain: () => handlers.onDone?.(),
+    onDrain: () => {
+      sampleSlot.release(reader);
+      handlers.onDone?.();
+    },
     onNotice: handlers.onNotice,
   });
+
+  // 前のぶんが鳴っていれば、ここで先に止まる（`hold()`）。読み上げを始めるのはそのあと。
+  sampleSlot.hold(reader, handlers.onDone);
 
   reader.push("こんにちは。この声で読み上げます。");
   reader.finish();

@@ -2,6 +2,8 @@
 
 import { useEffect, useRef } from "react";
 
+import type { BubblePayload } from "@/components/voice/use-notice";
+
 /**
  * 秘書から話しかけてきた発言を取り続ける（声かけ。#278）。「書く」画面から使う。
  *
@@ -37,8 +39,21 @@ const IDLE_LIMIT_MS = 60 * 60 * 1000;
  * 画面の中だけで足した発言（利用者の発言・生成中の返答）と混ざる順序を考えずに済ませる。
  * サーバー側も生成中は積まない（`NUDGE_QUIET_MS`）ので、見送ったぶんは次の回で届く。
  */
-export function useNudges(onNudge: (nudges: NudgeMessage[]) => void, paused: boolean): void {
+export function useNudges(
+  onNudge: (nudges: NudgeMessage[]) => void,
+  paused: boolean,
+  /**
+   * 応答のうち、吹き出しの輪に使うぶん（お知らせ・ひとりごと・話題）を受け取る（#279）。
+   *
+   * **「書く」画面の秘書の一言（`./secretary-line`）は、問い合わせを自分では持たない。** 同じ口を
+   * 2本で叩くと、問い合わせ1回ごとに `auth.getUser()` の往復が増える（上に書いた理由と同じ）うえ、
+   * 「書く」は既定の画面なので二重の問い合わせが常態になる。応答はどのみち全部載っているので
+   * 使い回す。声かけが0件の回も呼ぶ——お知らせは声かけとは別に入れ替わる。
+   */
+  onPayload?: (payload: BubblePayload) => void,
+): void {
   const onNudgeRef = useRef(onNudge);
+  const onPayloadRef = useRef(onPayload);
   const pausedRef = useRef(paused);
   /** 「これより後の声かけ」の基準。開いた時点から始める（それ以前の記録は描画に含まれている）。 */
   const sinceRef = useRef("");
@@ -48,6 +63,10 @@ export function useNudges(onNudge: (nudges: NudgeMessage[]) => void, paused: boo
   useEffect(() => {
     onNudgeRef.current = onNudge;
   }, [onNudge]);
+
+  useEffect(() => {
+    onPayloadRef.current = onPayload;
+  }, [onPayload]);
 
   useEffect(() => {
     pausedRef.current = paused;
@@ -82,7 +101,19 @@ export function useNudges(onNudge: (nudges: NudgeMessage[]) => void, paused: boo
           );
 
           if (response.ok) {
-            const data = (await response.json()) as { nudges?: NudgeMessage[] };
+            const data = (await response.json()) as Partial<BubblePayload> & {
+              nudges?: NudgeMessage[];
+            };
+
+            // 輪に使うぶんは、声かけの有無によらず渡す。取り消された後には届けない。
+            if (!cancelled) {
+              onPayloadRef.current?.({
+                notice: data.notice ?? null,
+                chatter: data.chatter ?? [],
+                topics: data.topics ?? [],
+              });
+            }
+
             const nudges = (data.nudges ?? []).filter(
               (nudge) =>
                 typeof nudge?.id === "string" &&

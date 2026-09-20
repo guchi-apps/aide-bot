@@ -53,8 +53,12 @@ export const STATUS_LABEL: Record<RobotState, string> = {
   speaking: "お話ししています",
 };
 
-/** 選ばれた時刻。「いつ時点の話か」が分かると、古い報せを新しい話と読まずに済む。 */
-function stampOf(iso: string): string {
+/**
+ * 選ばれた時刻。「いつ時点の話か」が分かると、古い報せを新しい話と読まずに済む。
+ *
+ * 「書く」画面の秘書の一言（`@/components/chat/secretary-line`。#279）も同じものを出す。
+ */
+export function noticeStamp(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
 
@@ -75,7 +79,7 @@ function stampOf(iso: string): string {
  *   `next/link` で同じタブのまま移る
  * - `stopPropagation` は要らない。親に押したときの処理を持たせていないため
  */
-function OpenLink({ url }: { url: string }) {
+export function OpenLink({ url }: { url: string }) {
   const label = "元のページを開く";
   const className =
     "inline-flex shrink-0 items-center gap-1 rounded-full border border-accent/45 bg-surface px-2.5 py-0.5 text-[0.6875rem] font-bold text-accent no-underline";
@@ -176,7 +180,7 @@ export function SpeechBubble({ state, line, activity }: Props) {
 
   const urgent = notice?.urgent ?? false;
   // 時刻はお知らせにだけ出す。話題に「いつ時点か」の印を付けると用件に見える。
-  const stamp = notice ? stampOf(notice.shownAt) : "";
+  const stamp = notice ? noticeStamp(notice.shownAt) : "";
 
   /**
    * 読み上げソフトへ知らせるかどうか（#101）。

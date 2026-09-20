@@ -1,9 +1,11 @@
 "use client";
 
-import { Mic, Repeat, Square } from "lucide-react";
+import { Mic, Repeat, Settings2, Square } from "lucide-react";
+import { useState } from "react";
 
 import { STATUS_LABEL } from "@/components/voice/speech-bubble";
 import type { VoiceConversation } from "@/components/voice/use-voice-conversation";
+import { VoiceSettingsPanel } from "@/components/voice/voice-settings-panel";
 import { updateVoiceSettings, useVoiceSettings } from "@/lib/speech/voice-settings";
 import { cn } from "@/lib/utils";
 
@@ -29,15 +31,33 @@ type Props = {
  *   あるので、読み上げソフトが状態の変化をそのまま読めるようにする
  * - **「やめる」を必ず出す。** 聞き取りが開いたまま待つ場面（`no-speech` の開き直し）でも、
  *   入力欄へ戻る手が画面から消えないようにする
+ * - **声の設定（`VoiceSettingsPanel`）はここからも開く。** 読み上げの声・「続けて話す」・
+ *   VOICEVOX ENGINE、そして**聞き取りの記録**（#164・#179・#210）は「話す」画面の中にしか
+ *   無かったが、既定が「書く」になった以上、この画面から開けないと届かない
  */
 export function VoiceBar({ voice, onClose }: Props) {
   const settings = useVoiceSettings();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const { status, heard, hint, notice, error } = voice;
 
   const listening = status === "listening";
 
   return (
-    <div className="mx-auto w-full max-w-3xl">
+    <div className="relative mx-auto w-full max-w-3xl">
+      {settingsOpen && (
+        /*
+          入力欄の上へ重ねる。**高さの上限と中のスクロールを必ず付ける**（#179）——付けずに
+          いた結果、VOICEVOXの声を選んでいるiPhoneでは下端（＝聞き取りの記録）が画面外へ出て
+          一度も読めなかった。基準は画面（`100dvh`）ではなく、ここから上に残る高さにする。
+        */
+        <VoiceSettingsPanel
+          className="absolute bottom-full right-0 z-20 mb-2 max-h-[min(60dvh,26rem)] w-[min(320px,100%)]"
+          onPrime={voice.prime}
+          onNotice={voice.setNotice}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
+
       <div className="flex flex-col gap-3 rounded-[18px] border border-accent/45 bg-surface px-4 py-3">
         <div className="flex items-start gap-3">
           <span
@@ -74,6 +94,16 @@ export function VoiceBar({ voice, onClose }: Props) {
           >
             <Repeat className="size-3" aria-hidden="true" />
             続けて話す
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSettingsOpen((open) => !open)}
+            aria-expanded={settingsOpen}
+            className="grid size-7 shrink-0 place-items-center rounded-lg border border-border bg-background text-muted transition-colors hover:bg-rail-active"
+          >
+            <Settings2 className="size-3.5" aria-hidden="true" />
+            <span className="sr-only">声の設定</span>
           </button>
         </div>
 

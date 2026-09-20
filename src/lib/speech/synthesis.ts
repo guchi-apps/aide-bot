@@ -683,6 +683,21 @@ function trimmedForSpeech(text: string): string | null {
 }
 
 /**
+ * いま鳴っている試し聞き（#279）。
+ *
+ * **持ち主は声の設定のパネルだが、止めたいのは別の場所から**——マイクを押した回（往復の始まり）
+ * と、止めた回。声の設定はどの画面からでも開けるようになったので、パネルの中に参照を抱えると
+ * 画面ごとに「押したら試し聞きを止める」を足して回ることになる。ここで1つだけ持つ。
+ */
+let currentSample: Reader | null = null;
+
+/** 鳴っている試し聞きを止める。鳴っていなければ何もしない。 */
+export function cancelSample(): void {
+  currentSample?.cancel();
+  currentSample = null;
+}
+
+/**
  * 設定画面の「試し聞き」。選んだ声で1文だけ読む。返り値で途中で止められる。
  *
  * VOICEVOXの声は鳴り始めるまで数秒かかるため、押しても何も起きない時間ができる。
@@ -695,6 +710,9 @@ export function speakSample(
     onDone?: () => void;
   } = {},
 ): Reader {
+  // 前のぶんが鳴っていれば先に止める。重ねて鳴らすと、どちらの声を聞いているのか分からない。
+  cancelSample();
+
   const reader = createReader({
     voiceURI,
     rate,
@@ -705,6 +723,7 @@ export function speakSample(
     onNotice: handlers.onNotice,
   });
 
+  currentSample = reader;
   reader.push("こんにちは。この声で読み上げます。");
   reader.finish();
   return reader;

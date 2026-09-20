@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { CompactedNote, EntryList, SecretaryAvatar, SecretaryLabel } from "./entry-list";
 import { Markdown } from "./markdown";
 import type { ChatEntry, ChatToolCall } from "./types";
+import { SecretaryLine } from "./secretary-line";
 import { useChatStream } from "./use-chat-stream";
 import { VoiceBar } from "./voice-bar";
 
@@ -355,6 +356,13 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
       </div>
 
       <div className="px-4 pb-4 pt-2 md:px-7 md:pb-5">
+        {/*
+          秘書の一言（#279）。お知らせ（#93）・ひとりごと（#101）・話題（#144）の輪を、
+          「話す」画面の吹き出しと同じ `useBubbleLine()` から出す。**既定が「書く」になった以上、
+          ここに出し先が無いとこの輪ごと——ニュースの仕入れの起点も含めて——動かなくなる。**
+        */}
+        <SecretaryLine />
+
         {/*
           声で話している間は、入力欄のところが音声バーに入れ替わる（#279）。記録の流れは
           後ろにそのまま残るので、話した内容も返事も同じ並びへ積まれていく。**2つ並べない**

@@ -16,6 +16,7 @@ import {
 import {
   type Reader,
   canSpeakWith,
+  cancelSample,
   createReader,
   primeSpeechSynthesis,
   silenceBeforeListening,
@@ -390,6 +391,9 @@ export function useVoiceConversation(
 
   /** 動いているものを全部止める。画面を離れるときと、利用者が止めたとき。 */
   const stopEverything = useCallback(() => {
+    // 声の設定の「試し聞き」が鳴っていれば一緒に止める（#279）。設定はどの画面からも
+    // 開けるので、止める場所を画面ごとに持たない。
+    cancelSample();
     // 開き直しの待ち合わせが残っていると、止めた直後にマイクが開き直す（#67）。
     closedByUserRef.current = true;
     clearRestartTimer();
@@ -825,6 +829,9 @@ export function useVoiceConversation(
 
   /** iOSは「画面を触った流れ」で一度鳴らしておかないと、以降が無音になる。 */
   const prime = useCallback(() => {
+    // マイクを押した時点で、鳴っている試し聞きは止める（#279。従来の `onPrimaryButton()`）。
+    cancelSample();
+
     // ENGINEが届くかは先に調べておく。返答が届いてから調べると、届かない端末では
     // 最初のひと声がそのぶん遅れる（#57）。
     warmVoicevoxSource(settingsRef.current.engineUrl);

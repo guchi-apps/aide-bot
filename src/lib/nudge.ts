@@ -1,8 +1,9 @@
-import { Prisma } from "@prisma/client";
+import { NoticePriority, Prisma } from "@prisma/client";
 
 import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { safeNoticeUrl } from "@/lib/notice-url";
+import { NOTICE_DISPLAY_TTL_MS, URGENT_NOTICE_KIND } from "@/lib/notices";
 import { quietEnough, topicNudgeDue, withSourceLink } from "@/lib/nudge-choice";
 import { TOPIC_LIFETIME_MS } from "@/lib/topics";
 
@@ -25,9 +26,23 @@ import { TOPIC_LIFETIME_MS } from "@/lib/topics";
  *
  * 朝の見通し（#79）と急ぎのお知らせ（#115）は「USER（依頼）＋ASSISTANT（本文）」の2通を積むが、
  * 声かけは1通だけにしてある。**依頼に当たる発言が実在しない**ので、画面に「（自動）〜を教えて。」
- * という偽の依頼を出したくない。`buildConversationText()`（`src/app/api/chat/route.ts`）は履歴の
- * 先頭に来たassistantを落とすので、**落ちるのはcompact（#157）の直後に声かけが履歴の先頭へ来た
- * 回だけ**——その回はモデルから見えないが、画面と記録には残る。
+ * という偽の依頼を出したくない（#280はその依頼文を画面から隠す側の手当て）。
+ * `buildConversationText()`（`src/app/api/chat/route.ts`）は履歴の先頭に来たassistantを落とすので、
+ * **落ちるのはcompact（#157）の直後に声かけが履歴の先頭へ来た回だけ**——その回はモデルから
+ * 見えないが、画面と記録には残る。
+ *
+ * ## 会話の最中には積まない
+ *
+ * 積むのは `/api/notices/current`（「話す」画面からも3分ごとに叩かれる）の中で、**走っている
+ * 往復のことは知らない。** 利用者の発言は往復の頭で保存され、秘書の返答は生成が終わってから
+ * 保存されるので、何も見ずに積むと**その2つのあいだへ割り込む**（画面の並びも、次の往復で
+ * モデルへ渡す履歴も、実際のやり取りと食い違う）。最新の発言から `NUDGE_QUIET_MS`（3分）を
+ * 空ける歯止めがそれを塞いでいる——Codexの1往復は最大120秒（#128）なので、生成中は必ず弾かれる。
+ *
+ * **そのため「吹き出しに出した回」と「記録へ積む回」は別の時点になる。** お知らせは選定
+ * （`resolveNotice()`）の側では積まず、**あとから「まだ積んでいない、出したお知らせ」を拾う**形に
+ * してある（`nudgeFromNotice()`）。選定の中で積む形にすると、会話の最中に選ばれた用件は
+ * `shownAt` だけ付いて記録に残らず、二度と積み直せない。
  */
 
 /** 画面へ渡す声かけ1件。`Message` の行そのままで、role は常にASSISTANT。 */
@@ -40,6 +55,18 @@ export type Nudge = {
 
 /** 1回の問い合わせで返す声かけの上限。溜まっていても一度に流し込まない。 */
 const NUDGE_FETCH_LIMIT = 5;
+
+/**
+ * 出したお知らせを、声かけとして積み直せる期間。
+ *
+ * 吹き出しに出ている時間（`NOTICE_DISPLAY_TTL_MS`。1時間）と同じにしてある。会話の最中に
+ * 選ばれた用件は3分ほど遅れて積まれるが、**1時間も経ったものを蒸し返さない**——そのときには
+ * 吹き出しからも消えており、いま知らせている内容だと誤解される（#93と同じ理由）。
+ */
+const NOTICE_NUDGE_WINDOW_MS = NOTICE_DISPLAY_TTL_MS;
+
+/** 1回に見る「出したお知らせ」の数。積むのは常に1件だけ（古い方から）。 */
+const NOTICE_NUDGE_CANDIDATES = 6;
 
 /**
  * 直近に声かけを積んだ時刻。**プロセス内にだけ持つ**（#93の `lastRuns`・#144の `attempts` と
@@ -58,10 +85,10 @@ function toNudge(row: { id: string; content: string; createdAt: Date }): Nudge {
  * 声かけの発言のid。**材料（お知らせ・話題）ごとに決め打ちする**（#264の `main_<userId>` と
  * 同じ手）。
  *
- * **同じ材料で2通積まれるのを主キーで止めるため。** 選定（#132）はモデルを数秒待つあいだ錠を
- * 置かないので、**同時に届いた2本の問い合わせが同じお知らせを選び、声かけを2通積む**
- * （開発サーバーのStrict Modeの二重実行で実測。2つのタブ・2つの端末でも起こりうる）。
- * 一意制約を足すより、作るときのidを決めてしまう方が既存の形に合う。
+ * 狙いは2つ。**同じ材料で2通積まれるのを主キーで止める**こと——2つの画面（iPhoneの「話す」と
+ * PCの「書く」）の問い合わせが重なると、同じ材料で同時に積みうる（開発サーバーのStrict Modeの
+ * 二重実行で実測）。もう1つは**「もう積んだか」をidの有無で引けること**——お知らせは選定とは
+ * 別の時点で積むので、積んだ印を別の列に持たずに済む。
  */
 function nudgeMessageId(kind: "notice" | "topic", materialId: string): string {
   return `nudge_${kind === "notice" ? "n" : "t"}_${materialId}`;
@@ -73,47 +100,117 @@ function isDuplicate(error: unknown): boolean {
 }
 
 /**
- * お知らせから声かけを1件、連続セッションへ積む。先に積まれていれば `null`。
+ * 声かけを1件、連続セッションへ積む。先に積まれていれば `null`。
  *
- * **`Conversation.updatedAt` を同じトランザクションで更新する。** 発言を足しても親の列は
- * 動かず、「最後に話したのはいつか」（#101のひとりごと）がそこを読んでいる。
- *
- * 歯止め（間隔・会話の最中か）はここでは見ない。**用件は待てないため**——話題からの声かけ
- * だけが `nudgeFromTopic()` の側で待つ。ただし**積んだ時刻は記録する**ので、用件の直後に
- * 雑談の話題が続くことはない。
+ * **`Conversation.updatedAt` は動かさない。** あの列が指すのは「最後に話したのはいつか」で、
+ * 待機中のひとりごと（#101。`chatter.ts` の `conversationLine()`）が「昨日ぶりですね」
+ * 「前にお話ししたのは3日前でした」を出すのに使っている。**秘書が話しかけた回で進めると、
+ * その文言が二度と出ない**（毎日どれかの声かけが積まれるため）。3分の間合いも最新の
+ * `Message.createdAt` で測っているので、この列は要らない。
  */
-export async function appendNoticeNudge(params: {
-  userId: string;
-  noticeId: string;
+async function appendNudge(params: {
+  conversationId: string;
+  id: string;
   content: string;
-  now?: Date;
+  now: Date;
 }): Promise<Nudge | null> {
-  const { userId, noticeId, content } = params;
-  const now = params.now ?? new Date();
-  const conversation = await primaryConversation(userId);
-
   try {
-    const [message] = await db.$transaction([
-      db.message.create({
-        data: {
-          id: nudgeMessageId("notice", noticeId),
-          conversationId: conversation.id,
-          role: "ASSISTANT",
-          content,
-          proactive: true,
-          createdAt: now,
-        },
-        select: { id: true, content: true, createdAt: true },
-      }),
-      db.conversation.update({ where: { id: conversation.id }, data: { updatedAt: now } }),
-    ]);
-
-    lastNudges.set(userId, now.getTime());
+    const message = await db.message.create({
+      data: {
+        id: params.id,
+        conversationId: params.conversationId,
+        role: "ASSISTANT",
+        content: params.content,
+        proactive: true,
+        createdAt: params.now,
+      },
+      select: { id: true, content: true, createdAt: true },
+    });
 
     return toNudge(message);
   } catch (error) {
     if (isDuplicate(error)) return null;
     throw error;
+  }
+}
+
+/** 最新の発言の時刻。1件も無ければnull。 */
+async function lastMessageAt(conversationId: string): Promise<number | null> {
+  const last = await db.message.findFirst({
+    where: { conversationId },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { createdAt: true },
+  });
+
+  return last?.createdAt.getTime() ?? null;
+}
+
+/**
+ * 出したお知らせのうち、まだ声かけとして積んでいないものを1件積む。
+ *
+ * **選定（`resolveNotice()`）の中では積まない。** あちらは会話の最中でも吹き出しのために走る
+ * ので、その場で積むと往復の途中へ割り込む。ここは「`spokenText` が入っていて、`nudge_n_<id>`
+ * の発言がまだ無いお知らせ」を拾うだけなので、**会話が途切れてから積み直せる。**
+ *
+ * - **急ぎ（`URGENT`）でその場のPushを送ったぶんは積まない。** #115が同じ用件をUSER＋ASSISTANTの
+ *   2通で記録へ積んでいるため、重ねると同じ話が2度並ぶ
+ * - **古い方から1件ずつ。** 溜まっていても一度に流し込まない（記録の並びも読む順のままになる）
+ * - **例外を外へ出さない。** 呼び出し元は吹き出しを返すRoute Handlerで、声かけが積めなかった
+ *   せいでお知らせまで返らなくなる方が重い
+ */
+export async function nudgeFromNotice(userId: string, now = new Date()): Promise<Nudge | null> {
+  try {
+    const conversation = await primaryConversation(userId);
+    if (!quietEnough(now.getTime(), await lastMessageAt(conversation.id))) return null;
+
+    const shown = await db.notice.findMany({
+      where: {
+        userId,
+        spokenText: { not: null },
+        shownAt: { gt: new Date(now.getTime() - NOTICE_NUDGE_WINDOW_MS) },
+      },
+      // 出した順に積む。新しい方から積むと、記録の並びが吹き出しに出た順と逆になる。
+      orderBy: [{ shownAt: "asc" }, { id: "asc" }],
+      take: NOTICE_NUDGE_CANDIDATES,
+      select: { id: true, title: true, url: true, spokenText: true, priority: true },
+    });
+    if (shown.length === 0) return null;
+
+    const appended = await db.message.findMany({
+      where: { id: { in: shown.map((notice) => nudgeMessageId("notice", notice.id)) } },
+      select: { id: true },
+    });
+    const done = new Set(appended.map((message) => message.id));
+
+    // その場でPushした急ぎ（#115）は、すでに記録へ2通で積まれている。
+    const urgent = shown.filter((notice) => notice.priority === NoticePriority.URGENT);
+    const pushed = new Set<string>();
+    if (urgent.length > 0) {
+      const logs = await db.notificationLog.findMany({
+        where: { userId, kind: URGENT_NOTICE_KIND, dedupeKey: { in: urgent.map((notice) => notice.id) } },
+        select: { dedupeKey: true },
+      });
+      for (const log of logs) pushed.add(log.dedupeKey);
+    }
+
+    const target = shown.find(
+      (notice) => !done.has(nudgeMessageId("notice", notice.id)) && !pushed.has(notice.id),
+    );
+    if (!target || target.spokenText === null) return null;
+
+    const nudge = await appendNudge({
+      conversationId: conversation.id,
+      id: nudgeMessageId("notice", target.id),
+      content: withSourceLink(target.spokenText, target.title, safeNoticeUrl(target.url)),
+      now,
+    });
+
+    if (nudge) lastNudges.set(userId, now.getTime());
+
+    return nudge;
+  } catch (error) {
+    console.error("[aide-bot] お知らせからの声かけに失敗した", error);
+    return null;
   }
 }
 
@@ -149,12 +246,7 @@ export async function nudgeFromTopic(userId: string, now = new Date()): Promise<
   try {
     const conversation = await primaryConversation(userId);
 
-    const last = await db.message.findFirst({
-      where: { conversationId: conversation.id },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      select: { createdAt: true },
-    });
-    if (!quietEnough(now.getTime(), last?.createdAt.getTime() ?? null)) {
+    if (!quietEnough(now.getTime(), await lastMessageAt(conversation.id))) {
       release();
       return null;
     }
@@ -170,30 +262,20 @@ export async function nudgeFromTopic(userId: string, now = new Date()): Promise<
       return null;
     }
 
-    const content = withSourceLink(topic.lead, topicLabel(topic), safeNoticeUrl(topic.url));
+    const nudge = await appendNudge({
+      conversationId: conversation.id,
+      id: nudgeMessageId("topic", topic.id),
+      content: withSourceLink(topic.lead, topicLabel(topic), safeNoticeUrl(topic.url)),
+      now,
+    });
 
-    const [message] = await db.$transaction([
-      db.message.create({
-        data: {
-          id: nudgeMessageId("topic", topic.id),
-          conversationId: conversation.id,
-          role: "ASSISTANT",
-          content,
-          proactive: true,
-          createdAt: now,
-        },
-        select: { id: true, content: true, createdAt: true },
-      }),
-      // 振った印。これが入っている話題はもう選ばれない（吹き出しの候補からは外さない）。
-      db.topic.update({ where: { id: topic.id }, data: { spokenAt: now } }),
-      db.conversation.update({ where: { id: conversation.id }, data: { updatedAt: now } }),
-    ]);
+    // 振った印。これが入っている話題はもう選ばれない（吹き出しの候補からは外さない）。
+    // **声かけを積めた回だけ付ける**——先に付けると、重複で積まなかった回にも印だけが残る。
+    if (nudge) await db.topic.update({ where: { id: topic.id }, data: { spokenAt: now } });
+    else release();
 
-    return toNudge(message);
+    return nudge;
   } catch (error) {
-    // 同じ話題で先に積まれていた（印を立てる前に別のプロセスが通った）。失敗ではない。
-    if (isDuplicate(error)) return null;
-
     console.error("[aide-bot] 話題からの声かけに失敗した", error);
     return null;
   }
@@ -203,7 +285,7 @@ export async function nudgeFromTopic(userId: string, now = new Date()): Promise<
  * ある時刻より後に積まれた声かけ。「書く」画面が自分の知らないぶんを取るために呼ぶ。
  *
  * **誰が積んだかを問わない**ので、この問い合わせの中で積まれたぶん（お知らせ・話題）も、
- * 別のタブや朝の見通しの経路（#79）で積まれたぶんも同じように拾える。
+ * 別のタブで積まれたぶんも同じように拾える。
  *
  * **例外を外へ出さない。** 呼び出し元は吹き出しを返すRoute Handlerで、声かけが引けなかった
  * せいでお知らせまで返らなくなる方が重い（`resolveChatter()`・`topicsForBubble()` と同じ方針）。

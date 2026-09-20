@@ -3,7 +3,7 @@ import { NextResponse, after } from "next/server";
 import { getCurrentUser } from "@/lib/auth-user";
 import { resolveChatter } from "@/lib/chatter";
 import { resolveNotice } from "@/lib/notices";
-import { nudgeFromTopic, nudgesSince } from "@/lib/nudge";
+import { nudgeFromNotice, nudgeFromTopic, nudgesSince } from "@/lib/nudge";
 import { refreshTopicsIfStale, topicsForBubble } from "@/lib/topics";
 
 /**
@@ -72,9 +72,10 @@ export async function GET(request: Request) {
     topicsForBubble(user.id),
   ]);
 
-  // 話題からの声かけ（#278）。DBを引くだけでモデルは呼ばないので、応答の中で待ってよい
-  // （歯止めは `nudgeFromTopic()` 側で、30分に1回まで・会話の最中は積まない）。
-  // お知らせからの声かけは `resolveNotice()` の中で積まれているので、ここでは触らない。
+  // 秘書からの声かけ（#278）。DBを引くだけでモデルは呼ばないので、応答の中で待ってよい。
+  // **用件（お知らせ）を先に見る**——積めた回は話題の側が見送る（用件の直後に雑談を続けない）。
+  // どちらも会話の最中（最新の発言から3分）は積まない。
+  await nudgeFromNotice(user.id, now);
   await nudgeFromTopic(user.id, now);
 
   const nudges = since === null ? [] : await nudgesSince(user.id, since);

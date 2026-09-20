@@ -7,8 +7,6 @@ import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { parseChoice, type Choice } from "@/lib/notice-choice";
 import { safeNoticeUrl } from "@/lib/notice-url";
-import { appendNoticeNudge } from "@/lib/nudge";
-import { withSourceLink } from "@/lib/nudge-choice";
 import { sendPushToUser } from "@/lib/push/subscriptions";
 import { recordApiUsage } from "@/lib/usage";
 
@@ -29,6 +27,8 @@ import { recordApiUsage } from "@/lib/usage";
  * - **いま伝える価値が無ければ黙る。** `NOTICE_SKIP_TOKEN` を返した回は何も出さない
  * - **一度出したものは繰り返さない。** `shownAt` が入った行はもう候補にならない
  * - **未読が0件ならモデルを1回も叩かない。** 黙っている間の費用も、消費する枠も0
+ * - **選ばれた一言は記録にも残る**（#278。`nudgeFromNotice()`。`src/lib/nudge.ts`）。積むのは
+ *   この関数ではない——会話の最中は積まないので、**吹き出しへ出した回とは別の時点で積まれる**
  *
  * ## 選ばせる相手（#132）
  *
@@ -61,8 +61,13 @@ export const NOTICE_DISPLAY_TTL_MS = 60 * 60 * 1000;
 /** 1回の生成でモデルへ渡す候補の数。多すぎると選ぶ精度も入力の短さも失う。 */
 const MAX_CANDIDATES = 12;
 
-/** 急ぎのお知らせをPushで届けたときの `NotificationLog.kind`。 */
-const URGENT_NOTICE_KIND = "urgent-notice";
+/**
+ * 急ぎのお知らせをPushで届けたときの `NotificationLog.kind`。
+ *
+ * 声かけ（#278。`src/lib/nudge.ts`）も同じ鍵を読む——ここでPushした用件は#115が記録へ2通で
+ * 積んでいるので、声かけとして重ねない。
+ */
+export const URGENT_NOTICE_KIND = "urgent-notice";
 
 /**
  * 直近の生成の記録。**プロセス内にだけ持つ。**
@@ -238,42 +243,6 @@ async function notifyUrgentNotice(userId: string, notice: Notice): Promise<void>
   });
 }
 
-/**
- * 選ばれたお知らせを、秘書から話しかけた発言として記録へ積む（#278）。
- *
- * 吹き出しは「話す」画面を開いている端末にしか出ないので、**選ばれたことがどこにも残らず、
- * 「書く」画面からは一度も見えない**という状態がここまで続いていた。積む文面はモデルが
- * 選定（#132）で書いた一言そのままで、**言い直させない**（#93「黙っている間の費用は0円」）。
- *
- * - **急ぎ（URGENT）でその場のPushを送ったぶんは積まない。** #115が同じ用件を
- *   USER＋ASSISTANTの2通で記録へ積んでいるため、重ねると同じ話が2度並ぶ
- * - **失敗しても吹き出しは出す。** 記録に残らないことより、いま伝えるものが出ないことの方が
- *   重い（#51・#81と同じ「記録の失敗で本筋を止めない」）
- * - **同じお知らせで2通積まれない。** 選定はモデルを数秒待つあいだ錠を置かないので、同時に
- *   届いた問い合わせが同じ1件を選びうる（実測）。止めているのは `appendNoticeNudge()` が
- *   使う決め打ちのid（主キー）
- */
-async function nudgeFromNotice(userId: string, notice: Notice, spokenText: string, now: Date): Promise<void> {
-  try {
-    if (notice.priority === NoticePriority.URGENT) {
-      const pushed = await db.notificationLog.findUnique({
-        where: { userId_kind_dedupeKey: { userId, kind: URGENT_NOTICE_KIND, dedupeKey: notice.id } },
-        select: { id: true },
-      });
-      if (pushed) return;
-    }
-
-    await appendNoticeNudge({
-      userId,
-      noticeId: notice.id,
-      content: withSourceLink(spokenText, notice.title, safeNoticeUrl(notice.url)),
-      now,
-    });
-  } catch (error) {
-    console.error("[aide-bot] お知らせからの声かけに失敗した", error);
-  }
-}
-
 /** まだ出していない、いま出せるお知らせ。急ぎ→新しい順。 */
 async function pendingNotices(userId: string, now: Date): Promise<Notice[]> {
   return db.notice.findMany({
@@ -447,10 +416,6 @@ export async function resolveNotice(userId: string, now = new Date()): Promise<C
     where: { id: chosen.id },
     data: { spokenText: choice.text, spokenUrgent: choice.urgent, shownAt: now },
   });
-
-  // 選んだ一言は記録にも残す（#278）。吹き出しは1時間で引っ込むので、これが無いと
-  // 「何を伝えられたのか」を後から辿る場所がどこにも無い。
-  await nudgeFromNotice(userId, updated, choice.text, now);
 
   return {
     id: updated.id,

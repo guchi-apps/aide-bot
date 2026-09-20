@@ -41,8 +41,11 @@ type Props = {
  *
  * 口調は秘書の人格（`@/lib/persona`。#226）に手で揃える。**変えたらCLAUDE.mdの「聞き取りを
  * マイク無しで確かめる」も直す**——検証手順がこの文字列で状態を読んでいる。
+ *
+ * **「書く」画面の音声バー（`@/components/chat/voice-bar`。#279）も同じ表を読む。** 同じ
+ * 往復の同じ状態なので、画面ごとに言い方が変わらないようにする。
  */
-const STATUS_LABEL: Record<RobotState, string> = {
+export const STATUS_LABEL: Record<RobotState, string> = {
   idle: "どうぞ、話しかけてください",
   listening: "はい、聞いていますよ",
   thinking: "少し考えますね",

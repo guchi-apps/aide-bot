@@ -1,11 +1,14 @@
 /**
  * 相談画面の2つのモード。
  *
- * `voice`（話す）が既定。このアプリは音声で秘書と対話するのが本来の使い方で、文字入力は
- * 声を出せない場面と、聞き取れなかったときの言い直しのために残している（#27）。
+ * **`write`（書く）が既定**（#279で `voice` から変えた）。日常は文字で読み書きし、声で話したく
+ * なったら「書く」画面の下の「話しかける」（音声バー。`@/components/chat/voice-bar`）を押す、
+ * という使い方に合わせたもの。`voice`（ロボットの全画面）はヘッダーの切り替えから今までどおり
+ * 使える——**声そのものをやめたわけではない**（#27の「本来の使い方は音声」は、音声バーが
+ * 引き継いでいる）。
  *
  * 選んだモードはCookieに置く。localStorageだと最初の描画がサーバー側で決まらず、
- * 「書く」を選んでいる人にも一瞬だけ音声画面が出てから切り替わる。
+ * 「話す」を選んでいる人にも一瞬だけ文字の画面が出てから切り替わる。
  */
 
 export type TalkMode = "voice" | "write";
@@ -16,5 +19,5 @@ export const TALK_MODE_COOKIE = "aide-bot-talk-mode";
 export const TALK_MODE_MAX_AGE = 60 * 60 * 24 * 365;
 
 export function normalizeTalkMode(value: string | undefined | null): TalkMode {
-  return value === "write" ? "write" : "voice";
+  return value === "voice" ? "voice" : "write";
 }

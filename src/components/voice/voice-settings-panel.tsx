@@ -1,14 +1,13 @@
 "use client";
 
 import { Copy, Play, X } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { releaseMicStream } from "@/lib/speech/mic-stream";
 import { recognitionLog, subscribeRecognitionLog } from "@/lib/speech/recognition";
 import {
   RATE_MAX,
   RATE_MIN,
-  type Reader,
   canSpeakWith,
   cancelSample,
   speakSample,
@@ -68,26 +67,24 @@ export function VoiceSettingsPanel({ className, onPrime, onNotice, onClose }: Pr
   // 聞き取りの記録をコピーしたことの合図（#179）。実機の記録をそのまま報告してもらうため。
   const [logCopied, setLogCopied] = useState(false);
 
-  const sampleRef = useRef<Reader | null>(null);
-
   // 選べる声は端末が非同期に用意する。揃った時点で入れ直す。
   useEffect(() => watchJapaneseVoices(setVoices), []);
 
-  // 閉じたら鳴らしっぱなしにしない。往復の側から止めたいときは `cancelSample()`（#279）。
-  useEffect(() => {
-    return () => {
-      sampleRef.current?.cancel();
-      sampleRef.current = null;
-    };
-  }, []);
+  // 閉じたら鳴らしっぱなしにしない。
+  useEffect(() => cancelSample, []);
 
-  /** 選んでいる声で1文だけ鳴らす。押した操作をiOSの許可としても使う。 */
+  /**
+   * 選んでいる声で1文だけ鳴らす。押した操作をiOSの許可としても使う。
+   *
+   * **鳴っている試し聞きは `synthesis.ts` が1つだけ持ち**（`cancelSample()`）、往復の側——
+   * マイクを押した回・止めた回——からも止められる。**止められたときに合成待ちの表示を下ろすのは
+   * `onDone`**（`cancelSample()` が呼ぶ）。ここで参照を抱えて自分だけで止めると、外から止められた
+   * 回に「声を用意しています…」のままボタンが固まる（#279の自動レビューの指摘）。
+   */
   function onSample() {
     onPrime();
     onNotice(null);
-    cancelSample();
-    setSamplePreparing(false);
-    sampleRef.current = speakSample(settings.voiceURI, settings.rate, {
+    speakSample(settings.voiceURI, settings.rate, {
       engineUrl: settings.engineUrl,
       onPreparing: () => setSamplePreparing(true),
       onDone: () => setSamplePreparing(false),
@@ -190,9 +187,7 @@ export function VoiceSettingsPanel({ className, onPrime, onNotice, onClose }: Pr
         <select
           value={settings.voiceURI ?? ""}
           onChange={(event) => {
-            sampleRef.current?.cancel();
-            sampleRef.current = null;
-            setSamplePreparing(false);
+            cancelSample();
             onNotice(null);
             updateVoiceSettings({ voiceURI: event.target.value || null });
           }}

@@ -1258,6 +1258,17 @@ Anthropic（従量課金）で、**#183以降に積まれるのは前者だけ**
   フックの `prime()`（マイクを押した回）と `stop()` が呼ぶ。設定がどの画面からも開けるように
   なったので、**画面ごとに「押したら試し聞きを止める」を書かない**——足し忘れた画面だけ
   鳴りっぱなしになる
+- **止めたら、持ち主（`VoiceSettingsPanel`）へ `onDone` で知らせる。** `Reader.cancel()` は
+  `onStart` も `onDrain` も鳴らさない（止めたのは利用者のため）が、パネルは合成待ちの間
+  「声を用意しています…」でボタンを無効にしており、**下ろす手は `onDone` だけ**。知らせないと、
+  マイクを押した回・止めた回にパネルを開いたまま固着する（#279の自動レビューが指摘した退行。
+  リファクタリング前は止める側が持ち主の状態を直接下ろしていた）。**この約束は
+  `SampleSlot`（`src/lib/speech/sample-slot.ts`）に閉じてあり、`test/sample-slot.test.ts` が固定する**
+  ——`synthesis.ts` は素のNodeでは読めない（パラメータプロパティを型剥がしできない）ので、契約の
+  部分だけを切り出した。**試し聞きの状態をパネルの中で `ref` に抱えて自分だけで止める形へ戻さない**
+  （外から止められた回に固まる）。手元では、合成に20秒かかるスタブENGINE（`/version`・
+  `/audio_query`・`/synthesis` だけ返し、CORSを開ける）をlocalStorageの `engineUrl` へ入れ、
+  「試し聞き」を押して合成待ちのままマイク／「読み上げを止める」を押すと再現できる
 
 ### 「書く」画面の秘書の一言（#279）
 
@@ -1807,7 +1818,8 @@ CI専用のプレースホルダーでよい。
   `isInternalPath()` / `safeInternalPath()`・`safeNoticeUrl()`・`public/sw.js` の `safeTarget()`
   との一致・`historyWindowSkip()`・`readJsonObject()`（#262）・`parseNoticeInput()`
   （`notice-ingest.ts`）・`parseChoice()`（`notice-choice.ts`）・`removedFromSummary()`
-  （`summary-range.ts`。`deleteDay()` が畳んだ範囲から引く件数。#265）。**PrismaやSupabaseへ触れる
+  （`summary-range.ts`。`deleteDay()` が畳んだ範囲から引く件数。#265）・`SampleSlot`
+  （`sample-slot.ts`。試し聞きを止めたら持ち主へ知らせる約束。#279）。**PrismaやSupabaseへ触れる
   モジュールはimportしない**（テストからDBへ繋がない）。**DBに触れるモジュールの中にある計算を
   テストしたいなら、純粋な関数として別ファイルへ切り出す**（#265で `parseChoice()` を
   `notices.ts` から、`removedFromSummary()` を `day-log.ts` から出した。`deleteDay()` 本体

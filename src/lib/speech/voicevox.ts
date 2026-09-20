@@ -23,6 +23,8 @@
  * 何も出さずに待たせると「音が出ない」としか見えない。呼ぶ側は待っていることを画面へ出すこと。
  */
 
+import { timeStretch } from "./time-stretch";
+
 /** `voiceURI` にVOICEVOXの話者を入れるときの接頭辞。内蔵の声の `voiceURI` と混ざらない。 */
 export const VOICEVOX_PREFIX = "voicevox:";
 
@@ -406,6 +408,28 @@ function decode(context: AudioContext, bytes: ArrayBuffer): Promise<AudioBuffer>
 }
 
 /**
+ * 読み上げの速さ（`rate` 倍）に合わせて、デコードした音声を**声の高さを保ったまま**伸縮する（#287）。
+ *
+ * `AudioBufferSourceNode.playbackRate` は早回しなので、速さと一緒に高さも変わる。
+ * 伸縮の中身は `./time-stretch`（DOMに触れない純粋関数）で、ここはそれを `AudioBuffer` に
+ * 出し入れするだけ。`rate` が1のときは何もしない。
+ */
+function stretch(context: AudioContext, buffer: AudioBuffer, rate: number): AudioBuffer {
+  if (rate === 1) return buffer;
+
+  const channels = Array.from({ length: buffer.numberOfChannels }, (_, index) =>
+    buffer.getChannelData(index),
+  );
+  const stretched = timeStretch(channels, buffer.sampleRate, rate);
+
+  const result = context.createBuffer(stretched.length, stretched[0].length, buffer.sampleRate);
+  stretched.forEach((samples, index) => {
+    result.copyToChannel(samples as Float32Array<ArrayBuffer>, index);
+  });
+  return result;
+}
+
+/**
  * 合成した音声（URL）を取ってきて Web Audio で鳴らす（#210）。
  *
  * WEB版の `mp3StreamingUrl`（合成しながら流すURL）もENGINEのObjectURLも、ここでは
@@ -413,6 +437,9 @@ function decode(context: AudioContext, bytes: ArrayBuffer): Promise<AudioBuffer>
  * ——`decodeAudioData` は全体が揃ってからでないと鳴らせないため。鳴り始めまでの待ちは
  * そのぶん伸びるが、`<audio>` を避けるのが目的なので受け入れる（呼ぶ側は「話しています」を
  * 出したまま待つ）。
+ *
+ * `rate` は読み上げの速さ。**高さは変えずに** `stretch()` で波形ごと伸縮してから鳴らす（#287）。
+ * 伸縮は鳴らす前に1回だけ走り、1固まりあたり数十〜200ms程度（長さと標本化周波数による）。
  */
 export function playVoicevoxAudio(
   url: string,
@@ -460,12 +487,12 @@ export function playVoicevoxAudio(
 
       // iOSは操作の外だと suspended のことがある。prime で通してあれば resume できる。
       if (context.state === "suspended") await context.resume();
-      const buffer = await decode(context, bytes);
+      const buffer = stretch(context, await decode(context, bytes), rate);
       if (stopped) return;
 
       node = context.createBufferSource();
       node.buffer = buffer;
-      node.playbackRate.value = rate;
+      // 速さは `stretch()` で作った波形に含めてある。ここで `playbackRate` を変えると高さも動く（#287）。
       node.connect(context.destination);
       node.onended = () => {
         if (stopped) return;

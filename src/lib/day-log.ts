@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { cache } from "react";
 
 import type { ChatEntry } from "@/components/chat/types";
-import { dayEnd, dayHeading, dayStart, jstDayKey, monthLabel } from "@/lib/day-key";
+import { dayEnd, dayHeading, dayStart, jstDayKey, jstTimeLabel, monthLabel } from "@/lib/day-key";
 import { db } from "@/lib/db";
 import { removedFromSummary } from "@/lib/summary-range";
 
@@ -151,7 +151,14 @@ export async function listDays(conversationId: string, now: Date): Promise<DaySu
  * 時刻が並んだときは記録を先に置く。書き込みは必ず、その往復の返答より前に起きている。
  */
 function mergeEntries(
-  messages: { id: string; role: "USER" | "ASSISTANT"; content: string; interrupted: boolean; createdAt: Date }[],
+  messages: {
+    id: string;
+    role: "USER" | "ASSISTANT";
+    content: string;
+    interrupted: boolean;
+    proactive: boolean;
+    createdAt: Date;
+  }[],
   toolCalls: {
     id: string;
     serverLabel: string;
@@ -172,7 +179,9 @@ function mergeEntries(
         role: message.role,
         content: message.content,
         interrupted: message.interrupted,
+        proactive: message.proactive,
         day: jstDayKey(message.createdAt),
+        time: jstTimeLabel(message.createdAt),
       },
     })),
     ...toolCalls.map((call) => ({
@@ -199,6 +208,8 @@ const MESSAGE_FIELDS = {
   role: true,
   content: true,
   interrupted: true,
+  // 秘書の側から話しかけた発言（#278）。画面で印を出すために持ち帰る。
+  proactive: true,
   createdAt: true,
 } as const;
 

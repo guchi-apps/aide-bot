@@ -103,7 +103,18 @@ const TOPIC_RING_STEP = 2;
  */
 const IDLE_LIMIT_MS = 60 * 60 * 1000;
 
-type Payload = { notice: NoticeBubble | null; chatter: string[]; topics: TopicBubble[] };
+/**
+ * `/api/notices/current` の応答のうち、吹き出しの輪に使うぶん。
+ *
+ * 「書く」画面（`@/components/chat/secretary-line`。#279）も同じ形で受け取る。**あちらは問い合わせを
+ * 自分では持たず**、声かけ（#278）の問い合わせ（`@/components/chat/use-nudge`）の応答を使い回す
+ * ——同じ口を2本で叩くと、問い合わせ1回ごとに `auth.getUser()` の往復が増える。
+ */
+export type BubblePayload = { notice: NoticeBubble | null; chatter: string[]; topics: TopicBubble[] };
+
+export const EMPTY_BUBBLE_PAYLOAD: BubblePayload = { notice: null, chatter: [], topics: [] };
+
+type Payload = BubblePayload;
 
 /**
  * 前回と同じ中身か。
@@ -112,7 +123,7 @@ type Payload = { notice: NoticeBubble | null; chatter: string[]; topics: TopicBu
  * 入れると輪が作り直され、いま出している一言の残り時間が毎回25秒に戻る（＝入れ替わりが
  * 止まって見える回ができる）。
  */
-function samePayload(a: Payload, b: Payload): boolean {
+export function samePayload(a: Payload, b: Payload): boolean {
   return (
     a.notice?.id === b.notice?.id &&
     a.notice?.text === b.notice?.text &&
@@ -125,9 +136,14 @@ function samePayload(a: Payload, b: Payload): boolean {
   );
 }
 
+/**
+ * 「話す」画面の吹き出しに出す1枠。**問い合わせもここで持つ。**
+ *
+ * 「書く」画面は問い合わせを別に持っている（声かけ。#278）ので、こちらは使わず、その応答を
+ * `useBubbleRing()` へ渡す（#279）。
+ */
 export function useBubbleLine(): BubbleLine | null {
-  const [payload, setPayload] = useState<Payload>({ notice: null, chatter: [], topics: [] });
-  const [step, setStep] = useState(0);
+  const [payload, setPayload] = useState<Payload>(EMPTY_BUBBLE_PAYLOAD);
   // 描画のたびに読むと値が揺れる（`react-hooks/purity`）。最後に触られた時刻は
   // 効果の中で入れ、それまでは0＝「まだ触られていない」として扱う。
   const lastActivityRef = useRef(0);
@@ -199,6 +215,18 @@ export function useBubbleLine(): BubbleLine | null {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
+
+  return useBubbleRing(payload);
+}
+
+/**
+ * 届いた中身を輪にして、一定の間隔で1枠ずつ送る（#279で問い合わせから切り出した）。
+ *
+ * 「話す」画面（`useBubbleLine()`）と「書く」画面の秘書の一言が同じ輪を使う。**送る間隔・
+ * 差し込む位置・急ぎのときに止めることは、どちらの画面でも同じ**になるよう1か所に置く。
+ */
+export function useBubbleRing(payload: BubblePayload): BubbleLine | null {
+  const [step, setStep] = useState(0);
 
   /**
    * 回す輪。お知らせは先頭に置き、ひとりごとと同じ輪の中で繰り返し出す。

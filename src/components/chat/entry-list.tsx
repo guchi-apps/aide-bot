@@ -1,6 +1,7 @@
 "use client";
 
 import { AppIcon } from "@/components/brand/app-icon";
+import { isAutoRequest } from "@/lib/auto-request";
 import { dayHeading } from "@/lib/day-key";
 
 import { Markdown } from "./markdown";
@@ -17,15 +18,22 @@ import type { ChatEntry } from "./types";
  * タイムゾーンを明示している）ので、ハイドレーションはずれない。ただし「今日」の判定に
  * 使う `todayKey` はサーバーで確定させて渡す——`new Date()` をクライアントで呼ぶと、
  * 日付が変わる瞬間に描き直した画面だけ見出しがずれる。
+ *
+ * **秘書の側が自動で積んだ依頼文（朝の見通し・急ぎのお知らせ。#280）は並べない。** 利用者が
+ * 書いた発言ではないので、吹き出しに出ると自分が言ったことのように見える。DBには残して
+ * あり、モデルへ渡す履歴にも入る。**日付の区切りは隠した後の並びで判定する**——隠す前の並びで
+ * 見ると、隠した発言が日の最初だった日は、区切りが最初に見える発言へ付かなくなる。
  */
 export function EntryList({
-  entries,
+  entries: allEntries,
   todayKey,
 }: {
   entries: ChatEntry[];
   /** サーバー側で確定させた今日の日付（`2026-09-03`）。 */
   todayKey: string;
 }) {
+  const entries = allEntries.filter((entry) => entry.kind !== "message" || !isAutoRequest(entry.role, entry.content));
+
   return (
     <>
       {entries.map((entry, index) => {
@@ -78,7 +86,7 @@ function Entry({ entry }: { entry: ChatEntry }) {
     <div className="flex gap-3">
       <SecretaryAvatar />
       <div className="min-w-0 flex-1">
-        <SecretaryLabel />
+        <SecretaryLabel time={entry.time} proactive={entry.proactive} />
         <Markdown>{entry.content}</Markdown>
         {entry.interrupted && <InterruptedNote />}
       </div>
@@ -90,8 +98,31 @@ export function SecretaryAvatar() {
   return <AppIcon className="mt-0.5 size-[26px] shrink-0" />;
 }
 
-export function SecretaryLabel() {
-  return <div className="mb-1 text-[0.6875rem] font-bold tracking-[0.08em] text-muted">秘書</div>;
+/**
+ * 「秘書」の名前の行。`time`（`07:00`）があれば右に添える（#280）。
+ *
+ * 返答がいつのものかは、日付の区切りだけでは朝の見通しと後の返答が見分けられない。生成中の
+ * 枠（`ChatPanel` の考えています…）には渡さない——保存される前で、まだ時刻が無い。
+ *
+ * **秘書の側から話しかけた発言（#278）は名前を差し替える。** 頼んでいないのに現れる発言なので、
+ * 返答と同じ見た目だと「何に対する返事なのか」を探すことになる。流れの中で目に留まるよう、
+ * 地の文の名札ではなくaccentの小さな枠で出す。読み上げソフトには「秘書から話しかけました」と
+ * 伝える——見た目で読み取れる差（色と枠）が音では消えるため。
+ */
+export function SecretaryLabel({ time, proactive = false }: { time?: string; proactive?: boolean }) {
+  return (
+    <div className="mb-1 flex items-baseline gap-2 text-[0.6875rem] text-muted">
+      {proactive ? (
+        <span className="inline-flex items-center rounded-full bg-accent-surface px-2 py-0.5 font-bold tracking-[0.08em] text-accent">
+          秘書から
+          <span className="sr-only">話しかけました</span>
+        </span>
+      ) : (
+        <span className="font-bold tracking-[0.08em]">秘書</span>
+      )}
+      {time && <time className="font-medium tracking-[0.02em] tabular-nums">{time}</time>}
+    </div>
+  );
 }
 
 /**

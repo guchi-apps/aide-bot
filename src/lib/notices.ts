@@ -1,6 +1,6 @@
 import { NoticePriority, type Notice } from "@prisma/client";
 
-import { noticeSystemPrompt } from "@/lib/anthropic";
+import { noticeSystemPrompt, URGENT_NOTICE_REQUEST } from "@/lib/anthropic";
 import { NOTICE_MODEL } from "@/lib/chat-model";
 import { runCodexExec } from "@/lib/codex";
 import { primaryConversation } from "@/lib/day-log";
@@ -27,6 +27,8 @@ import { recordApiUsage } from "@/lib/usage";
  * - **いま伝える価値が無ければ黙る。** `NOTICE_SKIP_TOKEN` を返した回は何も出さない
  * - **一度出したものは繰り返さない。** `shownAt` が入った行はもう候補にならない
  * - **未読が0件ならモデルを1回も叩かない。** 黙っている間の費用も、消費する枠も0
+ * - **選ばれた一言は記録にも残る**（#278。`nudgeFromNotice()`。`src/lib/nudge.ts`）。積むのは
+ *   この関数ではない——会話の最中は積まないので、**吹き出しへ出した回とは別の時点で積まれる**
  *
  * ## 選ばせる相手（#132）
  *
@@ -59,19 +61,13 @@ export const NOTICE_DISPLAY_TTL_MS = 60 * 60 * 1000;
 /** 1回の生成でモデルへ渡す候補の数。多すぎると選ぶ精度も入力の短さも失う。 */
 const MAX_CANDIDATES = 12;
 
-/** 急ぎのお知らせをPushで届けたときの `NotificationLog.kind`。 */
-const URGENT_NOTICE_KIND = "urgent-notice";
-
 /**
- * 通知を押して開いた相談の1通目（USER）に置く固定の文言。
+ * 急ぎのお知らせをPushで届けたときの `NotificationLog.kind`。
  *
- * `POST /api/chat` の `buildConversationText()`（#79）は履歴の先頭がUSERであることを前提にしており、
- * ASSISTANTから始まる履歴は先頭を落として渡す。ここはモデルを呼ばずに積む側の文面をそのまま
- * 出す設計（#93「黙っている間の費用は0円」）なので、朝の見通し（`MORNING_BRIEFING_REQUEST`）
- * のような「実際にモデルへ渡した依頼」ではなく、続けて話しかけたときにモデルが読む文脈として
- * 置くだけの短い定型文にしてある。
+ * 声かけ（#278。`src/lib/nudge.ts`）も同じ鍵を読む——ここでPushした用件は#115が記録へ2通で
+ * 積んでいるので、声かけとして重ねない。
  */
-const URGENT_NOTICE_REQUEST = "（自動）急ぎのお知らせを教えて。";
+export const URGENT_NOTICE_KIND = "urgent-notice";
 
 /**
  * 直近の生成の記録。**プロセス内にだけ持つ。**

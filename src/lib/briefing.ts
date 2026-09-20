@@ -252,6 +252,7 @@ async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
   //
   // **1通目は実際にモデルへ渡した依頼そのもの**にしてある。秘書の返答だけを積むと、
   // 履歴を読み返したときに秘書が突然しゃべり出したように見える（#79）。
+  // **記録の画面には出さない**（#280。`EntryList`）が、DBとモデルへ渡す履歴には残る。
   const conversation = await primaryConversation(userId);
 
   // **発言の時刻は、受けた時刻（`now`）ではなく書き込む直前に取り直す**（#261）。`now` は

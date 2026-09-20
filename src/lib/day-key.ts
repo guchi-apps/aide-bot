@@ -21,6 +21,21 @@ export function jstDayKey(at: Date): string {
 }
 
 /**
+ * 記録の画面で返答に添える時刻（`07:00`。#280）。日本時間の24時間表記。
+ *
+ * `hourCycle: "h23"` を明示する。`hour12: false` だと環境によって0時が `24:00` になる。
+ * `timeZone` も明示しているので、サーバーとブラウザで同じ結果になる（ハイドレーションはずれない）。
+ */
+export function jstTimeLabel(at: Date): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Tokyo",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(at);
+}
+
+/**
  * モデルへ渡す「今日」（`2026-09-06（日）`。#184）。日本時間で作る。
  *
  * 相談のプロンプトには#184までこれが無かった。Codexは自前の前置きで今日の日付を知っているが、

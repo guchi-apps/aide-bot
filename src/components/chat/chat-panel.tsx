@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { isStandalone, useVoiceConversation } from "@/components/voice/use-voice-conversation";
 import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
+import { jstTimeLabel } from "@/lib/day-key";
 import { noteRecognition } from "@/lib/speech/recognition";
 import { voiceSettingsSnapshot } from "@/lib/speech/voice-settings";
 import { cn } from "@/lib/utils";
@@ -112,6 +113,8 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
           role: "ASSISTANT",
           content,
           interrupted,
+          // 文字で送ったときと同じく、画面の中だけで足すぶんにも時刻を付ける（#280）。
+          time: jstTimeLabel(new Date()),
         },
       ]);
       answerBufferRef.current = "";
@@ -171,6 +174,8 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
           role: "ASSISTANT",
           content: result.answer,
           interrupted: result.aborted,
+          // サーバーが保存する時刻に近い値を、画面の中だけで足すぶんにも付ける（#280）。
+          time: jstTimeLabel(new Date()),
         },
       ]);
     }

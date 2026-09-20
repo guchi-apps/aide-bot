@@ -78,7 +78,7 @@ function Entry({ entry }: { entry: ChatEntry }) {
     <div className="flex gap-3">
       <SecretaryAvatar />
       <div className="min-w-0 flex-1">
-        <SecretaryLabel />
+        <SecretaryLabel proactive={entry.proactive} />
         <Markdown>{entry.content}</Markdown>
         {entry.interrupted && <InterruptedNote />}
       </div>
@@ -90,7 +90,26 @@ export function SecretaryAvatar() {
   return <AppIcon className="mt-0.5 size-[26px] shrink-0" />;
 }
 
-export function SecretaryLabel() {
+/**
+ * 発言の主の名札。
+ *
+ * **秘書の側から話しかけた発言（#278）は名札を差し替える。** 頼んでいないのに現れる発言なので、
+ * 返答と同じ見た目だと「何に対する返事なのか」を探すことになる。返答が並ぶ流れの中で
+ * 目に留まるよう、地の文の名札（弱い色）ではなくaccentの小さな枠で出す。
+ *
+ * 読み上げソフトには「秘書から話しかけました」と伝える——見た目で読み取れる差
+ * （色と枠）が音では消えるため。
+ */
+export function SecretaryLabel({ proactive = false }: { proactive?: boolean }) {
+  if (proactive) {
+    return (
+      <div className="mb-1.5 inline-flex items-center rounded-full bg-accent-surface px-2 py-0.5 text-[0.625rem] font-bold tracking-[0.08em] text-accent">
+        秘書から
+        <span className="sr-only">話しかけました</span>
+      </div>
+    );
+  }
+
   return <div className="mb-1 text-[0.6875rem] font-bold tracking-[0.08em] text-muted">秘書</div>;
 }
 

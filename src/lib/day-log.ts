@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { cache } from "react";
 
 import type { ChatEntry } from "@/components/chat/types";
-import { dayEnd, dayHeading, dayStart, jstDayKey, monthLabel } from "@/lib/day-key";
+import { dayEnd, dayHeading, dayStart, jstDayKey, jstTimeLabel, monthLabel } from "@/lib/day-key";
 import { db } from "@/lib/db";
 import { removedFromSummary } from "@/lib/summary-range";
 
@@ -173,6 +173,7 @@ function mergeEntries(
         content: message.content,
         interrupted: message.interrupted,
         day: jstDayKey(message.createdAt),
+        time: jstTimeLabel(message.createdAt),
       },
     })),
     ...toolCalls.map((call) => ({

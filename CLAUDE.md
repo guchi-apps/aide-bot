@@ -1247,6 +1247,17 @@ Anthropic（従量課金）で、**#183以降に積まれるのは前者だけ**
 - **`AudioContext` は1つを使い回す**（#210で `<audio>` 要素から移した）。iOSは「画面を触った流れ」で
   一度 `resume()` を通したものしか後から鳴らせない。マイクを押した時点で `primeVoicevoxAudio()` を
   呼ぶ（内蔵の声の `primeSpeechSynthesis()` と同じ考え方）
+- **VOICEVOXの読み上げ速度は `playbackRate` で変えない。波形を伸縮してから鳴らす**（#287）。
+  `playbackRate` は早回しなので、速さと一緒に**声の高さも上下する**（1.6倍で約8半音高い）。
+  `playVoicevoxAudio()` がデコードの後で `stretch()` → `timeStretch()`（`src/lib/speech/time-stretch.ts`。
+  WSOLA。DOMに触れない純粋関数で、依存は足していない）に通し、`playbackRate` は触らない（1のまま）。
+  **合成の側で速さを渡せない**——WEB版（`api.tts.quest`）はキー無しだと `speed` / `pitch` を無視する
+  （3通りで同じ音声URL・同じサイズが返った。#287で実測）。ENGINEの `audio_query.speedScale` なら
+  合成側で変えられるが、WEB版に効かず経路が2本に割れるので採っていない。`<audio>` の `preservesPitch`
+  は#210で避けた `<audio>` 再生への逆戻りになる。**内蔵の声（`SpeechSynthesisUtterance.rate`）は
+  ブラウザが高さを保つので手を入れていない。** 伸縮は鳴らす前に1固まりあたり数十〜200ms
+  （実測: 3秒の声で約50〜120ms、48kHzの10秒で約200ms）。`test/time-stretch.test.ts` が
+  「長さが1/rate」「基本周波数が変わらない」を固定している
 - **`SpeechRecognition` の型はTypeScriptの標準libに無い。** `src/types/speech.d.ts` に使う範囲
   だけを宣言してある。接頭辞なしと `webkit` 付きの両方を見ること（Safariは `webkit` 付きのみ）
 - **iOSは「画面を触った流れ」で一度 `speak()` を通さないと、以降の読み上げが無音になる。**

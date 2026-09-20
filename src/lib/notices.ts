@@ -1,6 +1,6 @@
 import { NoticePriority, type Notice } from "@prisma/client";
 
-import { noticeSystemPrompt } from "@/lib/anthropic";
+import { noticeSystemPrompt, URGENT_NOTICE_REQUEST } from "@/lib/anthropic";
 import { NOTICE_MODEL } from "@/lib/chat-model";
 import { runCodexExec } from "@/lib/codex";
 import { primaryConversation } from "@/lib/day-log";
@@ -63,17 +63,6 @@ const MAX_CANDIDATES = 12;
 
 /** 急ぎのお知らせをPushで届けたときの `NotificationLog.kind`。 */
 const URGENT_NOTICE_KIND = "urgent-notice";
-
-/**
- * 通知を押して開いた相談の1通目（USER）に置く固定の文言。
- *
- * `POST /api/chat` の `buildConversationText()`（#79）は履歴の先頭がUSERであることを前提にしており、
- * ASSISTANTから始まる履歴は先頭を落として渡す。ここはモデルを呼ばずに積む側の文面をそのまま
- * 出す設計（#93「黙っている間の費用は0円」）なので、朝の見通し（`MORNING_BRIEFING_REQUEST`）
- * のような「実際にモデルへ渡した依頼」ではなく、続けて話しかけたときにモデルが読む文脈として
- * 置くだけの短い定型文にしてある。
- */
-const URGENT_NOTICE_REQUEST = "（自動）急ぎのお知らせを教えて。";
 
 /**
  * 直近の生成の記録。**プロセス内にだけ持つ。**

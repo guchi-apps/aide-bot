@@ -4,6 +4,7 @@ import { ArrowUp, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
+import { jstTimeLabel } from "@/lib/day-key";
 import { cn } from "@/lib/utils";
 
 import { CompactedNote, EntryList, SecretaryAvatar, SecretaryLabel } from "./entry-list";
@@ -95,6 +96,9 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
           role: "ASSISTANT",
           content: nudge.content,
           proactive: true,
+          // 時刻は積まれた時刻から作る（#280）。`new Date()` で作ると、問い合わせの間隔
+          // （最大3分）ぶんだけ、再読み込みした後の表示とずれる。
+          time: jstTimeLabel(new Date(nudge.createdAt)),
         }));
 
       return added.length === 0 ? previous : [...previous, ...added];
@@ -149,6 +153,8 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
           role: "ASSISTANT",
           content: result.answer,
           interrupted: result.aborted,
+          // サーバーが保存する時刻に近い値を、画面の中だけで足すぶんにも付ける（#280）。
+          time: jstTimeLabel(new Date()),
         },
       ]);
     }

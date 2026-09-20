@@ -1,3 +1,4 @@
+import { AUTO_REQUEST_PREFIX } from "@/lib/auto-request";
 import type { ReplyStyle } from "@/lib/chat-model";
 import { jstTodayLabel } from "@/lib/day-key";
 import { SECRETARY_INTRO, SECRETARY_VOICE_RULES } from "@/lib/persona";
@@ -200,9 +201,24 @@ export const BRIEFING_SKIP_TOKEN = "NO_BRIEFING";
  * **これはそのまま相談の1通目として保存される。** 通知を押すとこの相談が開き、利用者は
  * マイクを押してそのまま続きを話せる。実際にモデルへ渡している依頼そのものなので、
  * 画面に出しても嘘にならない。
+ *
+ * **ただし記録の画面には出さない**（#280）。利用者が書いた発言ではないため、
+ * `AUTO_REQUEST_PREFIX` から始めて `EntryList` が隠せるようにしてある。
  */
 export const MORNING_BRIEFING_REQUEST =
-  "（自動）おはよう。今日の予定・移動・天気と、部屋やシステム・支払い予定・放置しているセッション・確認待ちに気になることがないかを確かめて、今日の見通しを短くまとめて。";
+  `${AUTO_REQUEST_PREFIX}おはよう。今日の予定・移動・天気と、部屋やシステム・支払い予定・放置しているセッション・確認待ちに気になることがないかを確かめて、今日の見通しを短くまとめて。`;
+
+/**
+ * 通知を押して開いた相談の1通目（USER）に置く固定の文言。
+ *
+ * `POST /api/chat` の `buildConversationText()`（#79）は履歴の先頭がUSERであることを前提にしており、
+ * ASSISTANTから始まる履歴は先頭を落として渡す。ここはモデルを呼ばずに積む側の文面をそのまま
+ * 出す設計（#93「黙っている間の費用は0円」）なので、朝の見通し（`MORNING_BRIEFING_REQUEST`）
+ * のような「実際にモデルへ渡した依頼」ではなく、続けて話しかけたときにモデルが読む文脈として
+ * 置くだけの短い定型文にしてある。**記録の画面には出さない**（#280）ので、
+ * `AUTO_REQUEST_PREFIX` から始めて `EntryList` が隠せるようにしてある。
+ */
+export const URGENT_NOTICE_REQUEST = `${AUTO_REQUEST_PREFIX}急ぎのお知らせを教えて。`;
 
 /**
  * 朝の見通しで、繋いでいる外部サービスについて添える指示（#79）。

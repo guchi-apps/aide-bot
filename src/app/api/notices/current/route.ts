@@ -3,6 +3,7 @@ import { NextResponse, after } from "next/server";
 import { getCurrentUser } from "@/lib/auth-user";
 import { resolveChatter } from "@/lib/chatter";
 import { resolveNotice } from "@/lib/notices";
+import { nudgeFromNotice, nudgeFromTopic, nudgesSince } from "@/lib/nudge";
 import { refreshTopicsIfStale, topicsForBubble } from "@/lib/topics";
 
 /**
@@ -25,6 +26,11 @@ import { refreshTopicsIfStale, topicsForBubble } from "@/lib/topics";
  * 応答を返した後に走らせる**（`after()`）——1回27秒前後掛かるので応答の中で待つと吹き出しが
  * 止まって見え、この経路は「話す」画面から3分ごとに叩かれるので詰まったリクエストが積み上がる。
  * 走らせるかどうか（前回から1時間あいたか）は `refreshTopicsIfStale()` が決める。
+ *
+ * **秘書からの声かけ（#278）もここに相乗りさせている。** 取得口を増やさないのは上と同じ理由で、
+ * 「書く」画面（`use-nudge.ts`）もこの口を `?since=<ISO>` 付きで叩く。`since` が無い回
+ * （「話す」画面）では取り出しを省くが、**積むこと自体はどちらの画面から叩かれても行う**——
+ * 書き込む先は1本の記録で、どちらの画面から開いても同じ並びが見える。
  */
 
 export const dynamic = "force-dynamic";
@@ -32,9 +38,33 @@ export const dynamic = "force-dynamic";
 /** 生成はモデルを1回叩く。既定のタイムアウトでは足りないことがある。 */
 export const maxDuration = 60;
 
-export async function GET() {
+/**
+ * 「これより後の声かけ」の基準時刻。
+ *
+ * 画面側が持っている最後の声かけの時刻で、**読めない値・遠すぎる過去は受け付けない**
+ * ——1日以上眠っていたタブが戻ったときに、溜まった古い声かけを流れの末尾へまとめて
+ * 並べてしまう（`nudgesSince()` は古い方から返す）。
+ */
+const SINCE_LIMIT_MS = 24 * 60 * 60 * 1000;
+
+function parseSince(request: Request, now: Date): Date | null {
+  const value = new URL(request.url).searchParams.get("since");
+  if (!value) return null;
+
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return null;
+
+  const floor = now.getTime() - SINCE_LIMIT_MS;
+
+  return new Date(Math.max(at, floor));
+}
+
+export async function GET(request: Request) {
   const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ notice: null, chatter: [], topics: [] });
+  if (!user) return NextResponse.json({ notice: null, chatter: [], topics: [], nudges: [] });
+
+  const now = new Date();
+  const since = parseSince(request, now);
 
   const [notice, chatter, topics] = await Promise.all([
     resolveNotice(user.id),
@@ -42,8 +72,16 @@ export async function GET() {
     topicsForBubble(user.id),
   ]);
 
+  // 秘書からの声かけ（#278）。DBを引くだけでモデルは呼ばないので、応答の中で待ってよい。
+  // **用件（お知らせ）を先に見る**——積めた回は話題の側が見送る（用件の直後に雑談を続けない）。
+  // どちらも会話の最中（最新の発言から3分）は積まない。
+  await nudgeFromNotice(user.id, now);
+  await nudgeFromTopic(user.id, now);
+
+  const nudges = since === null ? [] : await nudgesSince(user.id, since);
+
   // アプリを開いたとき（＝この問い合わせ）を仕入れの起点にする。応答は待たせない。
   after(() => refreshTopicsIfStale(user.id));
 
-  return NextResponse.json({ notice, chatter, topics });
+  return NextResponse.json({ notice, chatter, topics, nudges });
 }

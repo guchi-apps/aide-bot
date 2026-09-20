@@ -86,7 +86,7 @@ function Entry({ entry }: { entry: ChatEntry }) {
     <div className="flex gap-3">
       <SecretaryAvatar />
       <div className="min-w-0 flex-1">
-        <SecretaryLabel time={entry.time} />
+        <SecretaryLabel time={entry.time} proactive={entry.proactive} />
         <Markdown>{entry.content}</Markdown>
         {entry.interrupted && <InterruptedNote />}
       </div>
@@ -103,11 +103,23 @@ export function SecretaryAvatar() {
  *
  * 返答がいつのものかは、日付の区切りだけでは朝の見通しと後の返答が見分けられない。生成中の
  * 枠（`ChatPanel` の考えています…）には渡さない——保存される前で、まだ時刻が無い。
+ *
+ * **秘書の側から話しかけた発言（#278）は名前を差し替える。** 頼んでいないのに現れる発言なので、
+ * 返答と同じ見た目だと「何に対する返事なのか」を探すことになる。流れの中で目に留まるよう、
+ * 地の文の名札ではなくaccentの小さな枠で出す。読み上げソフトには「秘書から話しかけました」と
+ * 伝える——見た目で読み取れる差（色と枠）が音では消えるため。
  */
-export function SecretaryLabel({ time }: { time?: string }) {
+export function SecretaryLabel({ time, proactive = false }: { time?: string; proactive?: boolean }) {
   return (
     <div className="mb-1 flex items-baseline gap-2 text-[0.6875rem] text-muted">
-      <span className="font-bold tracking-[0.08em]">秘書</span>
+      {proactive ? (
+        <span className="inline-flex items-center rounded-full bg-accent-surface px-2 py-0.5 font-bold tracking-[0.08em] text-accent">
+          秘書から
+          <span className="sr-only">話しかけました</span>
+        </span>
+      ) : (
+        <span className="font-bold tracking-[0.08em]">秘書</span>
+      )}
       {time && <time className="font-medium tracking-[0.02em] tabular-nums">{time}</time>}
     </div>
   );

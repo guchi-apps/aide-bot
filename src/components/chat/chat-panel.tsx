@@ -15,6 +15,7 @@ import { Markdown } from "./markdown";
 import type { ChatEntry, ChatToolCall } from "./types";
 import { SecretaryLine } from "./secretary-line";
 import { useChatStream } from "./use-chat-stream";
+import { useNudges, type NudgeMessage } from "./use-nudge";
 import { VoiceBar } from "./voice-bar";
 
 type Props = {
@@ -129,6 +130,35 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
     firstScrollRef.current = false;
     bottomRef.current?.scrollIntoView({ behavior, block: "end" });
   }, [entries, answer, status, voice.status]);
+
+  /**
+   * 秘書から話しかけてきた発言を流れの末尾へ足す（#278）。
+   *
+   * **同じidは二度足さない。** タブへ戻った回・問い合わせが重なった回に、同じ声かけが
+   * もう一度返ってくることがある（基準の時刻は最後に受け取ったぶんまでしか進まない）。
+   */
+  const onNudge = useCallback((nudges: NudgeMessage[]) => {
+    setEntries((previous) => {
+      const known = new Set(previous.map((entry) => entry.id));
+      const added = nudges
+        .filter((nudge) => !known.has(nudge.id))
+        .map<ChatEntry>((nudge) => ({
+          kind: "message",
+          id: nudge.id,
+          role: "ASSISTANT",
+          content: nudge.content,
+          proactive: true,
+          // 時刻は積まれた時刻から作る（#280）。`new Date()` で作ると、問い合わせの間隔
+          // （最大3分）ぶんだけ、再読み込みした後の表示とずれる。
+          time: jstTimeLabel(new Date(nudge.createdAt)),
+        }));
+
+      return added.length === 0 ? previous : [...previous, ...added];
+    });
+  }, []);
+
+  // 生成中は問い合わせも足し込みも見送る（順序の詳細は `use-nudge.ts`）。
+  useNudges(onNudge, status !== "idle");
 
   // 入力欄を中身の高さに合わせる。上限を超えたら中でスクロールさせる。
   useEffect(() => {

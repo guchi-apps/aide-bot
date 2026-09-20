@@ -27,6 +27,8 @@ import { recordApiUsage } from "@/lib/usage";
  * - **いま伝える価値が無ければ黙る。** `NOTICE_SKIP_TOKEN` を返した回は何も出さない
  * - **一度出したものは繰り返さない。** `shownAt` が入った行はもう候補にならない
  * - **未読が0件ならモデルを1回も叩かない。** 黙っている間の費用も、消費する枠も0
+ * - **選ばれた一言は記録にも残る**（#278。`nudgeFromNotice()`。`src/lib/nudge.ts`）。積むのは
+ *   この関数ではない——会話の最中は積まないので、**吹き出しへ出した回とは別の時点で積まれる**
  *
  * ## 選ばせる相手（#132）
  *
@@ -59,8 +61,13 @@ export const NOTICE_DISPLAY_TTL_MS = 60 * 60 * 1000;
 /** 1回の生成でモデルへ渡す候補の数。多すぎると選ぶ精度も入力の短さも失う。 */
 const MAX_CANDIDATES = 12;
 
-/** 急ぎのお知らせをPushで届けたときの `NotificationLog.kind`。 */
-const URGENT_NOTICE_KIND = "urgent-notice";
+/**
+ * 急ぎのお知らせをPushで届けたときの `NotificationLog.kind`。
+ *
+ * 声かけ（#278。`src/lib/nudge.ts`）も同じ鍵を読む——ここでPushした用件は#115が記録へ2通で
+ * 積んでいるので、声かけとして重ねない。
+ */
+export const URGENT_NOTICE_KIND = "urgent-notice";
 
 /**
  * 直近の生成の記録。**プロセス内にだけ持つ。**

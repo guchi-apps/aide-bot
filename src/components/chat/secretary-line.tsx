@@ -1,17 +1,23 @@
 "use client";
 
 import { OpenLink, noticeStamp } from "@/components/voice/speech-bubble";
-import { useBubbleLine } from "@/components/voice/use-notice";
+import { type BubblePayload, useBubbleRing } from "@/components/voice/use-notice";
 import { cn } from "@/lib/utils";
 
 /**
  * 「書く」画面で、入力欄の上に出る秘書の一言（#279）。
  *
- * **中身は「話す」画面の吹き出し（#93・#101・#144）と同じ輪**（`useBubbleLine()`）で、
+ * **中身は「話す」画面の吹き出し（#93・#101・#144）と同じ輪**（`useBubbleRing()`）で、
  * お知らせ・ひとりごと・話題が順に入れ替わる。形だけを、記録の流れの下に収まる1行にしてある。
  *
+ * **問い合わせはここでは持たない。** 声かけ（#278）の問い合わせ（`./use-nudge`）が同じ
+ * `/api/notices/current` を叩いており、その応答に輪の材料も全部載っているので、持ち主
+ * （`ChatPanel`）が受け取って `payload` で渡す。**ここで `useBubbleLine()` を呼ぶと、同じ口を
+ * 2本で叩く**——問い合わせ1回ごとに `auth.getUser()` の往復が増え、既定の画面で常にそうなる。
+ *
  * **#279で既定が「書く」になった以上、この出し先が無いと成り立たない。** `/api/notices/current`
- * を叩いているのはこの輪だけで、そこには
+ * を叩いていたのは「話す」画面の輪だけで（#278の声かけは `?since=` を付けて同じ口へ相乗りする）、
+ * そこには
  *
  * - お知らせの選定（#93。モデルが1件選んで言い直す）
  * - 待っている間のひとりごと（#101）
@@ -27,8 +33,8 @@ import { cn } from "@/lib/utils";
  *   25秒ごとに読み上げへ割り込むと、書いている手が止まる
  * - **面全体をリンクにしない**（#137）。押せるのは末尾の「開く」だけ
  */
-export function SecretaryLine() {
-  const line = useBubbleLine();
+export function SecretaryLine({ payload }: { payload: BubblePayload }) {
+  const line = useBubbleRing(payload);
 
   if (!line || line.kind === "call") return null;
 

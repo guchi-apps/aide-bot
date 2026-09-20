@@ -124,6 +124,10 @@ model Message {
   // ことを伝えるために持つ。本文へ注記を混ぜないのは、保存した文面をそのまま画面へ出すため。
   // USERの発言では常にfalse。
   interrupted Boolean     @default(false)
+  /// 秘書の側から話しかけた発言（#278）。利用者の依頼への返答ではなく、積まれた用件（#93）や
+  /// 仕入れた話題（#144）を秘書の言葉としてそのまま置いたもの。画面で「秘書から」の印を
+  /// 出すために持つ。USERの発言では常にfalse。
+  proactive   Boolean     @default(false)
 
   createdAt DateTime @default(now())
 
@@ -435,6 +439,9 @@ model Topic {
 
   /// 仕入れた時刻。同じ記事が仕入れ直されたら更新する（新しい順の並びで前へ戻す）。
   fetchedAt DateTime @default(now())
+  /// 秘書から話題として振った時刻（#278）。入っている＝もう振ったので、二度は振らない。
+  /// 吹き出し（#144）の候補からは外さない——あちらは回り続ける表示で、一度だけの枠ではない。
+  spokenAt  DateTime?
   createdAt DateTime @default(now())
 
   // 同じ記事を二重に溜めない。

@@ -3,6 +3,11 @@
 import { ArrowUp, Mic, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  type BubblePayload,
+  EMPTY_BUBBLE_PAYLOAD,
+  samePayload,
+} from "@/components/voice/use-notice";
 import { isStandalone, useVoiceConversation } from "@/components/voice/use-voice-conversation";
 import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
 import { jstTimeLabel } from "@/lib/day-key";
@@ -15,6 +20,7 @@ import { Markdown } from "./markdown";
 import type { ChatEntry, ChatToolCall } from "./types";
 import { SecretaryLine } from "./secretary-line";
 import { useChatStream } from "./use-chat-stream";
+import { useNudges, type NudgeMessage } from "./use-nudge";
 import { VoiceBar } from "./voice-bar";
 
 type Props = {
@@ -40,6 +46,8 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
   const [activity, setActivity] = useState<{ server: string; tool: string } | null>(null);
   // 声で話している最中か（#279）。入れ替わるのは入力欄のところだけで、記録の流れは残る。
   const [voiceOpen, setVoiceOpen] = useState(false);
+  // 秘書の一言（#279）の材料。問い合わせは声かけ（#278）の `useNudges()` が持っている。
+  const [bubble, setBubble] = useState<BubblePayload>(EMPTY_BUBBLE_PAYLOAD);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -129,6 +137,51 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
     firstScrollRef.current = false;
     bottomRef.current?.scrollIntoView({ behavior, block: "end" });
   }, [entries, answer, status, voice.status]);
+
+  /**
+   * 秘書から話しかけてきた発言を流れの末尾へ足す（#278）。
+   *
+   * **同じidは二度足さない。** タブへ戻った回・問い合わせが重なった回に、同じ声かけが
+   * もう一度返ってくることがある（基準の時刻は最後に受け取ったぶんまでしか進まない）。
+   */
+  const onNudge = useCallback((nudges: NudgeMessage[]) => {
+    setEntries((previous) => {
+      const known = new Set(previous.map((entry) => entry.id));
+      const added = nudges
+        .filter((nudge) => !known.has(nudge.id))
+        .map<ChatEntry>((nudge) => ({
+          kind: "message",
+          id: nudge.id,
+          role: "ASSISTANT",
+          content: nudge.content,
+          proactive: true,
+          // 時刻は積まれた時刻から作る（#280）。`new Date()` で作ると、問い合わせの間隔
+          // （最大3分）ぶんだけ、再読み込みした後の表示とずれる。
+          time: jstTimeLabel(new Date(nudge.createdAt)),
+        }));
+
+      return added.length === 0 ? previous : [...previous, ...added];
+    });
+  }, []);
+
+  /**
+   * 秘書の一言の材料を受け取る（#279）。同じ中身が返った回は入れ替えない（輪が作り直されて、
+   * いま出している一言の残り時間が毎回25秒に戻る。#101）。
+   */
+  const onBubble = useCallback((next: BubblePayload) => {
+    setBubble((previous) => (samePayload(previous, next) ? previous : next));
+  }, []);
+
+  /*
+   * 生成中は問い合わせも足し込みも見送る（順序の詳細は `use-nudge.ts`）。
+   *
+   * **声の往復も「生成中」に数える**（#279）。声で話した往復は `status` には現れない（別のフックが
+   * 持っている）ので、`voice.answering`（考えている・読み上げている最中）も見る。足さないと、
+   * 声の返答が保存されるまでのあいだに声かけが流れの末尾へ入り、画面の並びだけが実際の順序と
+   * 食い違う——#278が避けようとしている形そのもの。**聞き取り中は見送らない**（利用者の発言は
+   * 話し終えてから足すので、その前に入った声かけは保存の順とも一致する）。
+   */
+  useNudges(onNudge, status !== "idle" || voice.answering, onBubble);
 
   // 入力欄を中身の高さに合わせる。上限を超えたら中でスクロールさせる。
   useEffect(() => {
@@ -358,10 +411,11 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
       <div className="px-4 pb-4 pt-2 md:px-7 md:pb-5">
         {/*
           秘書の一言（#279）。お知らせ（#93）・ひとりごと（#101）・話題（#144）の輪を、
-          「話す」画面の吹き出しと同じ `useBubbleLine()` から出す。**既定が「書く」になった以上、
+          「話す」画面の吹き出しと同じ輪から出す（問い合わせは声かけ `useNudges()` の1本を使い回す。
+          同じ口を2本で叩かない）。**既定が「書く」になった以上、
           ここに出し先が無いとこの輪ごと——ニュースの仕入れの起点も含めて——動かなくなる。**
         */}
-        <SecretaryLine />
+        <SecretaryLine payload={bubble} />
 
         {/*
           声で話している間は、入力欄のところが音声バーに入れ替わる（#279）。記録の流れは

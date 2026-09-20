@@ -95,6 +95,18 @@ const DAY_SEEDS = [
     messages: [
       "今月の食費が予算より1万円ほど多い。どこを見ればいい？",
       "内訳を「外食」「中食（惣菜・弁当）」「自炊の材料費」の3つに割ってみてください。どれが伸びたかで打ち手が変わります。まとめて減らそうとすると続きません。",
+      // 秘書の側から話しかけた発言（#278）。**実際の声かけは仕入れた話題・積まれたお知らせが
+      // 無いと出ない**ので、「秘書から」の名札と出典のリンクが出ているかを画面から確かめる
+      // ためのダミーを1件だけ置いてある。本文の形は `withSourceLink()` の出力に揃えてある。
+      {
+        role: "ASSISTANT",
+        proactive: true,
+        content: [
+          "Node.jsの新しい長期サポート版が出たそうです。そろそろ更新を考えますか",
+          "",
+          "[Node.js 26がLTSに（Node.js）](<https://example.com/news/dev-node-lts>)",
+        ].join("\n"),
+      },
     ],
   },
   {
@@ -346,6 +358,9 @@ const TOPIC_SEEDS = [
     url: "https://example.com/news/dev-nepal",
     sourceName: "NHK",
     fetchedMinutesAgo: 300,
+    // すでに秘書から振ったぶん（#278）。**これが無いと「二度は振らない」を画面から確かめられない**
+    // ——全部が未振りだと、声かけが1件出たのが最新の1件なのか手当たり次第なのか分からない。
+    spokenMinutesAgo: 240,
   },
   // 期間（24時間）を過ぎたもの。一覧にも吹き出しにも出ない。
   {
@@ -409,11 +424,14 @@ async function main() {
     await db.message.createMany({
       data: seed.messages.map((message, index) => ({
         conversationId: conversation.id,
-        role: index % 2 === 0 ? "USER" : "ASSISTANT",
+        // 既定は利用者と秘書の交互。**秘書から話しかけた発言（#278）は交互にならない**ので、
+        // その1件だけ `role` を明示できるようにしてある。
+        role: (typeof message === "string" ? null : message.role) ?? (index % 2 === 0 ? "USER" : "ASSISTANT"),
         // createdAtが同一だと並び順が不定になるため、1分ずつずらす。
         createdAt: new Date(seed.startedAt.getTime() + index * 60_000),
         content: typeof message === "string" ? message : message.content,
         interrupted: typeof message === "string" ? false : message.interrupted === true,
+        proactive: typeof message === "string" ? false : message.proactive === true,
       })),
     });
 
@@ -743,9 +761,15 @@ async function main() {
   // 話題（#144）。同じURLは畳まれる。日付は投入日（日本時間）にしておく。
   const publishedOn = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo" }).format(now);
   for (const seed of TOPIC_SEEDS) {
-    const { fetchedMinutesAgo, ...rest } = seed;
+    const { fetchedMinutesAgo, spokenMinutesAgo, ...rest } = seed;
     const urlHash = createHash("sha256").update(seed.url).digest("hex");
-    const data = { ...rest, publishedOn, fetchedAt: new Date(now.getTime() - fetchedMinutesAgo * 60 * 1000) };
+    const data = {
+      ...rest,
+      publishedOn,
+      fetchedAt: new Date(now.getTime() - fetchedMinutesAgo * 60 * 1000),
+      // すでに秘書から振った話題（#278）。一覧にも吹き出しにも出るが、声かけには二度選ばれない。
+      spokenAt: spokenMinutesAgo ? new Date(now.getTime() - spokenMinutesAgo * 60 * 1000) : null,
+    };
 
     await db.topic.upsert({
       where: { userId_urlHash: { userId: user.id, urlHash } },

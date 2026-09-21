@@ -672,6 +672,17 @@ Claudeを呼ぶ場所は1つも無い**。移せるようになったのは#131�
 - **選び直すのは10分に1回まで。ただし、まだ一度も候補に入れていない急ぎ（`URGENT`）が
   積まれた回だけ1分まで詰める。** 画面側（`use-notice.ts`）は3分ごとに問い合わせるが、
   **そのほとんどはDBを引くだけで戻る**。頻度を上げてよいのはこの造りのため
+- **黙った回の後は、候補が変わらないかぎり10分おきにも呼ばない**（#227。判定は `notice-schedule.ts` の
+  `shouldGenerate()`）。以前は `NO_NOTICE` で黙った後も未読が1件でも残れば10分ごとに選び直しており、
+  同じ候補を同じ基準で見せ直すだけなのに1回約12,600トークンを使っていた（「話す」を開いている間は
+  1時間に最大6回）。黙った回（`LastRun.silent`）の後は、**前回の候補に入っていなかったお知らせが増えた・
+  前回から60分（`NOTICE_REFRESH_MS`）経った・時間帯（`chatter.ts` の `timeSlot()` と同じ区切り）が
+  変わった・候補の期限が60分／15分のしきい値を越えた**のどれかが起きるまで呼ばない。
+  **候補が減っただけ（期限切れ・出し終えた）では呼ばない**（減った側は前回すべて見せて黙られている）。
+  **前回が何かを選んだ回は絞らない**——選ばれなかった残りは順番待ちで、まだ一度も見せていないため、
+  従来どおり10分おきに進め、黙った回に当たった時点で止まる。急ぎ（1分）の割り込みは絞り込みの外。
+  期限のしきい値は「越えるたびに1回」で、残り60分以内の間ずっと呼ぶ形にはしていない。
+  判定は Prisma に触れない別ファイルへ出してあり、`test/notice-schedule.test.ts` が固定する
 - **一度出した行は二度と候補にならない**（`shownAt`）。`ingestNotice()` のupsertは
   出した行を未読へ戻さない。戻すと同じ話が何度でも吹き出しに出る
 - **モデルの返答は1行目が「番号（＋`URGENT`）」、2行目が吹き出しに出す文。**
@@ -1986,7 +1997,7 @@ CI専用のプレースホルダーでよい。
   `isInternalPath()` / `safeInternalPath()`・`safeNoticeUrl()`・`public/sw.js` の `safeTarget()`
   との一致・`historyWindowSkip()`・`readJsonObject()`（#262）・`parseNoticeInput()`
   （`notice-ingest.ts`）・`parseChoice()`（`notice-choice.ts`）・`removedFromSummary()`
-  （`summary-range.ts`。`deleteDay()` が畳んだ範囲から引く件数。#265）・`SampleSlot`
+  （`summary-range.ts`。`deleteDay()` が畳んだ範囲から引く件数。#265）・`shouldGenerate()`（`notice-schedule.ts`。お知らせ選定を呼び直す条件。#227）・`SampleSlot`
   （`sample-slot.ts`。試し聞きを止めたら持ち主へ知らせる約束。#279）・`buildAiUsageReport()` /
   `hasValidBearer()`（`ai-usage-report.ts`・`bearer-auth.ts`。使用量APIの組み立てとBearer検証。#297）・
   `pendingNoticeWhere()` ほか（`notice-conditions.ts`。お知らせの未読・表示中の条件。#229）・

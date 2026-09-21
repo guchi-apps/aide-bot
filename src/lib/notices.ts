@@ -7,6 +7,7 @@ import { appendSecretaryExchange, primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { parseChoice, type Choice } from "@/lib/notice-choice";
 import { currentNoticeWhere, isWithinShowWindow, pendingNoticeWhere } from "@/lib/notice-conditions";
+import { recordRun, shouldGenerate, type LastRun } from "@/lib/notice-schedule";
 import { safeNoticeUrl } from "@/lib/notice-url";
 import { sendPushToUser } from "@/lib/push/subscriptions";
 
@@ -37,18 +38,13 @@ import { sendPushToUser } from "@/lib/push/subscriptions";
  * 代わりに**Codexが自前の指示文を毎回前置きするので、入力は1回あたり約12,600トークン**
  * （うち約8,960はキャッシュ読み。実測）になった。40字の一言を書くための量としては大きいので、
  * 「未読が0件なら叩かない」「10分に1回まで」という上の歯止めは、これまでより効いている。
+ * **#227で、黙った回の後は候補が変わらないかぎり10分おきにも呼ばないようにした**
+ * （条件は `notice-schedule.ts`）。
  */
 
-/** 選び直す間隔。画面を開いている間、これより短い間隔ではモデルを呼ばない。 */
-export const NOTICE_INTERVAL_MS = 10 * 60 * 1000;
-
-/**
- * 急ぎが届いたときに、選び直しまで最低限あける間隔。
- *
- * 「急ぎならすぐに」を素直に書くと、急ぎが立て続けに積まれた回に何度も生成が走る。
- * まだ一度も候補に入れていない急ぎがあることを条件にしたうえで、さらにこの間隔で床を張る。
- */
-export const NOTICE_URGENT_INTERVAL_MS = 60 * 1000;
+// 選び直しの間隔と、呼び直すかどうかの判定は `notice-schedule.ts`（単体テストから読めるように
+// Prismaへ触れない別ファイルへ出してある。#227）。
+export { NOTICE_INTERVAL_MS, NOTICE_URGENT_INTERVAL_MS } from "@/lib/notice-schedule";
 
 /** 1回の生成でモデルへ渡す候補の数。多すぎると選ぶ精度も入力の短さも失う。 */
 const MAX_CANDIDATES = 12;
@@ -70,14 +66,9 @@ export const URGENT_NOTICE_KIND = "urgent-notice";
  *
  * `NOTICE_SKIP_TOKEN` で黙った回もここに残す。残さないと、黙った直後の問い合わせが
  * また生成を始めてしまい、**いちばん起こりやすい「知らせることが無い」場面で費用が
- * 10倍になる。**
+ * 10倍になる。** 黙った回は、候補が変わるまで（または60分・時間帯・期限のどれかが動くまで）
+ * 次を呼ばない（#227。`notice-schedule.ts`）。
  */
-type LastRun = {
-  at: number;
-  /** その回に候補として渡したお知らせのID。急ぎの取りこぼしを見分けるために持つ。 */
-  consideredIds: Set<string>;
-};
-
 const lastRuns = new Map<string, LastRun>();
 
 /** 積む側から受け取る1件ぶん。 */
@@ -247,28 +238,6 @@ async function currentNotice(userId: string, now: Date): Promise<CurrentNotice |
   };
 }
 
-/**
- * 生成を走らせてよいか。
- *
- * 通常は `NOTICE_INTERVAL_MS` に1回まで。ただし**まだ一度も候補に入れていない急ぎ**が
- * 積まれているときは、`NOTICE_URGENT_INTERVAL_MS` まで詰めて先に出す（「急ぎならすぐに」）。
- */
-function shouldGenerate(userId: string, pending: Notice[], now: Date): boolean {
-  if (pending.length === 0) return false;
-
-  const last = lastRuns.get(userId);
-  if (!last) return true;
-
-  const elapsed = now.getTime() - last.at;
-  if (elapsed >= NOTICE_INTERVAL_MS) return true;
-
-  const freshUrgent = pending.some(
-    (notice) => notice.priority === NoticePriority.URGENT && !last.consideredIds.has(notice.id),
-  );
-
-  return freshUrgent && elapsed >= NOTICE_URGENT_INTERVAL_MS;
-}
-
 /** モデルへ渡す候補の一覧。番号で選ばせるので、番号と本文の対応をそのまま書く。 */
 function candidateList(pending: Notice[], now: Date): string {
   const lines = pending.map((notice, index) => {
@@ -351,7 +320,7 @@ async function chooseNotice(userId: string, pending: Notice[], now: Date): Promi
 export async function resolveNotice(userId: string, now = new Date()): Promise<CurrentNotice | null> {
   const pending = await pendingNotices(userId, now);
 
-  if (!shouldGenerate(userId, pending, now)) {
+  if (!shouldGenerate(lastRuns.get(userId), pending, now)) {
     return currentNotice(userId, now);
   }
 
@@ -366,7 +335,7 @@ export async function resolveNotice(userId: string, now = new Date()): Promise<C
   }
 
   // 黙った回も「叩いた」ものとして残す。残さないと次の問い合わせでまた叩く。
-  lastRuns.set(userId, { at: now.getTime(), consideredIds: new Set(pending.map((n) => n.id)) });
+  lastRuns.set(userId, recordRun(pending, now, choice === null));
 
   if (!choice) return currentNotice(userId, now);
 

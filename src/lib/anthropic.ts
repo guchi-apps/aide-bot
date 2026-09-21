@@ -233,7 +233,7 @@ export const URGENT_NOTICE_REQUEST = `${AUTO_REQUEST_PREFIX}急ぎのお知ら�
  * **道具はまとめて一度に呼ばせる**（#183）。Codexへ渡す接続には
  * `supports_parallel_tool_calls=true` が付いている（`src/lib/codex.ts`）が、まとめるかどうかを
  * 決めるのはモデルなので、指示の側にも書く。順に呼ばれると**道具の数だけ往復が増え**、
- * 1回が9秒×6本ぶん伸びる（#131の実測）。
+ * 1回が9秒×10本ぶん伸びる（#131の実測。本数は#296でAIDEの分割に合わせて6本から増えた）。
  */
 function briefingServiceRules(labels: string[]): string[] {
   if (labels.length === 0) return [];
@@ -266,12 +266,16 @@ const BRIEFING_FORMAT_RULES = [
  * 判断できない）。触れるかどうかだけが条件で変わる。
  */
 const BRIEFING_MATERIAL_RULES = [
-  "予定・天気（aide_daily_briefing）、部屋（aide_room_status）、システム（aide_ops_status）、" +
-    "支払予定（aide_money_summary の fixedCosts）、放置しているセッション（aide_claude_sessions）、" +
+  "予定（aide_schedule。date を省くと今日）、天気（aide_weather）、" +
+    "部屋（aide_room_sensors・aide_aircon_status）、" +
+    "システム（aide_host_status・aide_uptime_monitors・aide_service_quotas）、" +
+    "支払予定（aide_fixed_costs の upcoming）、放置しているセッション（aide_claude_sessions）、" +
     "確認待ちの滞留（aide_dev_status の attention のうち 00.check-user）は、毎日すべて道具で確かめる",
   "予定・天気は毎日必ず本文に書く。それ以外は次の条件を満たしたときだけ本文で触れ、満たさなければ" +
     "道具で確かめていても本文では一切触れない",
-  "部屋・システムは problems に何か入っているときだけ",
+  // aide_weather の state が ok 以外は「予報を取れていない」で、そういう天気という意味ではない。
+  "天気は aide_weather の state が ok のときだけ書く。ok 以外の日は天気に触れない（雨や晴れと決めつけない）",
+  "部屋・システムは、それぞれの道具のどれかの problems に何か入っているときだけ",
   "支払予定は明日までに引き落とされるものがあるときだけ",
   "放置しているセッションは status が waiting かつ statusForMinutes が30分以上のものがあるときだけ",
   "確認待ちの滞留は1件以上あるときだけ",

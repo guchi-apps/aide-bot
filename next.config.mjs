@@ -1,6 +1,10 @@
-import type { NextConfig } from "next";
+// @ts-check
 
-const nextConfig: NextConfig = {
+// TypeScript（next.config.ts）にしない。本番の `next start` は .ts の設定ファイルを
+// トランスパイルするためにSWCのネイティブバイナリを読み込み、そのまま常駐して
+// メモリとスレッドを食う。.mjs なら読み込まれない（ops-dashboard#291・#304、aide-bot#291）。
+/** @type {import("next").NextConfig} */
+const nextConfig = {
   // スマートフォンからは <IP>.sslip.io か Tailscale の <ホスト>.ts.net で開く。
   // IPは変わりうるためホスト名を直書きしない。
   //

@@ -125,7 +125,7 @@ ChatGPTのスケジュールから情報を登録する方法は [docs/chatgpt-m
   # → iPhoneのSafariで https://subpc.<tailnet>.ts.net/ を開く
   ```
 
-  `next.config.ts` の `allowedDevOrigins` に `**.ts.net` が入っているので追加の設定は要らない。
+  `next.config.mjs` の `allowedDevOrigins` に `**.ts.net` が入っているので追加の設定は要らない。
   片付けるときは `tailscale serve --https=443 off`
 
 ## デプロイ

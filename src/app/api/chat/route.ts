@@ -443,6 +443,7 @@ export async function POST(request: Request) {
             await recordApiUsage({
               userId: user.id,
               conversationId: conversation.id,
+              feature: "chat",
               model,
               usage: result.usage,
             });

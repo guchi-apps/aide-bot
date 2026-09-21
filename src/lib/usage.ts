@@ -1,5 +1,7 @@
 import { MODEL_PRICING, billingKind, type BillingKind, type ModelPricing } from "@/lib/chat-model";
+import type { UsageGroup } from "@/lib/ai-usage-report";
 import { db } from "@/lib/db";
+import type { UsageFeature } from "@/lib/usage-feature";
 
 /**
  * APIの消費量（#51）。集計と表示の整形をここへ閉じる。
@@ -284,6 +286,47 @@ export async function dailyUsage(userId: string, days: number, now: Date): Promi
   });
 }
 
+/**
+ * 直近24時間・7日間を、機能×モデルに畳んで返す（#297。ops-dashboardの「アプリ別のAI利用」）。
+ *
+ * **全利用者ぶんの合計で、`userId` では絞らない。** 呼び出し元は利用者を持たない外部の
+ * サービス（Bearerだけで通る）で、知りたいのは「このアプリがどれだけ使ったか」。
+ *
+ * **24時間→7日間の順に、別々のクエリで引く。** 逆にすると、2本のあいだに積まれた行が24時間には
+ * 入るのに7日間には入らず、7日間が24時間を下回る。この順なら、後から引く7日間は必ず前者を含む。
+ * 境界は同じ `now` から作る。件数ぶんの行は持ち帰らず、DB側で畳んだグループだけを受け取る。
+ */
+export async function aiUsageGroups(now: Date): Promise<{ last24h: UsageGroup[]; last7d: UsageGroup[] }> {
+  const day = 24 * 60 * 60 * 1000;
+
+  const query = async (since: Date): Promise<UsageGroup[]> => {
+    const groups = await db.apiUsage.groupBy({
+      by: ["feature", "model"],
+      where: { createdAt: { gte: since } },
+      _count: { _all: true },
+      _sum: {
+        inputTokens: true,
+        outputTokens: true,
+        cacheWriteTokens: true,
+        cacheReadTokens: true,
+      },
+    });
+
+    return groups.map((group) => ({
+      feature: group.feature,
+      model: group.model,
+      calls: group._count._all,
+      inputTokens: group._sum.inputTokens ?? 0,
+      outputTokens: group._sum.outputTokens ?? 0,
+      cacheWriteTokens: group._sum.cacheWriteTokens ?? 0,
+      cacheReadTokens: group._sum.cacheReadTokens ?? 0,
+    }));
+  };
+
+  const last24h = await query(new Date(now.getTime() - day));
+  const last7d = await query(new Date(now.getTime() - 7 * day));
+  return { last24h, last7d };
+}
 
 // --- DBへの書き込み ---
 
@@ -305,6 +348,8 @@ export async function recordApiUsage(params: {
   userId: string;
   /** 相談に紐づかない経路（朝の見通し・お知らせ選定）は `null`。 */
   conversationId: string | null;
+  /** どの機能の呼び出しか（#297）。使用量APIが機能ごとに畳むのに使う。 */
+  feature: UsageFeature;
   model: string;
   usage: {
     inputTokens: number;
@@ -313,14 +358,14 @@ export async function recordApiUsage(params: {
     cacheReadTokens: number;
   };
 }): Promise<void> {
-  const { userId, conversationId, model, usage } = params;
+  const { userId, conversationId, feature, model, usage } = params;
 
   const total =
     usage.inputTokens + usage.outputTokens + usage.cacheWriteTokens + usage.cacheReadTokens;
   if (total <= 0) return;
 
   try {
-    await db.apiUsage.create({ data: { userId, conversationId, model, ...usage } });
+    await db.apiUsage.create({ data: { userId, conversationId, feature, model, ...usage } });
   } catch (error) {
     console.error("[aide-bot] 使用量の記録に失敗した", error);
   }

@@ -2,8 +2,9 @@ import { NoticePriority, Prisma } from "@prisma/client";
 
 import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
+import { NOTICE_DISPLAY_TTL_MS } from "@/lib/notice-conditions";
 import { safeNoticeUrl } from "@/lib/notice-url";
-import { NOTICE_DISPLAY_TTL_MS, URGENT_NOTICE_KIND } from "@/lib/notices";
+import { URGENT_NOTICE_KIND } from "@/lib/notices";
 import { quietEnough, topicNudgeDue, withSourceLink } from "@/lib/nudge-choice";
 import { TOPIC_LIFETIME_MS } from "@/lib/topics";
 

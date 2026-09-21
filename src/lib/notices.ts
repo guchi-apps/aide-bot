@@ -2,13 +2,13 @@ import { NoticePriority, type Notice } from "@prisma/client";
 
 import { noticeSystemPrompt, URGENT_NOTICE_REQUEST } from "@/lib/anthropic";
 import { NOTICE_MODEL } from "@/lib/chat-model";
-import { runCodexExec } from "@/lib/codex";
-import { primaryConversation } from "@/lib/day-log";
+import { runCodexRecorded } from "@/lib/codex-run";
+import { appendSecretaryExchange, primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { parseChoice, type Choice } from "@/lib/notice-choice";
+import { currentNoticeWhere, isWithinShowWindow, pendingNoticeWhere } from "@/lib/notice-conditions";
 import { safeNoticeUrl } from "@/lib/notice-url";
 import { sendPushToUser } from "@/lib/push/subscriptions";
-import { recordApiUsage } from "@/lib/usage";
 
 /**
  * お知らせの受け皿と、そこから1件を選んで吹き出しへ出す仕組み（#93）。**サーバー専用。**
@@ -49,14 +49,6 @@ export const NOTICE_INTERVAL_MS = 10 * 60 * 1000;
  * まだ一度も候補に入れていない急ぎがあることを条件にしたうえで、さらにこの間隔で床を張る。
  */
 export const NOTICE_URGENT_INTERVAL_MS = 60 * 1000;
-
-/**
- * 出した吹き出しを画面に残しておく時間。
- *
- * これを過ぎたものは「どうぞ、話しかけてください」へ戻す。**残し続けると、朝に選ばれた
- * お知らせが夜まで頭上に居座る**ことになり、いま知らせている内容だと誤解される。
- */
-export const NOTICE_DISPLAY_TTL_MS = 60 * 60 * 1000;
 
 /** 1回の生成でモデルへ渡す候補の数。多すぎると選ぶ精度も入力の短さも失う。 */
 const MAX_CANDIDATES = 12;
@@ -194,8 +186,7 @@ export async function ingestNotice(userId: string, input: NoticeInput): Promise<
 async function notifyUrgentNotice(userId: string, notice: Notice): Promise<void> {
   const now = new Date();
 
-  if (notice.showAt && notice.showAt > now) return;
-  if (notice.expiresAt && notice.expiresAt <= now) return;
+  if (!isWithinShowWindow(notice, now)) return;
 
   const existing = await db.notificationLog.findUnique({
     where: {
@@ -206,21 +197,7 @@ async function notifyUrgentNotice(userId: string, notice: Notice): Promise<void>
 
   const conversation = await primaryConversation(userId);
 
-  await db.$transaction([
-    db.message.createMany({
-      data: [
-        { conversationId: conversation.id, role: "USER", content: URGENT_NOTICE_REQUEST, createdAt: now },
-        // 同じ時刻だと並び順が不定になる。1秒ずらして返答を後ろに固定する（#79と同じ手当て）。
-        {
-          conversationId: conversation.id,
-          role: "ASSISTANT",
-          content: notice.body,
-          createdAt: new Date(now.getTime() + 1000),
-        },
-      ],
-    }),
-    db.conversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } }),
-  ]);
+  await appendSecretaryExchange(conversation.id, URGENT_NOTICE_REQUEST, notice.body, new Date());
 
   const delivered = await sendPushToUser(userId, {
     title: notice.title,
@@ -246,12 +223,7 @@ async function notifyUrgentNotice(userId: string, notice: Notice): Promise<void>
 /** まだ出していない、いま出せるお知らせ。急ぎ→新しい順。 */
 async function pendingNotices(userId: string, now: Date): Promise<Notice[]> {
   return db.notice.findMany({
-    where: {
-      userId,
-      shownAt: null,
-      OR: [{ showAt: null }, { showAt: { lte: now } }],
-      AND: [{ OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] }],
-    },
+    where: pendingNoticeWhere(userId, now),
     orderBy: [{ priority: "desc" }, { createdAt: "desc" }],
     take: MAX_CANDIDATES,
   });
@@ -260,11 +232,7 @@ async function pendingNotices(userId: string, now: Date): Promise<Notice[]> {
 /** いま吹き出しに出しておくもの。出してから時間が経ちすぎたものは返さない。 */
 async function currentNotice(userId: string, now: Date): Promise<CurrentNotice | null> {
   const shown = await db.notice.findFirst({
-    where: {
-      userId,
-      shownAt: { gt: new Date(now.getTime() - NOTICE_DISPLAY_TTL_MS) },
-      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-    },
+    where: currentNoticeWhere(userId, now),
     orderBy: { shownAt: "desc" },
   });
 
@@ -359,31 +327,16 @@ function buildNoticePrompt(pending: Notice[], now: Date): string {
  * すぐ叩き直しても結果は変わらないため。
  */
 async function chooseNotice(userId: string, pending: Notice[], now: Date): Promise<Choice | null> {
-  const result = await runCodexExec({
-    model: NOTICE_MODEL,
-    prompt: buildNoticePrompt(pending, now),
-    signal: AbortSignal.timeout(CODEX_TIMEOUT_MS),
-  });
-
   // 使った量は、読める形で返ってきたかに関わらず残す。**上限に掛かった回は`usage`がnullで
   // 行が作られない**——`turn.completed` が届いていないので、そこまでの消費量が分からない。
-  if (result.usage) {
-    await recordApiUsage({
-      userId,
-      conversationId: null,
-      feature: "notice",
-      model: NOTICE_MODEL,
-      usage: result.usage,
-    });
-  }
-
-  // 打ち切りは上限に掛かったときにしか起きない（この経路に利用者からの割り込みは無い）。
-  if (result.interrupted) {
-    throw new Error(`お知らせの選定が${CODEX_TIMEOUT_MS / 1000}秒で返らなかった`);
-  }
-  if (result.errorMessage) {
-    throw new Error(result.errorMessage);
-  }
+  const result = await runCodexRecorded({
+    userId,
+    feature: "notice",
+    label: "お知らせの選定",
+    model: NOTICE_MODEL,
+    prompt: buildNoticePrompt(pending, now),
+    timeoutMs: CODEX_TIMEOUT_MS,
+  });
 
   return parseChoice(result.text.trim(), pending.length);
 }

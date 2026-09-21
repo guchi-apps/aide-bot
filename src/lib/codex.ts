@@ -265,6 +265,25 @@ export type CodexResult = {
   usage: CodexUsage | null;
 };
 
+/**
+ * 上限時間の打ち切りと失敗を例外にする（#229）。
+ *
+ * **利用者からの割り込みが無い経路**（要約・朝の見通し・お知らせの選定・話題の仕入れ・自宅の
+ * 取り込み）向け。そこでは `interrupted` が立つのは `AbortSignal.timeout()` に掛かった回だけなので、
+ * 「上限に掛かった」として扱う。**相談（`/api/chat`）は使わない**——あちらは `interrupted` を
+ * 「遮られた返答」として保存に使い、失敗も例外ではなく画面へ返す。
+ *
+ * `label` は文言の主語（「朝の見通しの生成」など）。ログにはこの文字列がそのまま出る。
+ */
+export function throwIfCodexFailed(result: CodexResult, label: string, timeoutMs: number): void {
+  if (result.interrupted) {
+    throw new Error(`${label}が${timeoutMs / 1000}秒で返らなかった`);
+  }
+  if (result.errorMessage) {
+    throw new Error(result.errorMessage);
+  }
+}
+
 /** 中断で終わった回の結果。起動前に中断されていた回（#259）と、実行中に打ち切った回で同じ形を返す。 */
 function interruptedResult(): CodexResult {
   return { text: "", reply: "", messages: [], interrupted: true, errorMessage: null, usage: null };

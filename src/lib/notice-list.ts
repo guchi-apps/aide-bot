@@ -2,7 +2,7 @@ import { NoticePriority, type Notice } from "@prisma/client";
 
 import { db } from "@/lib/db";
 import { safeNoticeUrl } from "@/lib/notice-url";
-import { NOTICE_DISPLAY_TTL_MS } from "@/lib/notices";
+import { currentNoticeWhere, pendingNoticeWhere, waitingNoticeWhere } from "@/lib/notice-conditions";
 
 /**
  * 積まれたお知らせを見るための取り出し（#114）。**サーバー専用。**
@@ -90,11 +90,7 @@ function toRow(notice: Notice): NoticeRow {
  */
 async function currentRow(userId: string, now: Date): Promise<NoticeRow | null> {
   const shown = await db.notice.findFirst({
-    where: {
-      userId,
-      shownAt: { gt: new Date(now.getTime() - NOTICE_DISPLAY_TTL_MS) },
-      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-    },
+    where: currentNoticeWhere(userId, now),
     orderBy: { shownAt: "desc" },
   });
 
@@ -111,12 +107,7 @@ export async function noticeBoard(userId: string, now = new Date()): Promise<Not
 
     // 候補（`notices.ts` の `pendingNotices()` と同じ絞り込み・同じ並び）。
     db.notice.findMany({
-      where: {
-        userId,
-        shownAt: null,
-        OR: [{ showAt: null }, { showAt: { lte: now } }],
-        AND: [{ OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] }],
-      },
+      where: pendingNoticeWhere(userId, now),
       orderBy: [{ priority: "desc" }, { createdAt: "desc" }],
       take: SECTION_LIMIT,
     }),
@@ -124,12 +115,7 @@ export async function noticeBoard(userId: string, now = new Date()): Promise<Not
     // まだ出せないもの。候補からは外れているが、積まれていることは見えた方がよい
     // （「積んだはずなのに何も出ない」を画面で切り分けられる）。
     db.notice.findMany({
-      where: {
-        userId,
-        shownAt: null,
-        showAt: { gt: now },
-        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-      },
+      where: waitingNoticeWhere(userId, now),
       orderBy: { showAt: "asc" },
       take: SECTION_LIMIT,
     }),
@@ -172,12 +158,5 @@ export async function noticeBoard(userId: string, now = new Date()): Promise<Not
  * 「まだお伝えしていないお知らせがN件あります」と言う数を食い違わせない。
  */
 export async function pendingNoticeCount(userId: string, now = new Date()): Promise<number> {
-  return db.notice.count({
-    where: {
-      userId,
-      shownAt: null,
-      OR: [{ showAt: null }, { showAt: { lte: now } }],
-      AND: [{ OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] }],
-    },
-  });
+  return db.notice.count({ where: pendingNoticeWhere(userId, now) });
 }

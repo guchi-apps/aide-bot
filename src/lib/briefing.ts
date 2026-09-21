@@ -4,14 +4,13 @@ import {
   briefingSystemPrompt,
 } from "@/lib/anthropic";
 import { BRIEFING_MODEL } from "@/lib/chat-model";
-import { runCodexExec } from "@/lib/codex";
+import { runCodexRecorded } from "@/lib/codex-run";
 import { jstDayKey } from "@/lib/day-key";
-import { primaryConversation } from "@/lib/day-log";
+import { appendSecretaryExchange, primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { listConnectedServers, toCodexMcpServers } from "@/lib/mcp/connections";
 import { ingestNotice } from "@/lib/notices";
 import { countSubscriptions, sendPushToUser, usersWithSubscriptions } from "@/lib/push/subscriptions";
-import { recordApiUsage } from "@/lib/usage";
 
 /**
  * 秘書の方から知らせる「朝の見通し」（#79）。**サーバー専用。**
@@ -124,33 +123,18 @@ async function generateBriefing(userId: string): Promise<string> {
   // ここは利用者のいないところで動いており、登録の前に復唱して確かめる相手がいない。
   const { mcpServers } = toCodexMcpServers(servers, false);
 
-  const result = await runCodexExec({
-    model: BRIEFING_MODEL,
-    prompt: buildBriefingPrompt(servers.map((server) => server.label)),
-    signal: AbortSignal.timeout(CODEX_TIMEOUT_MS),
-    mcpServers,
-  });
-
   // 相談はまだ作っていないので conversationId は付けない（#51は「1呼び出し＝1行」で、
   // 相談への紐付けは任意）。**打ち切られた回は `usage` がnullで行が作られない**——
   // `turn.completed` が届いておらず、そこまでの消費量が分からないため（#133）。
-  if (result.usage) {
-    await recordApiUsage({
-      userId,
-      conversationId: null,
-      feature: "briefing",
-      model: BRIEFING_MODEL,
-      usage: result.usage,
-    });
-  }
-
-  // 打ち切りは上限に掛かったときにしか起きない（この経路に利用者からの割り込みは無い）。
-  if (result.interrupted) {
-    throw new Error(`朝の見通しの生成が${CODEX_TIMEOUT_MS / 1000}秒で返らなかった`);
-  }
-  if (result.errorMessage) {
-    throw new Error(result.errorMessage);
-  }
+  const result = await runCodexRecorded({
+    userId,
+    feature: "briefing",
+    label: "朝の見通しの生成",
+    model: BRIEFING_MODEL,
+    prompt: buildBriefingPrompt(servers.map((server) => server.label)),
+    timeoutMs: CODEX_TIMEOUT_MS,
+    mcpServers,
+  });
 
   // **`text` ではなく `reply` を読む**（#131）。道具を呼んだ回は「確認します」のような前置きが
   // 別の `agent_message` として先に届くので、`text`（全部の連結）を通知の本文にすると
@@ -268,22 +252,7 @@ async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
   // `now` のまま。
   const savedAt = new Date();
 
-  await db.$transaction([
-    db.message.createMany({
-      data: [
-        { conversationId: conversation.id, role: "USER", content: MORNING_BRIEFING_REQUEST, createdAt: savedAt },
-        // 同じ時刻だと並び順が不定になる。1秒ずらして返答を後ろに固定する。
-        {
-          conversationId: conversation.id,
-          role: "ASSISTANT",
-          content: text,
-          createdAt: new Date(savedAt.getTime() + 1000),
-        },
-      ],
-    }),
-    // 最後に話した時刻（#101のひとりごとが読む）。発言を足しただけでは動かない。
-    db.conversation.update({ where: { id: conversation.id }, data: { updatedAt: savedAt } }),
-  ]);
+  await appendSecretaryExchange(conversation.id, MORNING_BRIEFING_REQUEST, text, savedAt);
 
   const delivered = await sendPushToUser(userId, {
     title: BRIEFING_TITLE,

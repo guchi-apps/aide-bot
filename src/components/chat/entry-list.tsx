@@ -1,5 +1,7 @@
 "use client";
 
+import { memo } from "react";
+
 import { AppIcon } from "@/components/brand/app-icon";
 import { isAutoRequest } from "@/lib/auto-request";
 import { dayHeading } from "@/lib/day-key";
@@ -24,7 +26,7 @@ import type { ChatEntry } from "./types";
  * あり、モデルへ渡す履歴にも入る。**日付の区切りは隠した後の並びで判定する**——隠す前の並びで
  * 見ると、隠した発言が日の最初だった日は、区切りが最初に見える発言へ付かなくなる。
  */
-export function EntryList({
+function EntryListView({
   entries: allEntries,
   todayKey,
 }: {
@@ -52,6 +54,15 @@ export function EntryList({
     </>
   );
 }
+
+/**
+ * `memo` で包んで、記録（`entries`）か今日の日付が変わったときだけ描き直す（#228）。
+ *
+ * 「書く」画面は声で話している間、聞き取りの途中経過（interim）のたびに描き直される。発言ごとに
+ * Markdownを組み直すこの並びまで巻き込むと、記録が長いほど詰まる。**`entries` は足したときに
+ * だけ作り直される配列なので、そのまま比べてよい。**
+ */
+export const EntryList = memo(EntryListView);
 
 /**
  * 日付の区切り。

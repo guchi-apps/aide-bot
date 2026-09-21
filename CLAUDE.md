@@ -257,7 +257,7 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
   マイグレーションが要るうえ、それ以前に積まれた依頼文が隠れないので採らなかった。
   **日付の区切りは隠した後の並びで判定する**（隠した発言が日の最初だと、区切りが付かなくなる）。
   **件数は隠したぶんも数えたまま**——左メニューの日ごとの件数と、今日への引き継ぎ
-  （`CARRY_OVER_MIN_ENTRIES`）。**「話す」画面の記録欄（`voice-panel.tsx`）はまだ隠していない**
+  （`CARRY_OVER_MIN_ENTRIES`）。**「話す」画面の記録欄（`src/components/voice/today-log.tsx`。#228で `voice-panel.tsx` から切り出した）はまだ隠していない**
 - **秘書の返答には日本時間の時刻を添える**（#280。`ChatMessage.time`・`jstTimeLabel()`）。
   過去に朝の見通しと後の返答を日付の区切りだけでは見分けられなかったため。自分の発言には付けない。
   送信直後に画面の中だけで足す返答は、ブラウザ側で `jstTimeLabel(new Date())` を付ける
@@ -505,7 +505,10 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
   1通目には `MORNING_BRIEFING_REQUEST`——実際にモデルへ渡している依頼そのもの——を入れてあるので、
   画面に出しても嘘にならない。**ただし#280から「書く」画面と過去の日の画面には出さない**
   （利用者が書いた発言ではなく、自分が言ったことのように見えるため）。**USERで積む理由は
-  モデルへ渡す履歴のためとして残っている**——隠すのは表示だけで、DBにも履歴にも入っている
+  モデルへ渡す履歴のためとして残っている**——隠すのは表示だけで、DBにも履歴にも入っている。
+  **この2通と `Conversation.updatedAt` の更新は `appendSecretaryExchange()`（`src/lib/day-log.ts`）
+  が受け持つ**（#229。急ぎのお知らせ #115 と共通）。時刻は書き込む直前に取った値を渡す（#261）。
+  声かけ（#278）は `updatedAt` を進めない扱いなのでここを通さない
 - **材料はすべてAIDE（MCP）から取る。** aide-botはMCPクライアントを実装していないので、
   繋いでいる接続が0件なら書けるものが何も無い。**API呼び出しの前に諦める**（費用だけ掛かって
   中身が空になる）
@@ -669,6 +672,17 @@ Claudeを呼ぶ場所は1つも無い**。移せるようになったのは#131�
 - **選び直すのは10分に1回まで。ただし、まだ一度も候補に入れていない急ぎ（`URGENT`）が
   積まれた回だけ1分まで詰める。** 画面側（`use-notice.ts`）は3分ごとに問い合わせるが、
   **そのほとんどはDBを引くだけで戻る**。頻度を上げてよいのはこの造りのため
+- **黙った回の後は、候補が変わらないかぎり10分おきにも呼ばない**（#227。判定は `notice-schedule.ts` の
+  `shouldGenerate()`）。以前は `NO_NOTICE` で黙った後も未読が1件でも残れば10分ごとに選び直しており、
+  同じ候補を同じ基準で見せ直すだけなのに1回約12,600トークンを使っていた（「話す」を開いている間は
+  1時間に最大6回）。黙った回（`LastRun.silent`）の後は、**前回の候補に入っていなかったお知らせが増えた・
+  前回から60分（`NOTICE_REFRESH_MS`）経った・時間帯（`chatter.ts` の `timeSlot()` と同じ区切り）が
+  変わった・候補の期限が60分／15分のしきい値を越えた**のどれかが起きるまで呼ばない。
+  **候補が減っただけ（期限切れ・出し終えた）では呼ばない**（減った側は前回すべて見せて黙られている）。
+  **前回が何かを選んだ回は絞らない**——選ばれなかった残りは順番待ちで、まだ一度も見せていないため、
+  従来どおり10分おきに進め、黙った回に当たった時点で止まる。急ぎ（1分）の割り込みは絞り込みの外。
+  期限のしきい値は「越えるたびに1回」で、残り60分以内の間ずっと呼ぶ形にはしていない。
+  判定は Prisma に触れない別ファイルへ出してあり、`test/notice-schedule.test.ts` が固定する
 - **一度出した行は二度と候補にならない**（`shownAt`）。`ingestNotice()` のupsertは
   出した行を未読へ戻さない。戻すと同じ話が何度でも吹き出しに出る
 - **モデルの返答は1行目が「番号（＋`URGENT`）」、2行目が吹き出しに出す文。**
@@ -781,10 +795,16 @@ Claudeを呼ぶ場所は1つも無い**。移せるようになったのは#131�
   モデルを呼ばず、`shownAt` も書かない。**書くのは `resolveNotice()` の1か所のまま**——
   一覧を開いただけで候補が消費されると、吹き出しに出るはずだったお知らせが画面を見た人にだけ
   届いて終わる
-- **取り出しの条件は `notices.ts` の `pendingNotices()` / `currentNotice()` と揃える。**
-  ずらすと「一覧には出ているのに候補に入らない」お知らせができ、原因が画面側かモデル側かを
-  切り分けられなくなる。左メニューの未読の件数も同じ条件で数える（`chatter.ts` が
-  「まだお伝えしていないお知らせがN件あります」で使っている数と食い違わせない）
+- **取り出しの条件は `src/lib/notice-conditions.ts` の1か所に閉じてある**（#229）。
+  `pendingNoticeWhere()`（未読でいま出せる）・`waitingNoticeWhere()`（未読だが `showAt` がまだ先）・
+  `currentNoticeWhere()`（いま吹き出しに出ている）が `Prisma.NoticeWhereInput` を返し、秘書の選定
+  （`notices.ts`）・この画面（`notice-list.ts`）・左メニューの件数・ひとりごとの件数（`chatter.ts`）が
+  同じ関数を通る。以前は4か所に手書きで複製していた。**条件を変えるときはこのファイルだけを直す**
+  ——ずれると「一覧には出ているのに候補に入らない」お知らせができ、原因が画面側かモデル側かを
+  切り分けられなくなる。**手元の1件に当てる `isWithinShowWindow()`（急ぎのPush）も同じ
+  ファイル**にある。`NOTICE_DISPLAY_TTL_MS` もここ（循環importを避けるため `notices.ts` から
+  移した）。Prismaは型だけをimportする純粋なモジュールで、`test/notice-conditions.test.ts` が
+  条件の意味（境目・重ならないこと・JS側との一致）を固定する
 - **`showAt` がまだ来ていないものは候補から外れるが、一覧には出す。** 出さないと
   「積んだはずなのに何も出ない」を画面から切り分けられない。期限切れも同じ理由で別の欄に置く
   ——**読まれずに消えたことが分かるのはここだけ**
@@ -907,6 +927,18 @@ Anthropic（従量課金）で、**#183以降に積まれるのは前者だけ**
   届いた回にしか `usage` を載せないので、**行そのものを作らない**（推定で埋めない）
 - **使用量の記録に失敗しても相談は止めない。** `ApiUsage` の書き込みは独立したtry/catchに置き、
   失敗はログにだけ残す（記録できないことより、返答が返らないことの方が重い）
+- **Codexを呼ぶ経路は `src/lib/codex-run.ts` を通す**（#229）。相談以外の5経路（要約・朝の見通し・
+  お知らせの選定・話題・自宅の取り込み）は `runCodexRecorded()` が「呼ぶ → 使用量を残す →
+  打ち切り・失敗を投げる」までを行う。違いは引数（`feature`・`label`・`model`・`timeoutMs`）と、
+  投げられたものをどう扱うかだけで、後者は呼び出し側に残してある（要約は `false` を返し、
+  お知らせ選定は `lastRuns` を更新せず戻り、朝の見通しはその日の記録を残さない）。
+  **使用量は失敗より先に残す**（読めない形で返ってきた回も量は使い終わっている）。**新しい経路を
+  足すときは `runCodexExec()` を直接呼ばず、ここを通す**——記録の書き忘れを塞ぐ。**相談
+  （`/api/chat`）は対象外**で、`interrupted` を「遮られた返答」の保存に使い、失敗も例外ではなく
+  画面へ返すため `runCodexExec()` を直接呼ぶ。記録だけは同じ `recordCodexUsage()` を使う。
+  打ち切り・失敗の判定（`throwIfCodexFailed()`）はDBに触れない純粋な関数で `codex.ts` にあり、
+  `test/codex-failure.test.ts` が文言を固定する（ログにそのまま出る）。**プロンプトの文面は
+  この関数の外で組み立てて渡す**——1文字でも変わるとCodexのキャッシュが一度外れる
 - **単価表は `src/lib/chat-model.ts` の `MODEL_PRICING`**（#71で `src/lib/usage.ts` から移した。
   モデルを選ぶ画面がクライアントコンポーネントで、単価をバッジに出すため）。**#183以降に
   引かれるのは移行前の記録だけ**になったが、呼び出した時点のモデル名で引き直すため、
@@ -1399,6 +1431,47 @@ ops-dashboardの「アプリ別のAI利用」（ops-dashboard#325）が、`GET /
   （外から止められた回に固まる）。手元では、合成に20秒かかるスタブENGINE（`/version`・
   `/audio_query`・`/synthesis` だけ返し、CORSを開ける）をlocalStorageの `engineUrl` へ入れ、
   「試し聞き」を押して合成待ちのままマイク／「読み上げを止める」を押すと再現できる
+
+### 描き直しと読み込みを減らす（#228）
+
+**「話す」も「書く」の音声バーも、聞き取りの途中経過（interim）と返答の差分のたびに親が描き直される**
+（`useVoiceConversation()` の `heard` などがstateのため）。以前は、そのたびにロボット・吹き出し・
+今日の記録・声の設定まで巻き込んでいた。#228で次の3つを入れた。
+
+- **返答の差分は `useThrottledText()`（`src/components/chat/use-throttled-text.ts`）で60msに1回へ
+  間引く。** 「書く」が持っていた仕組みを共通にした（「話す」は間引かずに `setReply` していた）。
+  文字の往復は `push(delta)`、声の往復（全文で届く）は `set(full)`、往復の終わりで最後の差分を
+  残さないなら `flush()`、次の往復の頭で消すなら `reset()`。返す関数の参照は変わらない
+- **`Robot`・`SpeechBubble`・`VoiceSettingsPanel`・`TodayLog`・`EntryList` は `memo` で包んである。
+  渡す関数・オブジェクトは参照を保つこと**——`useCallback` かstateの更新関数（`setNotice` など）。
+  描画のたびに作るアロー関数（`onClose={() => …}`）を渡すと `memo` が毎回外れ、何も言わずに
+  元へ戻る。`SpeechBubble` は `key` で中身が変わるたびに作り直して出てくる動き（`bubble-pop`）を
+  再生する作りなので、`line` に描くたびに作り直した値を渡すと動きが頭から再生され続ける
+- **`useLocalEntries()`（`use-local-entries.ts`）が、画面の中だけで足す記録の組み立てを持つ。** 「話す」
+  「書く」が別々に書いていた `local-user-<件数>` / `local-assistant-<件数>` のid・返答の時刻（#280）・
+  `interrupted` の印を寄せた。**`turnRef`（#48の順序）は共通にしていない**——文字の往復の側
+  （`ChatPanel`。声の往復が走っていれば畳んで待つ）と声の往復の側（`useVoiceConversation()`）で
+  待つ相手が違い、束ねると、iOSの実機でしか出ない順序の回帰（#155・#164・#205）を入れやすい
+- **「話す」の記録欄は `TodayLog`（`voice/today-log.tsx`）で、`EntryList` とは別に持っている。** 幅（300px）・
+  文字の大きさ・秘書の側が積んだ依頼文を隠すか（#280。こちらは隠していない）が違う。1つにまとめる
+  なら、隠す扱いも決めてから
+- **`conversation-view.tsx` は両パネルを `next/dynamic` で読む。** 使わないモードのぶんを最初に
+  読み込まない。**SSRは切っていない**（`ssr: false` だと開いた直後が空白になる）ので、最初のHTMLは
+  今のモードで描かれ、そのモードのチャンクだけが添えられる。切り替えたときだけもう一方を取りに行く
+  （読み込む間は枠だけを出す）。実測（`pnpm build:ci`・`(chat)/page` の初回のクライアントJS）は
+  284,656B → 74,158B。react-markdown（約144KB）は「書く」のときだけ、ロボット・吹き出し・声の全画面は
+  「話す」のときだけ後から読まれる。**音声の往復（`useVoiceConversation()`）は「書く」の音声バーも
+  使うので、どちらのモードでも読まれる**——既定が「書く」の端末での削減は小さく（ロボットのSVG・
+  吹き出し・全画面の見た目ぶん）、大きく効くのは「話す」を開いた側
+- **描き直しを数えて確かめるには、偽の `SpeechRecognition`（「聞き取りをマイク無しで確かめる」）に
+  インスタンスを公開させ、`onresult` を手で1つずつ流す。** タイマーで自動で流すと、CDPの
+  ポーリングとの前後で拾えない。各コンポーネントの先頭へ一時的にカウンタを足して差分を読む
+  （**開発ではStrict Modeで1回の描画が2回数えられる**。終わったら外す）。interim 1回ごとに
+  `VoicePanel` は描き直されるが、`Robot`・`SpeechBubble`・`TodayLog` は増えない（最初のinterimの
+  `Robot` は `reacting` の変化で正当に1回変わる）
+- **iOSの実機では確かめていない。** 聞き取りの状態の移り変わり（`beginListeningRef` ほか）には
+  触れておらず、変えたのは画面への反映（stateの持ち方と `memo`）だけ。それでも、`Robot` の
+  `reacting`・`SpeechBubble` の作り直しは実機の見た目に出るので、`pnpm dev:https` で見ておくこと
 
 ### 「書く」画面の秘書の一言（#279）
 
@@ -1965,9 +2038,11 @@ CI専用のプレースホルダーでよい。
   `isInternalPath()` / `safeInternalPath()`・`safeNoticeUrl()`・`public/sw.js` の `safeTarget()`
   との一致・`historyWindowSkip()`・`readJsonObject()`（#262）・`parseNoticeInput()`
   （`notice-ingest.ts`）・`parseChoice()`（`notice-choice.ts`）・`removedFromSummary()`
-  （`summary-range.ts`。`deleteDay()` が畳んだ範囲から引く件数。#265）・`SampleSlot`
+  （`summary-range.ts`。`deleteDay()` が畳んだ範囲から引く件数。#265）・`shouldGenerate()`（`notice-schedule.ts`。お知らせ選定を呼び直す条件。#227）・`SampleSlot`
   （`sample-slot.ts`。試し聞きを止めたら持ち主へ知らせる約束。#279）・`buildAiUsageReport()` /
-  `hasValidBearer()`（`ai-usage-report.ts`・`bearer-auth.ts`。使用量APIの組み立てとBearer検証。#297）。**PrismaやSupabaseへ触れる
+  `hasValidBearer()`（`ai-usage-report.ts`・`bearer-auth.ts`。使用量APIの組み立てとBearer検証。#297）・
+  `pendingNoticeWhere()` ほか（`notice-conditions.ts`。お知らせの未読・表示中の条件。#229）・
+  `throwIfCodexFailed()`（`codex.ts`。Codexの打ち切り・失敗の文言。#229）。**PrismaやSupabaseへ触れる
   モジュールはimportしない**（テストからDBへ繋がない）。**DBに触れるモジュールの中にある計算を
   テストしたいなら、純粋な関数として別ファイルへ切り出す**（#265で `parseChoice()` を
   `notices.ts` から、`removedFromSummary()` を `day-log.ts` から出した。`deleteDay()` 本体

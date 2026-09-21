@@ -1,9 +1,8 @@
 import { compactSystemPrompt } from "@/lib/anthropic";
 import { COMPACT_MODEL } from "@/lib/chat-model";
-import { runCodexExec } from "@/lib/codex";
+import { runCodexRecorded } from "@/lib/codex-run";
 import { selectFoldable } from "@/lib/compact-budget";
 import { db } from "@/lib/db";
-import { recordApiUsage } from "@/lib/usage";
 
 /**
  * 連続セッションの古い発言を要約へ畳む（#157のcompact）。**サーバー専用。**
@@ -121,31 +120,17 @@ export async function compactIfNeeded(conversationId: string, userId: string): P
     // まま残り、次の往復で続きから畳まれる。
     const folded = selectFoldable(messages);
 
-    const result = await runCodexExec({
+    // 打ち切り・失敗は投げられ、下の `catch` が「記録の要約に失敗した」としてログに残して
+    // `false` を返す（次の往復で続きから畳み直せる）。
+    const result = await runCodexRecorded({
+      userId,
+      conversationId,
+      feature: "compact",
+      label: "記録の要約",
       model: COMPACT_MODEL,
       prompt: buildPrompt(summary, folded.text),
-      signal: AbortSignal.timeout(CODEX_TIMEOUT_MS),
+      timeoutMs: CODEX_TIMEOUT_MS,
     });
-
-    if (result.usage) {
-      await recordApiUsage({
-        userId,
-        conversationId,
-        feature: "compact",
-        model: COMPACT_MODEL,
-        usage: result.usage,
-      });
-    }
-
-    // 打ち切りは上限に掛かったときにしか起きない（この経路に利用者からの割り込みは無い）。
-    if (result.interrupted) {
-      console.error(`[aide-bot] 記録の要約が${CODEX_TIMEOUT_MS / 1000}秒で返らなかった`);
-      return false;
-    }
-    if (result.errorMessage) {
-      console.error("[aide-bot] 記録の要約に失敗した", result.errorMessage);
-      return false;
-    }
 
     const text = result.text.trim();
     if (text === "") return false;

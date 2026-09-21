@@ -486,8 +486,9 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
   作ると、UTCで動く環境では日付の境目だけがずれて同じ日に2本出る
 - **抑制は生成の前に見る。** cronが二重に登録されていても、2回目はAPIを1回も叩かずに戻る
 - **知らせることが無ければ黙る。** モデルが `BRIEFING_SKIP_TOKEN`（`NO_BRIEFING`）だけを返した回は
-  通知も相談も作らず、記録だけ残す。**黙れることがモデルを通す唯一の理由**——`aide_daily_briefing` は
-  構造化JSONを返すので、定型文で組み立てるだけならAPI費用は0円で済む
+  通知も相談も作らず、記録だけ残す。**黙れることがモデルを通す唯一の理由**——材料の道具
+  （`aide_schedule`・`aide_weather` ほか）は構造化JSONを返すので、定型文で組み立てるだけなら
+  API費用は0円で済む
 - **生成に失敗した日は記録を残さない。** 残すと、直った後に叩き直しても抑制が効いてその日は
   二度と届かなくなる
 - **通知の失敗で他を巻き込まない。** `sendPushToUser()` は例外を外へ出さず、1人が失敗しても
@@ -510,8 +511,10 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
   中身が空になる）
 - **材料が増えるほど「毎日書く」と「条件を満たした日だけ触れる」を分ける**（#116）。
   200文字の上限（`BRIEFING_FORMAT_RULES`）は材料が増えても変えていないため、全部を毎日
-  書ける余地は無い。予定・天気（`aide_daily_briefing`）だけは毎日必ず書き、部屋・システムは
-  `problems` が空でないとき、支払予定（`aide_money_summary` の `fixedCosts`）は明日までに
+  書ける余地は無い。予定（`aide_schedule`）・天気（`aide_weather`）だけは毎日必ず書き（天気は `state` が
+  `ok` の日だけ）、部屋（`aide_room_sensors`・`aide_aircon_status`）・システム
+  （`aide_host_status`・`aide_uptime_monitors`・`aide_service_quotas`）はどれかの
+  `problems` が空でないとき、支払予定（`aide_fixed_costs` の `upcoming`）は明日までに
   引き落とされるものがあるとき、放置しているセッション（`aide_claude_sessions`）は
   `status: waiting` かつ `statusForMinutes` が30分以上のとき、確認待ちの滞留
   （`aide_dev_status` の `attention` のうち `00.check-user`）は1件以上のときだけ触れる
@@ -521,8 +524,12 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
   依頼文はそのまま相談の1通目として画面に出るため、「30分以上」のような技術的な詳細を
   持ち込みたくない。依頼文には材料の名前（支払い予定・放置しているセッション・確認待ち）だけを
   自然な日本語で足してある
-- **道具は6本（予定・天気、部屋、システム、支払予定、放置セッション、確認待ち）。**
-  #116で4本から増やした。**#183でCodexへ移ったので `MAX_TURNS`（`pause_turn` の頼み直し）は
+- **道具は10本（予定、天気、部屋2本、システム3本、支払予定、放置セッション、確認待ち）。**
+  #116で4本、#296で6本から増やした。**#296はAIDE#373（MCPツールを「1つの問い」ごとに分け直した）への
+  追従**で、`aide_daily_briefing`・`aide_room_status`・`aide_ops_status`・`aide_money_summary` は
+  AIDE側に無い。**呼び出しが増えても抑制は変わらない**——1日1本の判定（`NotificationLog`）も
+  `BRIEFING_SKIP_TOKEN` も生成の**前後**で見ており、道具の本数に依存しない。呼ぶ道具を足すときは
+  AIDEの `main` に載っていることを確かめてから（先に直すと、無い道具を呼んで空の見通しになる）。**#183でCodexへ移ったので `MAX_TURNS`（`pause_turn` の頼み直し）は
   消えている**——往復の管理はCodex側の仕事になった
 - **モデルは `BRIEFING_MODEL`（`src/lib/chat-model.ts`）。** 設定の画面からは選べない——選ぶ主体が
   居ない場面で使うためCookieを読めない。プロンプトキャッシュも効かない（1日1回では保持時間の
@@ -564,7 +571,7 @@ Claudeを呼ぶ場所は1つも無い**。移せるようになったのは#131�
   繋ぎ先を作り、`runCodexExec()` を1回呼び、`usage` → `interrupted` → `errorMessage` の順に見る。
   **読むのは `result.reply`（`text` ではない）**——道具を呼んだ回は「確認します」の一言が別の
   `agent_message` として先に届くので、`text` を通知の本文にすると前置きごとロック画面へ出る（#131）
-- **材料の6本はまとめて一度に呼ばせる。** Codexへ渡す接続には `supports_parallel_tool_calls=true` が
+- **材料の10本はまとめて一度に呼ばせる。** Codexへ渡す接続には `supports_parallel_tool_calls=true` が
   付いている（`src/lib/codex.ts`）が、**まとめるかどうかを決めるのはモデル**なので、
   `briefingServiceRules()`（`src/lib/anthropic.ts`）にも「順に呼ばず一度にまとめて呼ぶ」を置いてある。
   順に呼ばれると道具1本あたり約9秒（#131の実測）ぶん往復が伸びる
@@ -1040,7 +1047,7 @@ Anthropic（従量課金）で、**#183以降に積まれるのは前者だけ**
 
 ## 自宅と暮らしの前提——Notionから取り込む（#167）
 
-**秘書は部屋の温度（AIDEの `aide_room_status`）は引けるのに、利用者がどこに住んでいるかを
+**秘書は部屋の温度（AIDEの `aide_room_sensors`）は引けるのに、利用者がどこに住んでいるかを
 知らなかった。** そのため天気や地域の話になると場所を聞き返す。Notionの「しおり」には住所・
 最寄り駅・座標・ゴミの収集曜日・契約しているインフラが揃っているので、それを覚え書きとして
 `User.homeProfile` へ取り込み、相談のプロンプトへ毎回載せる（`src/lib/home-profile.ts`）。
@@ -1083,7 +1090,7 @@ Anthropic（従量課金）で、**#183以降に積まれるのは前者だけ**
   ないので、AIDE側が道具を増減したらここも直す
 - **プリセットに無い接続（利用者が自分でURLを入れたもの）では何も出さない。** 把握していない
   ものを「できること」として並べると、繋げば何でも聞けるように読める
-- 天気は `aide_daily_briefing` が**今日と明日・自宅の地域ぶんだけ**返す。交通は未実装
+- 天気は `aide_weather` が**今日と明日・自宅の地域ぶんだけ**返す。交通は未実装
   （`guchi-apps/aide#33`）。この2つが「聞くと場所を聞かれる」の実際の中身
 
 ## 音声対話（話す / 書く）
@@ -1747,9 +1754,9 @@ AIDEのREADME「認可の分離」）。#184で足したのは、その道具を
   あると往復ごとにキャッシュ（#56）が切れる。日付だけなら1日1回で、自宅の覚え書き（#167）と
   同じ頻度に収まる
 - **接続先ごとのプロンプト指示は `MCP_PRESETS` の `hints`。** 繋いでいる接続のぶんだけ
-  `connectedServiceRules()` が並べる。`aide_schedule` と `aide_daily_briefing` は説明文に同じ
-  「今日の予定は」が書いてあるので、聞き方ではなく欲しいもの（予定・空き時間か、天気・交通込みの
-  見通しか）で呼び分けさせる。**道具の名前を書くのは、その道具が接続先に実在すると確かめてから**
+  `connectedServiceRules()` が並べる。`aide_daily_briefing` は無くなった（AIDE#373）ので、
+  「今日はどんな感じ」のように予定と天気の両方が要る問いは `aide_schedule` と `aide_weather` の
+  2本を呼ばせる（`aide_schedule` は天気を返さない）。**道具の名前を書くのは、その道具が接続先に実在すると確かめてから**
 - **予定の登録は、DaySpan（dayspan#550）→ AIDE（aide#243）→ aide-bot（#185）の順に口が
   作られ、#185でaide-botの配線も完了した。** DaySpanの `POST /api/events` はブラウザの
   セッションでしか叩けず、サーバー間用のAPIは読み取り（`GET /api/internal/schedule`）しか
@@ -1772,7 +1779,8 @@ AIDEのREADME「認可の分離」）。#184で足したのは、その道具を
 「道具が使えません」と答える回がある。** 実測（スタブMCP＋実物の `codex exec`・
 `gpt-5.6-sol`）で**音声モードは8回中5回**、文字モードは2回中0回。**道具は毎回モデルに
 見えていた**——スタブのログでは失敗した回も `initialize` と `tools/list` が成功しており、
-`tools/call` だけが無い。AIDE側も正常で、`aide_room_status` / `aide_ops_status` はどちらも
+`tools/call` だけが無い。AIDE側も正常で、`aide_room_status` / `aide_ops_status`（当時の名前。#296で
+`aide_room_sensors` ほかへ分割）はどちらも
 `complete: true` で値と最終測定時刻を返していた。
 
 - **「取れなかった」はモデルの作文で、接続の不具合ではない。** 呼ばずに済ませたうえで

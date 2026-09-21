@@ -50,12 +50,19 @@ scripts/          開発・デプロイ補助スクリプト
   更新され続け、`User` 行も残るので、ログイン時だけ見ていると**リストから外しても使い続けられる**。
   `getCurrentUser()` が引いた `User.email` に `isAllowedEmail()` を通してnullを返し（未ログイン扱い）、
   `src/lib/supabase/middleware.ts` が `getUser()` の `email` で同じ判定をして**セッションごと破棄**
-  （`signOut()`）して `/login?error=not_allowed` へ戻す。**片方だけにしないこと**——`getCurrentUser()`
+  （`signOutThisApp()`）して `/login?error=not_allowed` へ戻す。**片方だけにしないこと**——`getCurrentUser()`
   だけだと、ページが `/login` へ送り、middlewareが「ログイン済みは `/login` からトップへ」で送り返して
   リダイレクトが終わらない。開発用ログイン（Cookieバイパス）は対象外
 - ログイン・ログアウトの導線はクライアントJSに依存させない。開始は `/auth/signin`（Route Handlerが
   認可URLを組み立てて302）、ログアウトはフォームのPOSTで `/auth/signout`。
   ハイドレーション前でも押せるようにするため
+- **セッションを破棄するときは `signOutThisApp()`（`src/lib/supabase/sign-out.ts`）を通す**（#292）。
+  Supabaseは他アプリと共有のプロジェクトで、`supabase.auth.signOut()` を引数なしで呼ぶと既定の
+  `scope: "global"` になり、**同じユーザーの他アプリ・他端末のrefresh tokenまで失効する**。
+  `signOutThisApp()` は `scope: "local"`（いまのセッションだけ）を渡す。通常のログアウト
+  （`/auth/signout`）・許可外アカウントの破棄（`/auth/callback`・middleware）の3か所がこれを通る。
+  `test/sign-out.test.ts` が、`src/` に直接の `.signOut(` が残っていないことも確かめる。
+  **アカウント自体を削除する操作は無い**。作るなら、全セッションを終わらせる意図をその場で明示すること
 
 ### ログイン後の戻り先（`safeInternalPath()`。#140）
 

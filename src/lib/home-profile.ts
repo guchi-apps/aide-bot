@@ -9,7 +9,7 @@ import { recordApiUsage } from "@/lib/usage";
 /**
  * 自宅と暮らしの前提（#167）。**サーバー専用。**
  *
- * 秘書は「いまの部屋の温度」（AIDEの `aide_room_status`）は道具で引けるのに、**利用者が
+ * 秘書は「いまの部屋の温度」（AIDEの `aide_room_sensors`）は道具で引けるのに、**利用者が
  * どこに住んでいるかを知らない。** そのため天気や地域の話になると場所を聞き返す。
  * Notionの「しおり」には住所・最寄り駅・座標・ゴミの収集曜日・契約しているインフラが
  * 揃っているので、それを覚え書きとして取り込み、相談のプロンプトへ毎回載せる。
@@ -164,6 +164,7 @@ export async function refreshHomeProfile(userId: string, now = new Date()): Prom
     await recordApiUsage({
       userId,
       conversationId: null,
+      feature: "home_profile",
       model: HOME_PROFILE_MODEL,
       usage: result.usage,
     });

@@ -128,7 +128,13 @@ export async function compactIfNeeded(conversationId: string, userId: string): P
     });
 
     if (result.usage) {
-      await recordApiUsage({ userId, conversationId, model: COMPACT_MODEL, usage: result.usage });
+      await recordApiUsage({
+        userId,
+        conversationId,
+        feature: "compact",
+        model: COMPACT_MODEL,
+        usage: result.usage,
+      });
     }
 
     // 打ち切りは上限に掛かったときにしか起きない（この経路に利用者からの割り込みは無い）。

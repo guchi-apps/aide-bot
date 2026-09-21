@@ -113,6 +113,7 @@ jobs:
       VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
       BRIEFING_TRIGGER_TOKEN: ${{ secrets.BRIEFING_TRIGGER_TOKEN }}
       NOTICE_INGEST_TOKEN: ${{ secrets.NOTICE_INGEST_TOKEN }}
+      OPS_API_TOKEN: ${{ secrets.OPS_API_TOKEN }}
 
     steps:
       - name: Checkout code
@@ -240,6 +241,7 @@ jobs:
           VAPID_PRIVATE_KEY: ${{ env.VAPID_PRIVATE_KEY }}
           BRIEFING_TRIGGER_TOKEN: ${{ env.BRIEFING_TRIGGER_TOKEN }}
           NOTICE_INGEST_TOKEN: ${{ env.NOTICE_INGEST_TOKEN }}
+          OPS_API_TOKEN: ${{ env.OPS_API_TOKEN }}
           TARGET_DIR: ${{ env.TARGET_DIR }}
         with:
           host: ${{ env.HOST }}
@@ -247,7 +249,7 @@ jobs:
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: ${{ env.SSH_PORT }}
           # ここに無い変数はSSH先に存在しない。env: と同じ名前を必ず並べる。
-          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,ALLOWED_GOOGLE_EMAILS,VAPID_PUBLIC_KEY,VAPID_PRIVATE_KEY,BRIEFING_TRIGGER_TOKEN,NOTICE_INGEST_TOKEN,TARGET_DIR
+          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,ALLOWED_GOOGLE_EMAILS,VAPID_PUBLIC_KEY,VAPID_PRIVATE_KEY,BRIEFING_TRIGGER_TOKEN,NOTICE_INGEST_TOKEN,OPS_API_TOKEN,TARGET_DIR
           script: |
             set -euo pipefail
             cd "${TARGET_DIR}"
@@ -284,6 +286,9 @@ jobs:
             # お知らせの受け皿（#93）。空だと他アプリからの POST /api/notices が401で
             # 閉じたままになり、秘書の吹き出しに出るものが積まれない。
             update_env NOTICE_INGEST_TOKEN "$NOTICE_INGEST_TOKEN"
+            # ops-dashboardのアプリ別のAI利用（#297）。空だと GET /api/ai-usage が401で閉じた
+            # ままになり、ops-dashboardの画面はこのアプリを「取得不可」と出す。
+            update_env OPS_API_TOKEN "$OPS_API_TOKEN"
 
             echo "Installing production dependencies..."
             corepack enable pnpm >/dev/null 2>&1 || true

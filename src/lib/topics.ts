@@ -363,7 +363,13 @@ async function fetchTopics(userId: string, categories: TopicCategoryId[], now: D
   });
 
   if (result.usage) {
-    await recordApiUsage({ userId, conversationId: null, model: TOPIC_MODEL, usage: result.usage });
+    await recordApiUsage({
+      userId,
+      conversationId: null,
+      feature: "topic",
+      model: TOPIC_MODEL,
+      usage: result.usage,
+    });
   }
 
   // 打ち切りは上限に掛かったときにしか起きない（この経路に利用者からの割り込みは無い）。

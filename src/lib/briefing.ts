@@ -45,7 +45,7 @@ const BRIEFING_TITLE = "今日の見通し";
 /**
  * `codex exec` を待つ上限（#183）。
  *
- * 材料は6本（予定・天気、部屋、システム、支払予定、放置セッション、確認待ち）あり、
+ * 材料は10本（予定、天気、部屋2本、システム3本、支払予定、放置セッション、確認待ち）あり、
  * **まとめて一度に呼ばせる**（`briefingServiceRules()` の指示と、Codexへ渡す接続の
  * `supports_parallel_tool_calls=true`）。それでも順に呼ばれた回はそのぶん往復が増える
  * （道具1回あたり約9秒。#131の実測）ので、歯止めとしてここで打ち切る。
@@ -135,7 +135,13 @@ async function generateBriefing(userId: string): Promise<string> {
   // 相談への紐付けは任意）。**打ち切られた回は `usage` がnullで行が作られない**——
   // `turn.completed` が届いておらず、そこまでの消費量が分からないため（#133）。
   if (result.usage) {
-    await recordApiUsage({ userId, conversationId: null, model: BRIEFING_MODEL, usage: result.usage });
+    await recordApiUsage({
+      userId,
+      conversationId: null,
+      feature: "briefing",
+      model: BRIEFING_MODEL,
+      usage: result.usage,
+    });
   }
 
   // 打ち切りは上限に掛かったときにしか起きない（この経路に利用者からの割り込みは無い）。

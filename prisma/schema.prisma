@@ -156,6 +156,11 @@ model ApiUsage {
   // 過去ぶんの概算費用まで新しい単価で計算し直されてしまう。
   model String @db.VarChar(64)
 
+  // どの機能の呼び出しか（#297。`src/lib/usage-feature.ts` の `UsageFeature`）。モデル名からは
+  // 決められない——設定で選べるチャットのモデルと、お知らせ選定・要約などの固定のモデルが
+  // 同じ名前になりうる。この列を足す前の行は空文字のまま（機能は分からない）。
+  feature String @default("") @db.VarChar(32)
+
   inputTokens      Int
   outputTokens     Int
   // プロンプトキャッシュ（いまは使っていないため常に0。単価が入力と違うので別に持つ）。

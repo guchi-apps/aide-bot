@@ -45,6 +45,8 @@ const dummyUsage = (turnIndex, createdAt, userId, model = USAGE_MODEL) => ({
   // `createMany` で入れるので、繋ぎ先はidをそのまま渡す（#157で連続セッションへ移した際、
   // Conversation配下のネスト（`user: { connect: ... }`）から切り替えた）。
   userId,
+  // 使用量API（#297）が機能ごとに畳むための印。相談の往復なので `chat`。
+  feature: "chat",
   model,
   inputTokens: 3200 + turnIndex * 2600,
   outputTokens: 540 + turnIndex * 160,
@@ -580,6 +582,7 @@ async function main() {
       for (let call = 0; call < calls; call += 1) {
         standalone.push({
           userId: user.id,
+          feature: "briefing",
           model: BRIEFING_USAGE_MODEL,
           inputTokens: 8600 + call * 400 + daysBefore * 40,
           outputTokens: 560 + call * 40,
@@ -596,12 +599,47 @@ async function main() {
         noticeAt.setHours(21, 10, 0, 0);
         standalone.push({
           userId: user.id,
+          feature: "notice",
           model: "gpt-5.6-luna",
           inputTokens: 3200,
           outputTokens: 40,
           cacheWriteTokens: 0,
           cacheReadTokens: 8960,
           createdAt: noticeAt,
+        });
+      }
+
+      // 使用量API（#297）が機能ごとに分けて返せるよう、残りの機能も少しずつ積む。
+      // 話題の仕入れ（#144）は入力が桁違いに大きい（検索を重ねるため）。自宅の取り込み（#167）は
+      // 1日1回。**Lunaを使うお知らせの選定と話題、相談（Sol・Terra・Luna）が同じモデル名で
+      // 別の機能として並ぶ**ことをAPIの応答から確かめるためのもの。要約（#157）は相談に紐づく
+      // ため、ここ（紐付けの無い記録）には入れていない。
+      if (daysBefore % 2 === 1) {
+        const topicAt = new Date(at.getTime());
+        topicAt.setHours(10, 5, 0, 0);
+        standalone.push({
+          userId: user.id,
+          feature: "topic",
+          model: "gpt-5.6-luna",
+          inputTokens: 61364,
+          outputTokens: 2727,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 320000,
+          createdAt: topicAt,
+        });
+      }
+      if (daysBefore === 0 || daysBefore === 5) {
+        const profileAt = new Date(at.getTime());
+        profileAt.setHours(7, 2, 0, 0);
+        standalone.push({
+          userId: user.id,
+          feature: "home_profile",
+          model: "gpt-5.6-terra",
+          inputTokens: 14200,
+          outputTokens: 900,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 8960,
+          createdAt: profileAt,
         });
       }
     }
@@ -693,6 +731,7 @@ async function main() {
     await db.apiUsage.create({
       data: {
         userId: user.id,
+        feature: "briefing",
         model: BRIEFING_USAGE_MODEL,
         inputTokens: 4200,
         outputTokens: 210,

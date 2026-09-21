@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE `ApiUsage` ADD COLUMN `feature` VARCHAR(32) NOT NULL DEFAULT '';

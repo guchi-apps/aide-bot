@@ -5,6 +5,7 @@ import { getCurrentUser } from "@/lib/auth-user";
 import type { ReplyStyle } from "@/lib/chat-model";
 import { selectedChatModels } from "@/lib/chat-model-server";
 import { runCodexExec, type CodexToolCallEvent } from "@/lib/codex";
+import { recordCodexUsage } from "@/lib/codex-run";
 import { compactIfNeeded } from "@/lib/compact";
 import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
 import { primaryConversation } from "@/lib/day-log";
@@ -16,7 +17,6 @@ import { writeToolsAllowed } from "@/lib/mcp/write-tools";
 import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
 import { TOOL_CALL_INPUT_LIMIT, TOOL_CALL_OUTPUT_LIMIT, truncateToolText } from "@/lib/tool-call";
 import { topicsForChat } from "@/lib/topics";
-import { recordApiUsage } from "@/lib/usage";
 
 /**
  * 相談（チャット）の返答生成（#128）。
@@ -439,15 +439,13 @@ export async function POST(request: Request) {
 
           // 使った量は返答の保存とは独立に残す（#51「1呼び出し＝1行」）。中断・起動失敗で
           // `turn.completed` が届かなかった回は `usage` がnullになり、行は作られない。
-          if (result.usage) {
-            await recordApiUsage({
-              userId: user.id,
-              conversationId: conversation.id,
-              feature: "chat",
-              model,
-              usage: result.usage,
-            });
-          }
+          await recordCodexUsage({
+            result,
+            userId: user.id,
+            conversationId: conversation.id,
+            feature: "chat",
+            model,
+          });
 
           // `codex exec` は応答が完結してからしか本文を返さないため、ここで1回だけ流す
           // （届いた端から逐次表示する形にはならない）。

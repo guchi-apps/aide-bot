@@ -92,6 +92,38 @@ export function primaryConversationId(userId: string): string {
   return `main_${userId}`;
 }
 
+/**
+ * 秘書の側から積む「依頼（USER）＋返答（ASSISTANT）」の2通を、連続セッションの末尾へ足す
+ * （#229。朝の見通し #79 と急ぎのお知らせ #115 が使う）。
+ *
+ * - **1通目をUSERにするのは、履歴の先頭をUSERにするため。** 秘書の返答だけを積むと、
+ *   `buildConversationText()` が先頭のassistantを落とす場面で見通しがモデルから見えなくなる。
+ *   依頼の文面は呼び出し側が渡す（`AUTO_REQUEST_PREFIX` から組み立てたもの。#280）
+ * - **2通目は `at` の1秒後に置く。** 同じ時刻だと並び順が不定になり、返答が依頼より前に出る
+ * - **`Conversation.updatedAt` も `at` へ進める。** 「最後に話したのはいつか」（#101のひとりごと）が
+ *   この列を見ていて、発言を足しただけでは動かない。**声かけ（#278。`nudge.ts`）はここを通らない**
+ *   ——あちらは進めない扱い（進めるとひとりごとの「昨日ぶりですね」が二度と出ない）
+ *
+ * `at` は**書き込む直前に取った時刻**を渡すこと（#261）。生成を待った後に、待つ前の時刻を
+ * 渡すと、そのあいだに利用者が話しかけた発言より前へ割り込む。
+ */
+export async function appendSecretaryExchange(
+  conversationId: string,
+  request: string,
+  reply: string,
+  at: Date,
+): Promise<void> {
+  await db.$transaction([
+    db.message.createMany({
+      data: [
+        { conversationId, role: "USER", content: request, createdAt: at },
+        { conversationId, role: "ASSISTANT", content: reply, createdAt: new Date(at.getTime() + 1000) },
+      ],
+    }),
+    db.conversation.update({ where: { id: conversationId }, data: { updatedAt: at } }),
+  ]);
+}
+
 /** 左メニューに並べる1日ぶん。 */
 export type DaySummary = {
   /** `2026-09-03`。URLの `/d/<date>` に入る値。 */

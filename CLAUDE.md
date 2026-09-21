@@ -505,7 +505,10 @@ AIDEの `src/worker/notify.ts` が「成功を毎回送ると `zaim-keep-alive`�
   1通目には `MORNING_BRIEFING_REQUEST`——実際にモデルへ渡している依頼そのもの——を入れてあるので、
   画面に出しても嘘にならない。**ただし#280から「書く」画面と過去の日の画面には出さない**
   （利用者が書いた発言ではなく、自分が言ったことのように見えるため）。**USERで積む理由は
-  モデルへ渡す履歴のためとして残っている**——隠すのは表示だけで、DBにも履歴にも入っている
+  モデルへ渡す履歴のためとして残っている**——隠すのは表示だけで、DBにも履歴にも入っている。
+  **この2通と `Conversation.updatedAt` の更新は `appendSecretaryExchange()`（`src/lib/day-log.ts`）
+  が受け持つ**（#229。急ぎのお知らせ #115 と共通）。時刻は書き込む直前に取った値を渡す（#261）。
+  声かけ（#278）は `updatedAt` を進めない扱いなのでここを通さない
 - **材料はすべてAIDE（MCP）から取る。** aide-botはMCPクライアントを実装していないので、
   繋いでいる接続が0件なら書けるものが何も無い。**API呼び出しの前に諦める**（費用だけ掛かって
   中身が空になる）
@@ -792,10 +795,16 @@ Claudeを呼ぶ場所は1つも無い**。移せるようになったのは#131�
   モデルを呼ばず、`shownAt` も書かない。**書くのは `resolveNotice()` の1か所のまま**——
   一覧を開いただけで候補が消費されると、吹き出しに出るはずだったお知らせが画面を見た人にだけ
   届いて終わる
-- **取り出しの条件は `notices.ts` の `pendingNotices()` / `currentNotice()` と揃える。**
-  ずらすと「一覧には出ているのに候補に入らない」お知らせができ、原因が画面側かモデル側かを
-  切り分けられなくなる。左メニューの未読の件数も同じ条件で数える（`chatter.ts` が
-  「まだお伝えしていないお知らせがN件あります」で使っている数と食い違わせない）
+- **取り出しの条件は `src/lib/notice-conditions.ts` の1か所に閉じてある**（#229）。
+  `pendingNoticeWhere()`（未読でいま出せる）・`waitingNoticeWhere()`（未読だが `showAt` がまだ先）・
+  `currentNoticeWhere()`（いま吹き出しに出ている）が `Prisma.NoticeWhereInput` を返し、秘書の選定
+  （`notices.ts`）・この画面（`notice-list.ts`）・左メニューの件数・ひとりごとの件数（`chatter.ts`）が
+  同じ関数を通る。以前は4か所に手書きで複製していた。**条件を変えるときはこのファイルだけを直す**
+  ——ずれると「一覧には出ているのに候補に入らない」お知らせができ、原因が画面側かモデル側かを
+  切り分けられなくなる。**手元の1件に当てる `isWithinShowWindow()`（急ぎのPush）も同じ
+  ファイル**にある。`NOTICE_DISPLAY_TTL_MS` もここ（循環importを避けるため `notices.ts` から
+  移した）。Prismaは型だけをimportする純粋なモジュールで、`test/notice-conditions.test.ts` が
+  条件の意味（境目・重ならないこと・JS側との一致）を固定する
 - **`showAt` がまだ来ていないものは候補から外れるが、一覧には出す。** 出さないと
   「積んだはずなのに何も出ない」を画面から切り分けられない。期限切れも同じ理由で別の欄に置く
   ——**読まれずに消えたことが分かるのはここだけ**
@@ -918,6 +927,18 @@ Anthropic（従量課金）で、**#183以降に積まれるのは前者だけ**
   届いた回にしか `usage` を載せないので、**行そのものを作らない**（推定で埋めない）
 - **使用量の記録に失敗しても相談は止めない。** `ApiUsage` の書き込みは独立したtry/catchに置き、
   失敗はログにだけ残す（記録できないことより、返答が返らないことの方が重い）
+- **Codexを呼ぶ経路は `src/lib/codex-run.ts` を通す**（#229）。相談以外の5経路（要約・朝の見通し・
+  お知らせの選定・話題・自宅の取り込み）は `runCodexRecorded()` が「呼ぶ → 使用量を残す →
+  打ち切り・失敗を投げる」までを行う。違いは引数（`feature`・`label`・`model`・`timeoutMs`）と、
+  投げられたものをどう扱うかだけで、後者は呼び出し側に残してある（要約は `false` を返し、
+  お知らせ選定は `lastRuns` を更新せず戻り、朝の見通しはその日の記録を残さない）。
+  **使用量は失敗より先に残す**（読めない形で返ってきた回も量は使い終わっている）。**新しい経路を
+  足すときは `runCodexExec()` を直接呼ばず、ここを通す**——記録の書き忘れを塞ぐ。**相談
+  （`/api/chat`）は対象外**で、`interrupted` を「遮られた返答」の保存に使い、失敗も例外ではなく
+  画面へ返すため `runCodexExec()` を直接呼ぶ。記録だけは同じ `recordCodexUsage()` を使う。
+  打ち切り・失敗の判定（`throwIfCodexFailed()`）はDBに触れない純粋な関数で `codex.ts` にあり、
+  `test/codex-failure.test.ts` が文言を固定する（ログにそのまま出る）。**プロンプトの文面は
+  この関数の外で組み立てて渡す**——1文字でも変わるとCodexのキャッシュが一度外れる
 - **単価表は `src/lib/chat-model.ts` の `MODEL_PRICING`**（#71で `src/lib/usage.ts` から移した。
   モデルを選ぶ画面がクライアントコンポーネントで、単価をバッジに出すため）。**#183以降に
   引かれるのは移行前の記録だけ**になったが、呼び出した時点のモデル名で引き直すため、
@@ -1978,7 +1999,9 @@ CI専用のプレースホルダーでよい。
   （`notice-ingest.ts`）・`parseChoice()`（`notice-choice.ts`）・`removedFromSummary()`
   （`summary-range.ts`。`deleteDay()` が畳んだ範囲から引く件数。#265）・`shouldGenerate()`（`notice-schedule.ts`。お知らせ選定を呼び直す条件。#227）・`SampleSlot`
   （`sample-slot.ts`。試し聞きを止めたら持ち主へ知らせる約束。#279）・`buildAiUsageReport()` /
-  `hasValidBearer()`（`ai-usage-report.ts`・`bearer-auth.ts`。使用量APIの組み立てとBearer検証。#297）。**PrismaやSupabaseへ触れる
+  `hasValidBearer()`（`ai-usage-report.ts`・`bearer-auth.ts`。使用量APIの組み立てとBearer検証。#297）・
+  `pendingNoticeWhere()` ほか（`notice-conditions.ts`。お知らせの未読・表示中の条件。#229）・
+  `throwIfCodexFailed()`（`codex.ts`。Codexの打ち切り・失敗の文言。#229）。**PrismaやSupabaseへ触れる
   モジュールはimportしない**（テストからDBへ繋がない）。**DBに触れるモジュールの中にある計算を
   テストしたいなら、純粋な関数として別ファイルへ切り出す**（#265で `parseChoice()` を
   `notices.ts` から、`removedFromSummary()` を `day-log.ts` から出した。`deleteDay()` 本体

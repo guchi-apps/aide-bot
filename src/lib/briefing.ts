@@ -135,7 +135,13 @@ async function generateBriefing(userId: string): Promise<string> {
   // 相談への紐付けは任意）。**打ち切られた回は `usage` がnullで行が作られない**——
   // `turn.completed` が届いておらず、そこまでの消費量が分からないため（#133）。
   if (result.usage) {
-    await recordApiUsage({ userId, conversationId: null, model: BRIEFING_MODEL, usage: result.usage });
+    await recordApiUsage({
+      userId,
+      conversationId: null,
+      feature: "briefing",
+      model: BRIEFING_MODEL,
+      usage: result.usage,
+    });
   }
 
   // 打ち切りは上限に掛かったときにしか起きない（この経路に利用者からの割り込みは無い）。

@@ -368,7 +368,13 @@ async function chooseNotice(userId: string, pending: Notice[], now: Date): Promi
   // 使った量は、読める形で返ってきたかに関わらず残す。**上限に掛かった回は`usage`がnullで
   // 行が作られない**——`turn.completed` が届いていないので、そこまでの消費量が分からない。
   if (result.usage) {
-    await recordApiUsage({ userId, conversationId: null, model: NOTICE_MODEL, usage: result.usage });
+    await recordApiUsage({
+      userId,
+      conversationId: null,
+      feature: "notice",
+      model: NOTICE_MODEL,
+      usage: result.usage,
+    });
   }
 
   // 打ち切りは上限に掛かったときにしか起きない（この経路に利用者からの割り込みは無い）。

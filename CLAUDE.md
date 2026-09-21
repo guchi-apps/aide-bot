@@ -936,6 +936,49 @@ Anthropic（従量課金）で、**#183以降に積まれるのは前者だけ**
   引く（`UsageSummary.models`）。モデルを切り替えた前後の記録は同じ期間に混ざるため、
   選択中のモデルだけを書くと注記が集計と食い違う
 
+## 使用量を外へ返す（ops-dashboard向け。#297）
+
+ops-dashboardの「アプリ別のAI利用」（ops-dashboard#325）が、`GET /api/ai-usage` を読みにくる。
+`ApiUsage` を**機能×モデル**に畳み、直近24時間・7日間の回数とトークン数だけを返す
+（`src/app/api/ai-usage/route.ts`・組み立ては `src/lib/ai-usage-report.ts`・DBの取り出しは
+`aiUsageGroups()`（`src/lib/usage.ts`））。**応答の形の正はops-dashboardの
+`src/lib/ai-app-usage/parse.ts`（README「アプリ別のAI利用」）で、1行でも形が違えば応答全体が
+「取得不可」になる。** 形や項目を変えるときは向こうの検証を先に読む。
+
+- **認証は `Authorization: Bearer <OPS_API_TOKEN>`。** ops-dashboardの同名の値と同じで、**値の正は
+  向こう**（`op://apps/ops-dashboard/ops-api-token`。issue-deckも同じアイテムを参照する）。
+  未設定なら**経路ごと401で閉じる**（`hasValidBearer()`。`src/lib/bearer-auth.ts`）。未設定と値の違いは
+  区別して返さない——他アプリの読み取り口には503で分けるものがあるが、このアプリは `/api/briefing` と
+  同じく設定状況を外へ見せない。ログイン判定は挟まない（`/api/*` はmiddlewareが素通しにする）
+- **機能はモデル名からは決められないので、`ApiUsage.feature` 列に持つ**（`UsageFeature`。
+  `src/lib/usage-feature.ts`）。相談のモデルは設定の画面から選べ（Sol・Terra・Luna）、お知らせの選定・
+  話題（Luna）、要約・自宅の取り込み（Terra）、朝の見通し（Sol）と**同じ名前が別の機能として現れる**。
+  **`recordApiUsage()` は `feature` を必須にしてある**ので、機能を足して渡し忘れると型で落ちる。
+  機能を足したら `USAGE_FEATURE_LABELS` へ名前を足す（この名前がops-dashboardの画面にそのまま出る）
+- **列を足す前の行は `feature` が空文字のまま**（マイグレーションでは推測しない）。空文字と表に無い値は
+  1つの「その他（機能の記録なし）」へ足す——捨てると合計が黙って少なくなる。集計の窓は最長7日なので、
+  デプロイの1週間後にはこの行は消える
+- **`inputTokens` はキャッシュに載らなかった分だけ**（`ApiUsage.inputTokens` そのまま）。画面の使用量
+  （`promptTokens()`）はキャッシュ込みの合計だが、**こちらで足して返さない**——ops-dashboardが自分で
+  キャッシュ分を足すので二重に数える。`cacheReadTokens` / `cacheWriteTokens` も別の項目で返す
+- **返すモデル名は実際に呼んだものそのまま**（`gpt-5.6-sol` など。移行前の記録は `claude-haiku-4-5`）。
+  ops-dashboardの単価表（`models.ts`）にはGPT-5.6系が無く、**金額は「不明」と出る**（近いモデルで推測しない
+  のが向こうの方針）。定額（Codex）なので実害は無いが、金額を出したければ向こうの表へ足す
+- **全利用者ぶんの合計で、`userId` では絞らない。** 呼び出し元は利用者を持たない外部サービスで、知りたいのは
+  「このアプリがどれだけ使ったか」。返すのは回数とトークン数だけで、プロンプト本文・返答・利用者の情報は
+  含めない
+- **24時間→7日間の順に別々のクエリで引く**（同じ `now` から境目を作る）。逆にすると、2本のあいだに積まれた行が
+  24時間には入って7日間には入らず、7日間が24時間を下回る。組み立て側（`buildAiUsageReport()`）にも、
+  下回ったら24時間へ揃える保険を置いてある
+- **呼び出しが無い期間は `features: []`**（エラーにしない）。24時間に呼び出しが無い行は0で埋める
+  （向こうは両方の期間を必須にしている）
+- **ops-dashboardの `AI_APP_USAGE_SOURCES` へ足すのは向こうの設定**（`{"app":"aide-bot","url":"…/api/ai-usage"}`）。
+  同じVPSなら `http://127.0.0.1:3103/api/ai-usage` でよい（向こうはhttpsか同一ホストのループバックだけ許す）。
+  手元では `.env.local` に `OPS_API_TOKEN` を入れて `curl -H "Authorization: Bearer …"` で確かめる。
+  開発DBのシード（`scripts/seed-ci-db.mjs`）は機能ごとの記録を入れてある
+- テストは `test/ai-usage-report.test.ts`。**ops-dashboardの検証規則を写した関数**で、組み立てた応答が
+  受け付けられることを確かめている（向こうの規則が変わったらここも直す）
+
 ## 話題——ニュースを仕入れて秘書から振る（#144）
 
 **秘書が外の世界を何も知らない**（待機中のひとりごと（#101）は時刻・曜日・件数だけ）のを埋める
@@ -1923,7 +1966,8 @@ CI専用のプレースホルダーでよい。
   との一致・`historyWindowSkip()`・`readJsonObject()`（#262）・`parseNoticeInput()`
   （`notice-ingest.ts`）・`parseChoice()`（`notice-choice.ts`）・`removedFromSummary()`
   （`summary-range.ts`。`deleteDay()` が畳んだ範囲から引く件数。#265）・`SampleSlot`
-  （`sample-slot.ts`。試し聞きを止めたら持ち主へ知らせる約束。#279）。**PrismaやSupabaseへ触れる
+  （`sample-slot.ts`。試し聞きを止めたら持ち主へ知らせる約束。#279）・`buildAiUsageReport()` /
+  `hasValidBearer()`（`ai-usage-report.ts`・`bearer-auth.ts`。使用量APIの組み立てとBearer検証。#297）。**PrismaやSupabaseへ触れる
   モジュールはimportしない**（テストからDBへ繋がない）。**DBに触れるモジュールの中にある計算を
   テストしたいなら、純粋な関数として別ファイルへ切り出す**（#265で `parseChoice()` を
   `notices.ts` から、`removedFromSummary()` を `day-log.ts` から出した。`deleteDay()` 本体

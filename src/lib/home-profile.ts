@@ -164,6 +164,7 @@ export async function refreshHomeProfile(userId: string, now = new Date()): Prom
     await recordApiUsage({
       userId,
       conversationId: null,
+      feature: "home_profile",
       model: HOME_PROFILE_MODEL,
       usage: result.usage,
     });

@@ -1,10 +1,9 @@
 import { HOME_PROFILE_MODEL } from "@/lib/chat-model";
-import { runCodexExec } from "@/lib/codex";
+import { runCodexRecorded } from "@/lib/codex-run";
 import { db } from "@/lib/db";
 import { listConnectedServers, toCodexMcpServers } from "@/lib/mcp/connections";
 import { MCP_PRESETS } from "@/lib/mcp/presets";
 import { SECRETARY_INTRO } from "@/lib/persona";
-import { recordApiUsage } from "@/lib/usage";
 
 /**
  * 自宅と暮らしの前提（#167）。**サーバー専用。**
@@ -153,30 +152,15 @@ export async function refreshHomeProfile(userId: string, now = new Date()): Prom
 
   const { mcpServers } = toCodexMcpServers(servers, false);
 
-  const result = await runCodexExec({
+  const result = await runCodexRecorded({
+    userId,
+    feature: "home_profile",
+    label: "自宅の情報の取り込み",
     model: HOME_PROFILE_MODEL,
     prompt: buildHomeProfilePrompt(),
-    signal: AbortSignal.timeout(CODEX_TIMEOUT_MS),
+    timeoutMs: CODEX_TIMEOUT_MS,
     mcpServers,
   });
-
-  if (result.usage) {
-    await recordApiUsage({
-      userId,
-      conversationId: null,
-      feature: "home_profile",
-      model: HOME_PROFILE_MODEL,
-      usage: result.usage,
-    });
-  }
-
-  // 打ち切りは上限に掛かったときにしか起きない（この経路に利用者からの割り込みは無い）。
-  if (result.interrupted) {
-    throw new Error(`自宅の情報の取り込みが${CODEX_TIMEOUT_MS / 1000}秒で返らなかった`);
-  }
-  if (result.errorMessage) {
-    throw new Error(result.errorMessage);
-  }
 
   // 道具を呼んだ回は「調べます」の一言が別の `agent_message` として先に届く（#131）。
   // 覚え書きは最後の道具より後ろの本文だけを繋いだ `reply` にある。

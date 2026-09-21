@@ -2,8 +2,8 @@ import { redirect } from "next/navigation";
 
 import { NoticesView } from "@/components/chat/notices-view";
 import { getCurrentUser } from "@/lib/auth-user";
+import { NOTICE_DISPLAY_TTL_MS } from "@/lib/notice-conditions";
 import { noticeBoard } from "@/lib/notice-list";
-import { NOTICE_DISPLAY_TTL_MS } from "@/lib/notices";
 
 // 積まれるたびに変わるので、ビルド時の値を配らない。
 export const dynamic = "force-dynamic";

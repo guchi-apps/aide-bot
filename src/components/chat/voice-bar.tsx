@@ -1,7 +1,7 @@
 "use client";
 
 import { Mic, Repeat, Settings2, Square } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { STATUS_LABEL } from "@/components/voice/speech-bubble";
 import type { VoiceConversation } from "@/components/voice/use-voice-conversation";
@@ -38,6 +38,8 @@ type Props = {
 export function VoiceBar({ voice, onClose }: Props) {
   const settings = useVoiceSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // `VoiceSettingsPanel` は `memo` で包んである（#228）。描画のたびに関数を作ると外れる。
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const { status, heard, hint, notice, error } = voice;
 
   const listening = status === "listening";
@@ -54,7 +56,7 @@ export function VoiceBar({ voice, onClose }: Props) {
           className="absolute bottom-full right-0 z-20 mb-2 max-h-[min(60dvh,26rem)] w-[min(320px,100%)]"
           onPrime={voice.prime}
           onNotice={voice.setNotice}
-          onClose={() => setSettingsOpen(false)}
+          onClose={closeSettings}
         />
       )}
 

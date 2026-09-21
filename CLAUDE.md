@@ -257,7 +257,7 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
   マイグレーションが要るうえ、それ以前に積まれた依頼文が隠れないので採らなかった。
   **日付の区切りは隠した後の並びで判定する**（隠した発言が日の最初だと、区切りが付かなくなる）。
   **件数は隠したぶんも数えたまま**——左メニューの日ごとの件数と、今日への引き継ぎ
-  （`CARRY_OVER_MIN_ENTRIES`）。**「話す」画面の記録欄（`voice-panel.tsx`）はまだ隠していない**
+  （`CARRY_OVER_MIN_ENTRIES`）。**「話す」画面の記録欄（`src/components/voice/today-log.tsx`。#228で `voice-panel.tsx` から切り出した）はまだ隠していない**
 - **秘書の返答には日本時間の時刻を添える**（#280。`ChatMessage.time`・`jstTimeLabel()`）。
   過去に朝の見通しと後の返答を日付の区切りだけでは見分けられなかったため。自分の発言には付けない。
   送信直後に画面の中だけで足す返答は、ブラウザ側で `jstTimeLabel(new Date())` を付ける
@@ -1431,6 +1431,47 @@ ops-dashboardの「アプリ別のAI利用」（ops-dashboard#325）が、`GET /
   （外から止められた回に固まる）。手元では、合成に20秒かかるスタブENGINE（`/version`・
   `/audio_query`・`/synthesis` だけ返し、CORSを開ける）をlocalStorageの `engineUrl` へ入れ、
   「試し聞き」を押して合成待ちのままマイク／「読み上げを止める」を押すと再現できる
+
+### 描き直しと読み込みを減らす（#228）
+
+**「話す」も「書く」の音声バーも、聞き取りの途中経過（interim）と返答の差分のたびに親が描き直される**
+（`useVoiceConversation()` の `heard` などがstateのため）。以前は、そのたびにロボット・吹き出し・
+今日の記録・声の設定まで巻き込んでいた。#228で次の3つを入れた。
+
+- **返答の差分は `useThrottledText()`（`src/components/chat/use-throttled-text.ts`）で60msに1回へ
+  間引く。** 「書く」が持っていた仕組みを共通にした（「話す」は間引かずに `setReply` していた）。
+  文字の往復は `push(delta)`、声の往復（全文で届く）は `set(full)`、往復の終わりで最後の差分を
+  残さないなら `flush()`、次の往復の頭で消すなら `reset()`。返す関数の参照は変わらない
+- **`Robot`・`SpeechBubble`・`VoiceSettingsPanel`・`TodayLog`・`EntryList` は `memo` で包んである。
+  渡す関数・オブジェクトは参照を保つこと**——`useCallback` かstateの更新関数（`setNotice` など）。
+  描画のたびに作るアロー関数（`onClose={() => …}`）を渡すと `memo` が毎回外れ、何も言わずに
+  元へ戻る。`SpeechBubble` は `key` で中身が変わるたびに作り直して出てくる動き（`bubble-pop`）を
+  再生する作りなので、`line` に描くたびに作り直した値を渡すと動きが頭から再生され続ける
+- **`useLocalEntries()`（`use-local-entries.ts`）が、画面の中だけで足す記録の組み立てを持つ。** 「話す」
+  「書く」が別々に書いていた `local-user-<件数>` / `local-assistant-<件数>` のid・返答の時刻（#280）・
+  `interrupted` の印を寄せた。**`turnRef`（#48の順序）は共通にしていない**——文字の往復の側
+  （`ChatPanel`。声の往復が走っていれば畳んで待つ）と声の往復の側（`useVoiceConversation()`）で
+  待つ相手が違い、束ねると、iOSの実機でしか出ない順序の回帰（#155・#164・#205）を入れやすい
+- **「話す」の記録欄は `TodayLog`（`voice/today-log.tsx`）で、`EntryList` とは別に持っている。** 幅（300px）・
+  文字の大きさ・秘書の側が積んだ依頼文を隠すか（#280。こちらは隠していない）が違う。1つにまとめる
+  なら、隠す扱いも決めてから
+- **`conversation-view.tsx` は両パネルを `next/dynamic` で読む。** 使わないモードのぶんを最初に
+  読み込まない。**SSRは切っていない**（`ssr: false` だと開いた直後が空白になる）ので、最初のHTMLは
+  今のモードで描かれ、そのモードのチャンクだけが添えられる。切り替えたときだけもう一方を取りに行く
+  （読み込む間は枠だけを出す）。実測（`pnpm build:ci`・`(chat)/page` の初回のクライアントJS）は
+  284,656B → 74,158B。react-markdown（約144KB）は「書く」のときだけ、ロボット・吹き出し・声の全画面は
+  「話す」のときだけ後から読まれる。**音声の往復（`useVoiceConversation()`）は「書く」の音声バーも
+  使うので、どちらのモードでも読まれる**——既定が「書く」の端末での削減は小さく（ロボットのSVG・
+  吹き出し・全画面の見た目ぶん）、大きく効くのは「話す」を開いた側
+- **描き直しを数えて確かめるには、偽の `SpeechRecognition`（「聞き取りをマイク無しで確かめる」）に
+  インスタンスを公開させ、`onresult` を手で1つずつ流す。** タイマーで自動で流すと、CDPの
+  ポーリングとの前後で拾えない。各コンポーネントの先頭へ一時的にカウンタを足して差分を読む
+  （**開発ではStrict Modeで1回の描画が2回数えられる**。終わったら外す）。interim 1回ごとに
+  `VoicePanel` は描き直されるが、`Robot`・`SpeechBubble`・`TodayLog` は増えない（最初のinterimの
+  `Robot` は `reacting` の変化で正当に1回変わる）
+- **iOSの実機では確かめていない。** 聞き取りの状態の移り変わり（`beginListeningRef` ほか）には
+  触れておらず、変えたのは画面への反映（stateの持ち方と `memo`）だけ。それでも、`Robot` の
+  `reacting`・`SpeechBubble` の作り直しは実機の見た目に出るので、`pnpm dev:https` で見ておくこと
 
 ### 「書く」画面の秘書の一言（#279）
 

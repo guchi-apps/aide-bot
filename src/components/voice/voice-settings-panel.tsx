@@ -1,7 +1,7 @@
 "use client";
 
 import { Copy, Play, X } from "lucide-react";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { memo, useEffect, useState, useSyncExternalStore } from "react";
 
 import { releaseMicStream } from "@/lib/speech/mic-stream";
 import { recognitionLog, subscribeRecognitionLog } from "@/lib/speech/recognition";
@@ -50,7 +50,7 @@ type Props = {
  * 値の持ち主は `@/lib/speech/voice-settings`（端末ごとのlocalStorage）なので、どちらから
  * 開いても同じ設定を触る。
  */
-export function VoiceSettingsPanel({ className, onPrime, onNotice, onClose }: Props) {
+function VoiceSettingsPanelView({ className, onPrime, onNotice, onClose }: Props) {
   const settings = useVoiceSettings();
   // 聞き取りの節目の記録（#164）。iOSの実機でしか起きない不具合を、画面から報告できるようにする。
   const recognitionEvents = useSyncExternalStore(
@@ -330,3 +330,10 @@ export function VoiceSettingsPanel({ className, onPrime, onNotice, onClose }: Pr
     </div>
   );
 }
+
+/**
+ * `memo` で包む（#228）。開いている間に、聞き取りの途中経過のたびに作り直されて記録の50行まで
+ * 描き直されるのを避ける。**持ち主から渡す `onPrime` / `onNotice` / `onClose` は参照を保つこと**
+ * （`useCallback` かstateの更新関数）。描画のたびに作る関数を渡すと外れる。
+ */
+export const VoiceSettingsPanel = memo(VoiceSettingsPanelView);

@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useCallback, useEffect, useId, useRef, useState } from "react";
+import { forwardRef, memo, useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 import type { RobotPart } from "./robot-3d/scene";
@@ -225,7 +225,7 @@ const RobotFallback = forwardRef<SVGSVGElement, Props & { reaction?: FallbackRea
  * 見た目の反応だけで、**マイク・送信・読み上げには一切触らない**——ここから会話の状態を
  * 変えないという#176の前提をそのまま守っている。
  */
-export function Robot({ state, reacting = false, className }: Props) {
+function RobotView({ state, reacting = false, className }: Props) {
   const host = useRef<HTMLSpanElement>(null);
   const controller = useRef<ReturnType<typeof import("./robot-3d/scene").mountRobotScene> | null>(null);
   const [ready, setReady] = useState(false);
@@ -418,3 +418,11 @@ export function Robot({ state, reacting = false, className }: Props) {
     </button>
   );
 }
+
+/**
+ * `memo` で包んで、`state` / `reacting` / `className` が変わったときだけ描く（#228）。
+ *
+ * 「話す」画面は聞き取りの途中経過（interim）や返答の差分のたびに描き直されるが、そのたびに
+ * ロボットまで巻き込む理由は無い。props はどれも文字列か真偽値なので、そのまま比べてよい。
+ */
+export const Robot = memo(RobotView);

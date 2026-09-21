@@ -4,6 +4,7 @@ import { isAllowedEmail } from "@/lib/allowed-users";
 import { db } from "@/lib/db";
 import { getRequestOrigin } from "@/lib/request-origin";
 import { safeInternalPath } from "@/lib/safe-path";
+import { signOutThisApp } from "@/lib/supabase/sign-out";
 import { createClient } from "@/lib/supabase/server";
 
 export async function GET(request: NextRequest) {
@@ -28,7 +29,7 @@ export async function GET(request: NextRequest) {
   // 初期リリースは許可されたユーザーのみ利用可能。
   // 許可外のアカウントはaide-bot側のユーザーを作らず、Supabaseのセッションも破棄する。
   if (!isAllowedEmail(user.email)) {
-    await supabase.auth.signOut();
+    await signOutThisApp(supabase);
     return NextResponse.redirect(`${origin}/login?error=not_allowed`);
   }
 

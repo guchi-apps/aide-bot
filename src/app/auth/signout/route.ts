@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { getRequestOrigin } from "@/lib/request-origin";
+import { signOutThisApp } from "@/lib/supabase/sign-out";
 import { createClient } from "@/lib/supabase/server";
 
 /**
@@ -13,7 +14,8 @@ import { createClient } from "@/lib/supabase/server";
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
 
-  const { error } = await supabase.auth.signOut();
+  // このアプリのセッションだけを終わらせる。共有Supabaseの他アプリ・他端末は巻き込まない（#292）。
+  const { error } = await signOutThisApp(supabase);
   if (error) {
     console.error("[aide-bot] ログアウトに失敗:", error.message);
   }

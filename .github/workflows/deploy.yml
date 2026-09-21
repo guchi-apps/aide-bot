@@ -194,6 +194,7 @@ jobs:
       VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
       BRIEFING_TRIGGER_TOKEN: ${{ secrets.BRIEFING_TRIGGER_TOKEN }}
       NOTICE_INGEST_TOKEN: ${{ secrets.NOTICE_INGEST_TOKEN }}
+      OPS_API_TOKEN: ${{ secrets.OPS_API_TOKEN }}
 
     steps:
       - name: Checkout code

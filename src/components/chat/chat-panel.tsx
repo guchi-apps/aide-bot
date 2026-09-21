@@ -17,10 +17,12 @@ import { cn } from "@/lib/utils";
 
 import { CompactedNote, EntryList, SecretaryAvatar, SecretaryLabel } from "./entry-list";
 import { Markdown } from "./markdown";
-import type { ChatEntry, ChatToolCall } from "./types";
+import type { ChatEntry } from "./types";
 import { SecretaryLine } from "./secretary-line";
 import { useChatStream } from "./use-chat-stream";
+import { useLocalEntries } from "./use-local-entries";
 import { useNudges, type NudgeMessage } from "./use-nudge";
+import { useThrottledText } from "./use-throttled-text";
 import { VoiceBar } from "./voice-bar";
 
 type Props = {
@@ -37,9 +39,8 @@ type Status = "idle" | "thinking" | "streaming";
 export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
   const { send: sendMessage, abort } = useChatStream();
 
-  const [entries, setEntries] = useState<ChatEntry[]>(initialEntries);
+  const { entries, setEntries, addUser, addAssistant, addRecord } = useLocalEntries(initialEntries);
   const [input, setInput] = useState("");
-  const [answer, setAnswer] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
   // 外部サービスを見に行っている間の表示（#46）。返答が流れ始めるまでの数秒を埋める。
@@ -60,31 +61,13 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
   const turnSeqRef = useRef(0);
 
   // 生成中の返答をdeltaごとに描画すると、そのたびにMarkdownを組み直すことになり、
-  // 長い返答の後半で目に見えて詰まる。溜めてから間引いて反映する。
-  const answerBufferRef = useRef("");
-  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const flushAnswer = useCallback(() => {
-    if (flushTimerRef.current) {
-      clearTimeout(flushTimerRef.current);
-      flushTimerRef.current = null;
-    }
-    setAnswer(answerBufferRef.current);
-  }, []);
-
-  const scheduleFlush = useCallback(() => {
-    if (flushTimerRef.current) return;
-    flushTimerRef.current = setTimeout(() => {
-      flushTimerRef.current = null;
-      setAnswer(answerBufferRef.current);
-    }, 60);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
-    };
-  }, []);
+  // 長い返答の後半で目に見えて詰まる。溜めてから間引いて反映する（「話す」と共通。#228）。
+  const {
+    text: answer,
+    push: pushAnswer,
+    set: setAnswerText,
+    reset: resetAnswer,
+  } = useThrottledText();
 
   /**
    * 声で話す（#279）。**往復の実装は「話す」の全画面と同じ `useVoiceConversation()`。**
@@ -95,39 +78,20 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
   const voice = useVoiceConversation({
     onUserMessage: (text) => {
       setError(null);
-      answerBufferRef.current = "";
-      setAnswer("");
+      resetAnswer();
       setActivity(null);
-      setEntries((previous) => [
-        ...previous,
-        { kind: "message", id: `local-user-${previous.length}`, role: "USER", content: text },
-      ]);
+      addUser(text);
     },
     // 届くのはそこまでの全文。文字のときと同じく溜めて間引いて描く。
-    onReply: (text) => {
-      answerBufferRef.current = text;
-      scheduleFlush();
-    },
-    onRecord: (call: ChatToolCall) => setEntries((previous) => [...previous, call]),
+    onReply: setAnswerText,
+    onRecord: addRecord,
     /*
      * 返答が確定したら流れへ積み、生成中の表示は畳む。**読み上げはこの後も続く**ので、
      * ここで畳まないと同じ文が記録と生成中の欄に二重に並ぶ。
      */
-    onAssistantMessage: ({ content, interrupted }) => {
-      setEntries((previous) => [
-        ...previous,
-        {
-          kind: "message",
-          id: `local-assistant-${previous.length}`,
-          role: "ASSISTANT",
-          content,
-          interrupted,
-          // 文字で送ったときと同じく、画面の中だけで足すぶんにも時刻を付ける（#280）。
-          time: jstTimeLabel(new Date()),
-        },
-      ]);
-      answerBufferRef.current = "";
-      flushAnswer();
+    onAssistantMessage: (message) => {
+      addAssistant(message);
+      resetAnswer();
     },
   });
 
@@ -162,7 +126,7 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
 
       return added.length === 0 ? previous : [...previous, ...added];
     });
-  }, []);
+  }, [setEntries]);
 
   /**
    * 秘書の一言の材料を受け取る（#279）。同じ中身が返った回は入れ替えない（輪が作り直されて、
@@ -193,49 +157,30 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
 
   async function runTurn(text: string) {
     setError(null);
-    setEntries((previous) => [
-      ...previous,
-      { kind: "message", id: `local-user-${previous.length}`, role: "USER", content: text },
-    ]);
-    answerBufferRef.current = "";
-    setAnswer("");
+    addUser(text);
+    resetAnswer();
     setActivity(null);
     setStatus("thinking");
 
     const result = await sendMessage(text, {
       onDelta: (delta) => {
-        answerBufferRef.current += delta;
         setActivity(null);
         setStatus("streaming");
-        scheduleFlush();
+        pushAnswer(delta);
       },
       onTool: setActivity,
       // 書き込みの記録は、その場で流れの中へ足す（#81）。サーバー側でも同じ内容を保存して
       // いるので、再読み込みしても同じ位置——秘書の返答より前——に残る。
-      onRecord: (call: ChatToolCall) => setEntries((previous) => [...previous, call]),
+      onRecord: addRecord,
       onError: setError,
     });
 
-    flushAnswer();
-
     // 途中で止めた場合も、そこまでの返答は残す。消えると何を聞いたかだけが残る。
     if (result.answer.trim() !== "") {
-      setEntries((previous) => [
-        ...previous,
-        {
-          kind: "message",
-          id: `local-assistant-${previous.length}`,
-          role: "ASSISTANT",
-          content: result.answer,
-          interrupted: result.aborted,
-          // サーバーが保存する時刻に近い値を、画面の中だけで足すぶんにも付ける（#280）。
-          time: jstTimeLabel(new Date()),
-        },
-      ]);
+      addAssistant({ content: result.answer, interrupted: result.aborted });
     }
 
-    answerBufferRef.current = "";
-    setAnswer("");
+    resetAnswer();
     setActivity(null);
     setStatus("idle");
   }

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { memo } from "react";
 
 import { isExternalNoticeUrl } from "@/lib/notice-url";
 import { cn } from "@/lib/utils";
@@ -159,7 +160,7 @@ function Indicator({ state }: { state: RobotState }) {
   return <span className="ind-pulse size-[7px] shrink-0 rounded-full bg-current" aria-hidden="true" />;
 }
 
-export function SpeechBubble({ state, line, activity }: Props) {
+function SpeechBubbleView({ state, line, activity }: Props) {
   // 待っている間だけ輪の中身を出す。往復中は状態に譲る。
   const showing = state === "idle" ? line : null;
   const notice = showing?.kind === "notice" ? showing.notice : null;
@@ -266,3 +267,12 @@ export function SpeechBubble({ state, line, activity }: Props) {
     </div>
   );
 }
+
+/**
+ * `memo` で包んで、状態・出す1枠・調べている道具が変わったときだけ描く（#228）。
+ *
+ * `line` は `useBubbleRing()` が `useMemo` で保っている参照なので、25秒ごとの入れ替えのときしか
+ * 変わらない。**描くたびに作り直した値を渡さないこと**——渡すと、聞き取りの途中経過のたびに
+ * 吹き出しが作り直されて、出てくる動き（`bubble-pop`）が頭から再生される。
+ */
+export const SpeechBubble = memo(SpeechBubbleView);

@@ -1,12 +1,12 @@
 "use client";
 
-import { Keyboard, Mic, Repeat, Settings2, Square, Volume2, VolumeX } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Keyboard, Mic, Repeat, Settings2, Square } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 
 import { useTalkMode } from "@/components/chat/talk-mode-context";
-import { ToolCallNote } from "@/components/chat/tool-call-note";
 import type { ChatEntry } from "@/components/chat/types";
-import { dayHeading } from "@/lib/day-key";
+import { useLocalEntries } from "@/components/chat/use-local-entries";
+import { useThrottledText } from "@/components/chat/use-throttled-text";
 import { noteRecognition } from "@/lib/speech/recognition";
 import {
   updateVoiceSettings,
@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 
 import { Robot } from "./robot";
 import { SpeechBubble } from "./speech-bubble";
+import { TodayLog } from "./today-log";
 import { useBubbleLine } from "./use-notice";
 import { isStandalone, useVoiceConversation } from "./use-voice-conversation";
 import { VoiceSettingsPanel } from "./voice-settings-panel";
@@ -40,6 +41,12 @@ type Props = {
  * 返答の生成は「書く」と同じ `POST /api/chat`。声で話した内容も同じ連続セッションへ残るため、
  * 「書く」に切り替えれば文字で読み返せる。
  *
+ * **聞き取りの途中経過（interim）や返答の差分のたびに描き直されるのは、この画面の骨組みだけに
+ * する**（#228）。ロボット（`Robot`）・吹き出し（`SpeechBubble`）・声の設定・今日の記録
+ * （`TodayLog`）は `memo` で包み、props が変わったときだけ描く。**そのため、これらへ渡す
+ * 関数は `useCallback` などで参照を保つこと**——描画のたびに作る関数を渡すと `memo` が外れる。
+ * 返答の差分は `useThrottledText()` で60msに1回へ間引いている（「書く」と共通）。
+ *
  * **この画面は送信の前後で一度もルートをまたがない（#157）。** #67・#155で手当てして
  * いた「新しい相談の1通目で `/c/<ID>` へ移る」経路は、書き込み先が利用者につき1本の
  * 連続セッションになったことで消えた。
@@ -47,34 +54,25 @@ type Props = {
 export function VoicePanel({ initialEntries, todayKey }: Props) {
   const { setMode } = useTalkMode();
 
-  const [entries, setEntries] = useState<ChatEntry[]>(initialEntries);
+  const { entries, addUser, addAssistant, addRecord } = useLocalEntries(initialEntries);
   // 直前に話した内容と、いま届いている返答。記録（`entries`）とは別に、大きな字でも出す。
   const [lastUser, setLastUser] = useState<string | null>(null);
-  const [reply, setReply] = useState("");
+  const { text: reply, set: setReplyText, flush: flushReply, reset: resetReply } = useThrottledText();
 
   const voice = useVoiceConversation({
     onUserMessage: (text) => {
       setLastUser(text);
-      setReply("");
-      setEntries((previous) => [
-        ...previous,
-        { kind: "message", id: `local-user-${previous.length}`, role: "USER", content: text },
-      ]);
+      resetReply();
+      addUser(text);
     },
-    onReply: setReply,
+    onReply: setReplyText,
     // 声だけでは「何を登録したのか」がその場で流れて消える。右の記録欄へ残す（#81）。
-    onRecord: (call) => setEntries((previous) => [...previous, call]),
-    onAssistantMessage: ({ content, interrupted }) =>
-      setEntries((previous) => [
-        ...previous,
-        {
-          kind: "message",
-          id: `local-assistant-${previous.length}`,
-          role: "ASSISTANT",
-          content,
-          interrupted,
-        },
-      ]),
+    onRecord: addRecord,
+    onAssistantMessage: (message) => {
+      addAssistant(message);
+      // 返答は確定後も大きな字で残す。間引きに残った最後の差分をここで反映しておく。
+      flushReply();
+    },
   });
 
   const {
@@ -98,6 +96,8 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
 
   const settings = useVoiceSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // `VoiceSettingsPanel` は `memo` で包んである。描画のたびに関数を作ると外れる。
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
   /*
    * 記録の1行目に前提を残す（#205）。
@@ -148,7 +148,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
             className="absolute right-3 top-14 z-20 max-h-[calc(100%-4.5rem)] w-[min(320px,calc(100%-1.5rem))] md:right-6 md:top-16 md:max-h-[calc(100%-5rem)]"
             onPrime={voice.prime}
             onNotice={setNotice}
-            onClose={() => setSettingsOpen(false)}
+            onClose={closeSettings}
           />
         )}
 
@@ -319,66 +319,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
       </div>
 
       {/* 画面が広いときだけ、いまの相談のやり取りを右へ添える。声だけだと直前しか追えない。 */}
-      <aside className="hidden w-[300px] shrink-0 flex-col border-l border-border bg-surface lg:flex">
-        <h2 className="border-b border-border px-4 py-3 text-xs font-medium text-muted">
-          今日の記録
-        </h2>
-        <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-3.5">
-          {entries.length === 0 ? (
-            <p className="text-xs leading-relaxed text-muted">
-              話しかけると、ここにやり取りが残ります。
-            </p>
-          ) : (
-            /*
-              日付の区切りを挟む（#157）。今日まだ話していない朝はきのうの終わりから
-              続けて出るので、区切りが無いと「今日もう話した」ように見える。
-            */
-            entries.map((entry, index) => {
-              const day = entry.day ?? todayKey;
-              const previousDay = index === 0 ? null : (entries[index - 1].day ?? todayKey);
-
-              return (
-                <div key={entry.id} className="flex flex-col gap-3.5">
-                  {day !== previousDay && (
-                    <span className="text-[0.625rem] font-bold tracking-[0.08em] text-muted">
-                      {dayHeading(day, todayKey)}
-                    </span>
-                  )}
-                  {entry.kind === "tool" ? (
-                    <ToolCallNote call={entry} compact />
-                  ) : (
-                    <div className="flex flex-col gap-1">
-                      <span className="text-[0.625rem] font-bold tracking-[0.08em] text-muted">
-                        {entry.role === "USER" ? "わたし" : "秘書"}
-                      </span>
-                      <p
-                        className={cn(
-                          "whitespace-pre-wrap break-words text-xs leading-relaxed",
-                          entry.role === "USER" &&
-                            "rounded-[10px_10px_10px_3px] bg-accent-surface px-2.5 py-1.5",
-                        )}
-                      >
-                        {entry.content}
-                      </p>
-                      {entry.interrupted && (
-                        <p className="text-[0.625rem] text-muted">— ここで割り込みました</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })
-          )}
-        </div>
-        <p className="flex items-center gap-1.5 border-t border-border px-4 py-2.5 text-[0.6875rem] text-muted">
-          {settings.speak ? (
-            <Volume2 className="size-3.5" aria-hidden="true" />
-          ) : (
-            <VolumeX className="size-3.5" aria-hidden="true" />
-          )}
-          {settings.speak ? "読み上げは入" : "読み上げは切"}
-        </p>
-      </aside>
+      <TodayLog entries={entries} todayKey={todayKey} speak={settings.speak} />
     </div>
   );
 }

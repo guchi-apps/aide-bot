@@ -10,6 +10,7 @@ import {
 } from "@/lib/ci-auth-bypass";
 import { getRequestOrigin } from "@/lib/request-origin";
 import { safeInternalPath } from "@/lib/safe-path";
+import { signOutThisApp } from "@/lib/supabase/sign-out";
 
 const publicPaths = ["/login", "/auth/signin", "/auth/callback"];
 
@@ -96,7 +97,7 @@ export async function updateSession(request: NextRequest) {
   // /api/* は破棄せず素通しにする（ヘッダーは消してあるので各ハンドラが401を返す）。
   // 開き直された画面遷移の側でこの分岐に来て、そこで破棄される。
   if (notAllowed && !isPublicPath(pathname) && !pathname.startsWith("/api/")) {
-    await supabase.auth.signOut();
+    await signOutThisApp(supabase);
     return withRefreshedCookies(
       NextResponse.redirect(new URL("/login?error=not_allowed", getRequestOrigin(request))),
     );

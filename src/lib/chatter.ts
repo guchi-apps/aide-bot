@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { pendingNoticeWhere } from "@/lib/notice-conditions";
 import { startOfMonth } from "@/lib/usage";
 
 /**
@@ -151,14 +152,7 @@ async function personalLines(userId: string, now: Date): Promise<string[]> {
     db.message.count({
       where: { conversation: { userId }, role: "USER", createdAt: { gte: monthStart } },
     }),
-    db.notice.count({
-      where: {
-        userId,
-        shownAt: null,
-        OR: [{ showAt: null }, { showAt: { lte: now } }],
-        AND: [{ OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] }],
-      },
-    }),
+    db.notice.count({ where: pendingNoticeWhere(userId, now) }),
   ]);
 
   const lines = [conversationLine(lastConversation?.updatedAt ?? null, now)];

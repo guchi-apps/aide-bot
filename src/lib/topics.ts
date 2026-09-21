@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { Topic } from "@prisma/client";
 
 import { TOPIC_MODEL } from "@/lib/chat-model";
-import { runCodexExec } from "@/lib/codex";
+import { runCodexRecorded } from "@/lib/codex-run";
 import { db } from "@/lib/db";
 import { safeNoticeUrl } from "@/lib/notice-url";
 import { SECRETARY_INTRO, SECRETARY_VOICE_RULES } from "@/lib/persona";
@@ -13,7 +13,6 @@ import {
   parseTopicCategories,
   type TopicCategoryId,
 } from "@/lib/topic-categories";
-import { recordApiUsage } from "@/lib/usage";
 
 /**
  * 話題（#144）。**サーバー専用。**
@@ -355,30 +354,15 @@ function parseTopics(answer: string, categories: TopicCategoryId[]): ParsedTopic
  * いないので、そこまでの消費量が分からない。
  */
 async function fetchTopics(userId: string, categories: TopicCategoryId[], now: Date): Promise<number> {
-  const result = await runCodexExec({
+  const result = await runCodexRecorded({
+    userId,
+    feature: "topic",
+    label: "話題の仕入れ",
     model: TOPIC_MODEL,
     prompt: buildTopicPrompt(categories, now),
-    signal: AbortSignal.timeout(CODEX_TIMEOUT_MS),
+    timeoutMs: CODEX_TIMEOUT_MS,
     search: true,
   });
-
-  if (result.usage) {
-    await recordApiUsage({
-      userId,
-      conversationId: null,
-      feature: "topic",
-      model: TOPIC_MODEL,
-      usage: result.usage,
-    });
-  }
-
-  // 打ち切りは上限に掛かったときにしか起きない（この経路に利用者からの割り込みは無い）。
-  if (result.interrupted) {
-    throw new Error(`話題の仕入れが${CODEX_TIMEOUT_MS / 1000}秒で返らなかった`);
-  }
-  if (result.errorMessage) {
-    throw new Error(result.errorMessage);
-  }
 
   // `--search` 付きでは「調べます」の一言が先に別の `agent_message` で届く。JSONは最後の1件にある。
   const answer = result.messages.filter((message) => message.trim() !== "").at(-1) ?? "";

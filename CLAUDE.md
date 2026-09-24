@@ -340,6 +340,34 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
   （`SELECT … FOR UPDATE`）が要った。**履歴（gitのPR #320より前）を読むこと**——引かずに消すと、
   畳んでいない発言まで履歴から読み飛ばされる
 
+### 会話を区切る（#322）
+
+**1本の `Conversation` は保ったまま、モデルへ渡す文脈の起点（`Conversation.contextStartedAt`）だけを進める。**
+履歴の窓・要約・`summarizedCount` は**起点以降の発言だけ**を対象にする（`contextMessageWhere()`。
+`src/lib/context-break.ts`）。それ以前の発言・`ToolCall`・通知・`ApiUsage` は消さず付け替えもしない
+（日別の記録から読める）。区切り履歴は `ContextBreak`（記録の画面に線を出すための控え。**正は
+`contextStartedAt`**）。区切りは削除ではない——画面の説明（`ContextBreakControl`）にもそう書いてある。
+
+- **起点を「時刻」で持つ。** 発言に世代番号を持たせる案は、発言を作る全経路（相談・朝の見通し・お知らせ・
+  声かけ）が世代を渡し忘れると、その発言が履歴から消えるので採らなかった。時刻なら経路を触らずに済む
+- **手動**: `POST /api/conversation/break`。現在の文脈に発言が無ければ何もしない（連打で線が並ばない）。
+  **自動**: 利用者本人の最後の発言（`lastUserMessageAt`）が日本時間で今日ではなく、かつ6時間
+  （`IDLE_BREAK_HOURS`）以上あいていれば、**次の書き込みの前**に区切る（`shouldAutoBreak()`。
+  Prismaに触れない `context-break-rule.ts`。境目は `test/context-break.test.ts` が固定）。**日付だけでは
+  区切らない**（日をまたいで続けて話している最中は6時間未満で落ちる）。区切った後に利用者が話していない
+  ときは、また区切らない
+- **`lastUserMessageAt` は利用者の発言でしか進めない。** 朝の見通し・急ぎのお知らせ・声かけは進めない
+  （`updatedAt` は自動発言でも進むので代わりにならない）。**自動発言を積む前にも `rolloverIfIdle()` を通す**
+  （`appendSecretaryExchange()`・`appendNudge()`）——通さないと、朝の見通しが古い文脈へ入って区切った後の
+  会話から見えなくなる
+- **区切りと生成・要約が重なっても欠落・誤保存しない。** (1) 区切りは `contextStartedAt` のCAS＋要約と件数の
+  リセットを1トランザクションで行う (2) compactの書き込みCASに `contextStartedAt` も含める（件数が0のまま同じでも、
+  古い文脈の要約を新しい会話へ書かない） (3) **生成中に区切られた往復の返答は、区切りの1ms前の時刻で保存する**
+  （`replySavedAt()`）——新しい会話へ古い話が入らず、返答も失われない。手動区切りは生成の終わりを待たない
+- 発言を保存する時刻は明示する（`createdAt`）。区切った直後の発言が起点より前の時刻で入ると旧文脈に残る
+- **開発DBのシードは区切りをまっさらへ戻す。** 自動区切りを試すには `Conversation.lastUserMessageAt` を
+  前日の6時間以上前へ、`contextStartedAt` をそれより前へ書き換えてから送信する
+
 ### 返答への割り込み（#48）
 
 **返答の途中でも次の発言を送れる。** 「書く」は入力欄からの送信、「話す」はマイクを押した時点で、
@@ -2054,7 +2082,7 @@ CI専用のプレースホルダーでよい。
   （`sample-slot.ts`。試し聞きを止めたら持ち主へ知らせる約束。#279）・`buildAiUsageReport()` /
   `hasValidBearer()`（`ai-usage-report.ts`・`bearer-auth.ts`。使用量APIの組み立てとBearer検証。#297）・
   `pendingNoticeWhere()` ほか（`notice-conditions.ts`。お知らせの未読・表示中の条件。#229）・
-  `throwIfCodexFailed()`（`codex.ts`。Codexの打ち切り・失敗の文言。#229）。**PrismaやSupabaseへ触れる
+  `throwIfCodexFailed()`（`codex.ts`。Codexの打ち切り・失敗の文言。#229）・`shouldAutoBreak()`（`context-break-rule.ts`。会話の自動区切りの条件。#322）。**PrismaやSupabaseへ触れる
   モジュールはimportしない**（テストからDBへ繋がない）。**DBに触れるモジュールの中にある計算を
   テストしたいなら、純粋な関数として別ファイルへ切り出す**（#265で `parseChoice()` を
   `notices.ts` から出した）。`@prisma/client` の `NoticePriority`

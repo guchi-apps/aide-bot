@@ -58,5 +58,18 @@ export type ChatToolCall = {
   day?: string;
 };
 
+/**
+ * 会話を区切った印（#322）。発言ではなく、ここから先が新しい作業文脈だと示す線。
+ * 記録そのものは消えていない（線の上もそのまま読める）。
+ */
+export type ChatBreak = {
+  kind: "break";
+  id: string;
+  /** 利用者が押したか、無操作のまま日をまたいで自動で区切ったか。 */
+  breakKind: "MANUAL" | "AUTO";
+  day?: string;
+  time?: string;
+};
+
 /** 記録の画面に時刻順で並ぶもの。 */
-export type ChatEntry = ChatMessage | ChatToolCall;
+export type ChatEntry = ChatMessage | ChatToolCall | ChatBreak;

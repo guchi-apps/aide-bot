@@ -53,6 +53,10 @@ export const TodayLog = memo(function TodayLog({ entries, todayKey, speak }: Pro
                 )}
                 {entry.kind === "tool" ? (
                   <ToolCallNote call={entry} compact />
+                ) : entry.kind === "break" ? (
+                  <p className="border-t border-dashed border-border pt-2 text-[0.625rem] font-bold tracking-[0.08em] text-muted">
+                    ここから新しい会話
+                  </p>
                 ) : (
                   <div className="flex flex-col gap-1">
                     <span className="text-[0.625rem] font-bold tracking-[0.08em] text-muted">

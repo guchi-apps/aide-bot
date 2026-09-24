@@ -1,5 +1,6 @@
 import { NoticePriority, Prisma } from "@prisma/client";
 
+import { rolloverIfIdle } from "@/lib/context-break";
 import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { NOTICE_DISPLAY_TTL_MS } from "@/lib/notice-conditions";
@@ -116,6 +117,10 @@ async function appendNudge(params: {
   now: Date;
 }): Promise<Nudge | null> {
   try {
+    // 無操作のまま日をまたいでいたら、先に区切る（#322）。声かけが古い文脈へ入らないように。
+    // 利用者の最後の発言時刻は進めない（自動発言で無操作時間を延ばさない）。
+    await rolloverIfIdle(params.conversationId, params.now);
+
     const message = await db.message.create({
       data: {
         id: params.id,

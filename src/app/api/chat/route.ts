@@ -11,6 +11,7 @@ import { memoryBlockForChat } from "@/lib/memory";
 import { extractCandidatesIfDue, refreshStaleNotionStates } from "@/lib/memory-extract";
 import { MEMORY_UNAVAILABLE_NOTE } from "@/lib/memory-rule";
 import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
+import { contextMessageWhere, replySavedAt, rolloverIfIdle } from "@/lib/context-break";
 import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { listConnectedServers, toCodexMcpServers, type ConnectedServer } from "@/lib/mcp/connections";
@@ -291,14 +292,23 @@ export async function POST(request: Request) {
   // 待たずに進めると、遮られた返答が今回の発言より後ろの時刻で入り、並びが入れ替わる。
   await waitForPendingGeneration(conversation.id);
 
+  // 無操作のまま日をまたいでいたら、この発言から新しい文脈にする（#322）。区切った後の要約・件数・
+  // 起点はここで読み直した値を使う（`primaryConversation()` が引いた値は区切る前のもの）。
+  const context = (await rolloverIfIdle(conversation.id, new Date())) ?? conversation;
+
+  // 保存する時刻は明示する。区切った直後は、起点（＝いま）以降の時刻で入らないと、
+  // 今回の発言が古い文脈に残ってしまう。
+  const savedAt = new Date();
+
   await db.$transaction([
     db.message.create({
-      data: { conversationId: conversation.id, role: "USER", content: message },
+      data: { conversationId: conversation.id, role: "USER", content: message, createdAt: savedAt },
     }),
     // 最後に話した時刻（#101のひとりごとが読む）。発言を足しただけでは動かないので明示的に触る。
+    // `lastUserMessageAt` は自動区切り（#322）の無操作時間の基準で、**利用者の発言でしか進めない**。
     db.conversation.update({
       where: { id: conversation.id },
-      data: { updatedAt: new Date() },
+      data: { updatedAt: savedAt, lastUserMessageAt: savedAt },
     }),
   ]);
 
@@ -316,15 +326,18 @@ export async function POST(request: Request) {
   //
   // **数えるのは「要約へ畳んでいない発言」だけ**（#157）。畳んだぶんは要約が代わりを
   // 務めるので、窓に入れると同じ話を二重に送ることになる。
-  const messageCount = await db.message.count({ where: { conversationId: conversation.id } });
-  const pendingCount = messageCount - conversation.summarizedCount;
+  // **現在の文脈（`contextStartedAt` 以降）の発言だけ**を数える（#322）。区切る前の発言は
+  // 履歴にも件数にも入れない。
+  const contextWhere = contextMessageWhere(conversation.id, context.contextStartedAt);
+  const messageCount = await db.message.count({ where: contextWhere });
+  const pendingCount = messageCount - context.summarizedCount;
 
   const history = await db.message.findMany({
-    where: { conversationId: conversation.id },
+    where: contextWhere,
     // 並びが揺れればプレフィックスも揺れる。`createdAt` が同じ発言があっても毎回同じ順で
     // 並ぶよう、第2のキーにidを置く。
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    skip: conversation.summarizedCount + historyWindowSkip(pendingCount),
+    skip: context.summarizedCount + historyWindowSkip(pendingCount),
     select: { role: true, content: true, interrupted: true },
   });
 
@@ -374,7 +387,7 @@ export async function POST(request: Request) {
     // ここでDBを引き直さない（相談1往復の待ち時間を増やさない）。
     user.homeProfile,
     memoryBlock,
-    conversation.summary,
+    context.summary,
     history,
     topics,
     servers.map((server) => server.label),
@@ -488,6 +501,7 @@ export async function POST(request: Request) {
         // ただし `codex exec` は完了時にしか本文を返さないため、中断時はここが空になりやすい。
         if (answer.trim() !== "") {
           try {
+            const replyAt = await replySavedAt(conversation.id, context.contextStartedAt);
             await db.$transaction([
               db.message.create({
                 data: {
@@ -495,6 +509,8 @@ export async function POST(request: Request) {
                   role: "ASSISTANT",
                   content: answer,
                   interrupted,
+                  // 生成中に区切られていたら、区切りの1ms前で保存して旧文脈に残す（#322）。
+                  createdAt: replyAt,
                 },
               }),
               db.conversation.update({

@@ -28,7 +28,7 @@ import {
   warmVoicevoxSource,
 } from "@/lib/speech/voicevox";
 
-import type { RobotState } from "./robot";
+import type { SecretaryState } from "./secretary";
 
 /**
  * 声で秘書と話すひと往復（#27）。**聞き取り・送信・読み上げ・開き直しの実装はここ1か所。**
@@ -210,7 +210,7 @@ export type VoiceConversationCallbacks = {
 };
 
 export type VoiceConversation = {
-  status: RobotState;
+  status: SecretaryState;
   /** 聞き取っている途中の文字。確定していないので記録には残さない。 */
   heard: string;
   /** 聞き取りの側の案内（#155）。読み上げの側（`notice`）と混ぜない。 */
@@ -265,7 +265,7 @@ export function useVoiceConversation(
 ): VoiceConversation {
   const { send: sendMessage, abort } = useChatStream();
 
-  const [status, setStatus] = useState<RobotState>("idle");
+  const [status, setStatus] = useState<SecretaryState>("idle");
   const [heard, setHeard] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);

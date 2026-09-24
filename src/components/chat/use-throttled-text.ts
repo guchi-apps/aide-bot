@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * 描き直しの間隔（ミリ秒）。
  *
  * 生成中の返答をdeltaごとに描画すると、そのたびに画面が組み直しになる。「書く」では
- * Markdownを毎回組み直すので長い返答の後半で目に見えて詰まり、「話す」ではロボット・吹き出し・
+ * Markdownを毎回組み直すので長い返答の後半で目に見えて詰まり、「話す」では立ち絵・吹き出し・
  * 記録欄まで巻き込む。60msなら1秒に16回ほどで、字が流れて見える速さを保てる。
  */
 const FLUSH_INTERVAL_MS = 60;

@@ -4,6 +4,7 @@ import { BriefingTimePicker } from "@/components/settings/briefing-time-picker";
 import { ConnectionList } from "@/components/settings/connection-list";
 import { HomeProfileCard } from "@/components/settings/home-profile-card";
 import { ModelPicker } from "@/components/settings/model-picker";
+import { ProactiveSettingsCard } from "@/components/settings/proactive-settings";
 import { NotificationSettings } from "@/components/settings/notification-settings";
 import { WakeTriggerCard } from "@/components/settings/wake-trigger-card";
 import { WriteToolPicker } from "@/components/settings/write-tool-picker";
@@ -14,6 +15,7 @@ import { writeToolsFor } from "@/lib/mcp/presets";
 import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
 import { hasNotionConnection } from "@/lib/home-profile";
 import { pushPublicKey } from "@/lib/push/config";
+import { normalizeFrequency } from "@/lib/proactive-labels";
 import { countSubscriptions } from "@/lib/push/subscriptions";
 
 export const metadata = { title: "設定" };
@@ -83,6 +85,19 @@ export default async function SettingsPage({ searchParams }: Props) {
             バンドルへ焼き込まれ、鍵を差し替えるたびに再ビルドが要る。理由の詳細は
             `@/lib/push/config` のコメント。 */}
         <NotificationSettings publicKey={pushPublicKey()} initialDeviceCount={deviceCount} />
+
+        <ProactiveSettingsCard
+          hasDevice={deviceCount > 0}
+          initial={{
+            weekend: user.proactiveWeekend,
+            freeTime: user.proactiveFreeTime,
+            ongoing: user.proactiveOngoing,
+            quietStart: user.proactiveQuietStart,
+            quietEnd: user.proactiveQuietEnd,
+            avoidWork: user.proactiveAvoidWork,
+            frequency: normalizeFrequency(user.proactiveFrequency),
+          }}
+        />
 
         <BriefingTimePicker initial={{ hour: user.briefingHour, minute: user.briefingMinute }} />
 

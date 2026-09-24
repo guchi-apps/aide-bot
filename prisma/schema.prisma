@@ -44,6 +44,24 @@ model User {
   /// **本文がnullでもここは進む**——取り込みを試して見つからなかった回も間隔を空けるため。
   homeProfileFetchedAt DateTime?
 
+  // 先回りの提案（#325）。秘書の方から「今ならできる」を届ける通知の設定。
+  // 読むのがcronから叩かれる利用者のいない経路なので、Cookieではなくここへ持つ。
+  /// 週末のまとまった空きに未達成の希望が合うとき。
+  proactiveWeekend Boolean @default(true)
+  /// 予定の変更・キャンセルで新しい空きができたとき。
+  proactiveFreeTime Boolean @default(true)
+  /// 未完了のタスク・継続中の用件に着手しやすい時間ができたとき。
+  proactiveOngoing Boolean @default(true)
+  /// 静かな時間帯（日本時間の時。開始と終了が同じなら設けない）。日をまたいでよい。
+  proactiveQuietStart Int @default(22)
+  proactiveQuietEnd   Int @default(8)
+  /// 平日の勤務・通勤の時間帯（`proactive-rule.ts` の `WORK_*`）を避けるか。
+  proactiveAvoidWork Boolean @default(true)
+  /// 頻度。`daily`（1日1件まで）/ `twice_weekly`（週2件まで）/ `weekly`（週1件まで）。
+  proactiveFrequency String @default("daily") @db.VarChar(20)
+  /// 最後に提案の判定を試みた時刻。モデルを呼ぶ回の間隔をあけるための印（送った・黙った・失敗のどれでも進める）。
+  proactiveCheckedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

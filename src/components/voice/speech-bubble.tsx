@@ -6,7 +6,7 @@ import { memo } from "react";
 import { isExternalNoticeUrl } from "@/lib/notice-url";
 import { cn } from "@/lib/utils";
 
-import type { RobotState } from "./robot";
+import type { SecretaryState } from "./secretary";
 import type { BubbleLine } from "./use-notice";
 
 /**
@@ -29,7 +29,7 @@ import type { BubbleLine } from "./use-notice";
  */
 
 type Props = {
-  state: RobotState;
+  state: SecretaryState;
   /** 待機中に出す1枠（`use-notice.ts` が一定の間隔で送ってくる）。無ければ既定の呼びかけ。 */
   line: BubbleLine | null;
   /** 外部サービスを見に行っている間の表示（#46）。 */
@@ -46,7 +46,7 @@ type Props = {
  * **「書く」画面の音声バー（`@/components/chat/voice-bar`。#279）も同じ表を読む。** 同じ
  * 往復の同じ状態なので、画面ごとに言い方が変わらないようにする。
  */
-export const STATUS_LABEL: Record<RobotState, string> = {
+export const STATUS_LABEL: Record<SecretaryState, string> = {
   idle: "どうぞ、話しかけてください",
   listening: "はい、聞いていますよ",
   thinking: "少し考えますね",
@@ -120,7 +120,7 @@ export function OpenLink({ url }: { url: string }) {
 }
 
 /** 文字を読まなくても状態が分かる小さなしるし。状態ごとに動きを変える。 */
-function Indicator({ state }: { state: RobotState }) {
+function Indicator({ state }: { state: SecretaryState }) {
   if (state === "thinking") {
     return (
       <span className="ind-dots flex shrink-0 items-center gap-[3px]" aria-hidden="true">

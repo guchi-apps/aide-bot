@@ -15,7 +15,7 @@ import {
 } from "@/lib/speech/voice-settings";
 import { cn } from "@/lib/utils";
 
-import { Robot } from "./robot";
+import { Secretary } from "./secretary";
 import { SpeechBubble } from "./speech-bubble";
 import { TodayLog } from "./today-log";
 import { useBubbleLine } from "./use-notice";
@@ -33,7 +33,7 @@ type Props = {
  * 音声で秘書と対話する画面（#27）。
  *
  * **往復そのもの（聞き取り・送信・読み上げ・開き直し）は `useVoiceConversation()` が持つ**
- * （#279で切り出した。`./use-voice-conversation.ts`）。この画面が受け持つのは、ロボット・
+ * （#279で切り出した。`./use-voice-conversation.ts`）。この画面が受け持つのは、立ち絵・
  * 吹き出し・声の設定・今日の記録という**見た目の側だけ**で、同じフックを「書く」画面の
  * 音声バー（`@/components/chat/voice-bar`）も使う。**iOSの実機でしか出ない不具合の手当ては
  * すべてフック側にある**ので、聞き取りの振る舞いを変えるときはそちらを読むこと。
@@ -42,7 +42,7 @@ type Props = {
  * 「書く」に切り替えれば文字で読み返せる。
  *
  * **聞き取りの途中経過（interim）や返答の差分のたびに描き直されるのは、この画面の骨組みだけに
- * する**（#228）。ロボット（`Robot`）・吹き出し（`SpeechBubble`）・声の設定・今日の記録
+ * する**（#228）。立ち絵（`Secretary`）・吹き出し（`SpeechBubble`）・声の設定・今日の記録
  * （`TodayLog`）は `memo` で包み、props が変わったときだけ描く。**そのため、これらへ渡す
  * 関数は `useCallback` などで参照を保つこと**——描画のたびに作る関数を渡すと `memo` が外れる。
  * 返答の差分は `useThrottledText()` で60msに1回へ間引いている（「書く」と共通）。
@@ -155,7 +155,7 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 overflow-y-auto overscroll-contain px-6 py-6 text-center">
           {/*
             hint・notice・error・「聞き取りに対応していません」の案内が重なると、
-            ロボット・吹き出し・返答文だけでも狭い画面の高さを超える（#191）。ページ全体を
+            立ち絵・吹き出し・返答文だけでも狭い画面の高さを超える（#191）。ページ全体を
             固定した以上、ここで縮めきれないぶんの逃げ場をこの列自身が持つ必要がある
             ——持たないと、ページスクロールで逃がしていたはみ出しがただ読めなくなるだけになる。
           */}
@@ -163,10 +163,16 @@ export function VoicePanel({ initialEntries, todayKey }: Props) {
               （#93）。外部サービスを見に行っている間に理由を出す扱い（#46）もここへ移した。 */}
           <SpeechBubble state={status} line={bubbleLine} activity={activity} />
 
-          <Robot
+          {/*
+            立ち絵（#326）。顔が見分けられる大きさを保ちつつ、スマホ（393×852）で吹き出し・
+            返答・操作ボタンが押し出されない幅にしてある。待っている間に吹き出しがお知らせを
+            出しているときだけ「知らせる」の姿にする。
+          */}
+          <Secretary
             state={status}
+            notifying={bubbleLine?.kind === "notice"}
             reacting={reacting}
-            className="size-[168px] md:size-[184px] lg:size-[200px]"
+            className="w-[min(230px,62vw)] md:w-[260px] lg:w-[300px]"
           />
 
           <div className="flex w-full max-w-[36rem] flex-col gap-3">

@@ -16,7 +16,8 @@ export type UsageFeature =
   | "briefing"
   | "notice"
   | "topic"
-  | "home_profile";
+  | "home_profile"
+  | "memory";
 
 /** 使用量APIに出す機能名（ops-dashboardの画面にそのまま載る）。 */
 export const USAGE_FEATURE_LABELS: Record<UsageFeature, string> = {
@@ -26,6 +27,7 @@ export const USAGE_FEATURE_LABELS: Record<UsageFeature, string> = {
   notice: "お知らせの選定",
   topic: "話題の仕入れ",
   home_profile: "自宅情報の取り込み",
+  memory: "継続記憶（候補の抽出・Notion照合）",
 };
 
 /**

@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, Bell, CalendarDays, Newspaper, Settings } from "lucide-react";
+import { BarChart3, Bell, Brain, CalendarDays, Newspaper, Settings } from "lucide-react";
 import Link from "next/link";
 
 import { AppIcon } from "@/components/brand/app-icon";
@@ -28,6 +28,8 @@ type Props = {
   pendingNoticeCount: number;
   /** 話題の画面を開いているか（#144）。 */
   isTopicsActive: boolean;
+  /** 記憶の画面を開いているか（#323）。 */
+  isMemoryActive: boolean;
   /** 溜まっている話題の件数（#144）。0のときは数字を出さない。 */
   topicCount: number;
   /** 今月の概算費用（`$1.23` の形）。集計はサーバー側で済ませて文字列で受け取る。 */
@@ -55,6 +57,7 @@ export function ConversationRail({
   isNoticesActive,
   pendingNoticeCount,
   isTopicsActive,
+  isMemoryActive,
   topicCount,
   monthlyUsageLabel,
   userLabel,
@@ -172,6 +175,20 @@ export function ConversationRail({
             話題
           </span>
           {topicCount > 0 && <span className="tabular-nums text-xs font-medium text-muted">{topicCount}件</span>}
+        </Link>
+
+        {/* 継続記憶（#323）。会話の要約とは別に、本人が残すと選んだ希望・決定を見直す画面。 */}
+        <Link
+          href="/memory"
+          onClick={onNavigate}
+          aria-current={isMemoryActive ? "page" : undefined}
+          className={cn(
+            "mx-2.5 mt-2 flex items-center gap-1.5 rounded-[9px] px-2.5 py-2 text-[0.8125rem] transition-colors hover:bg-rail-active focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            isMemoryActive && "bg-rail-active shadow-[inset_2px_0_0_var(--accent)]",
+          )}
+        >
+          <Brain className="size-3.5 text-muted" aria-hidden="true" />
+          記憶
         </Link>
 
         {/* 返答のモデル（#71）と外部サービスとの接続（#46）。相談ではないので、一覧ではなく下部に置く。 */}

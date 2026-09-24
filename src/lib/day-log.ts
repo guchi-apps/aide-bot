@@ -3,8 +3,8 @@ import { cache } from "react";
 
 import type { ChatEntry } from "@/components/chat/types";
 import { dayEnd, dayHeading, dayStart, jstDayKey, jstTimeLabel, monthLabel } from "@/lib/day-key";
+import { rolloverIfIdle } from "@/lib/context-break";
 import { db } from "@/lib/db";
-import { removedFromSummary } from "@/lib/summary-range";
 
 /**
  * 連続セッションと、その日ごとの取り出し（#157）。**サーバー専用**（Prismaを引き込む）。
@@ -17,6 +17,14 @@ import { removedFromSummary } from "@/lib/summary-range";
  * 日付の組み立て（鍵・見出し）は `src/lib/day-key.ts` に分けてある。記録の画面
  * （`EntryList`）がクライアントコンポーネントで、Prismaを引き込めないため。
  */
+
+const PRIMARY_SELECT = {
+  id: true,
+  summary: true,
+  summarizedCount: true,
+  contextStartedAt: true,
+  lastUserMessageAt: true,
+} as const;
 
 /** 連続セッションの見出し。画面には出ないが、`Conversation.title` は必須のため入れる。 */
 export const PRIMARY_CONVERSATION_TITLE = "秘書との記録";
@@ -58,12 +66,14 @@ export const primaryConversation = cache(async function primaryConversation(user
   id: string;
   summary: string | null;
   summarizedCount: number;
+  contextStartedAt: Date | null;
+  lastUserMessageAt: Date | null;
 }> {
   const find = () =>
     db.conversation.findFirst({
       where: { userId, isPrimary: true },
       orderBy: { createdAt: "asc" },
-      select: { id: true, summary: true, summarizedCount: true },
+      select: PRIMARY_SELECT,
     });
 
   const existing = await find();
@@ -72,7 +82,7 @@ export const primaryConversation = cache(async function primaryConversation(user
   try {
     return await db.conversation.create({
       data: { id: primaryConversationId(userId), userId, isPrimary: true, title: PRIMARY_CONVERSATION_TITLE },
-      select: { id: true, summary: true, summarizedCount: true },
+      select: PRIMARY_SELECT,
     });
   } catch (error) {
     // 同時に来た別のリクエストが先に作った。作られた行をそのまま使う。
@@ -106,6 +116,10 @@ export function primaryConversationId(userId: string): string {
  *
  * `at` は**書き込む直前に取った時刻**を渡すこと（#261）。生成を待った後に、待つ前の時刻を
  * 渡すと、そのあいだに利用者が話しかけた発言より前へ割り込む。
+ *
+ * **書く前に、無操作のまま日をまたいでいたら自動で区切る**（#322）。区切りの起点は `at` なので、
+ * 2通とも新しい文脈に入る（見通しが古い文脈へ入って、区切った後の会話から見えなくなるのを避ける）。
+ * 利用者の最後の発言時刻（`lastUserMessageAt`）は進めない——自動発言で無操作時間を延ばさない。
  */
 export async function appendSecretaryExchange(
   conversationId: string,
@@ -113,6 +127,8 @@ export async function appendSecretaryExchange(
   reply: string,
   at: Date,
 ): Promise<void> {
+  await rolloverIfIdle(conversationId, at);
+
   await db.$transaction([
     db.message.createMany({
       data: [
@@ -200,6 +216,7 @@ function mergeEntries(
     failed: boolean;
     createdAt: Date;
   }[],
+  breaks: { id: string; at: Date; kind: string }[] = [],
 ): ChatEntry[] {
   const rows: { at: number; tie: number; entry: ChatEntry }[] = [
     ...messages.map((message) => ({
@@ -230,6 +247,18 @@ function mergeEntries(
         day: jstDayKey(call.createdAt),
       },
     })),
+    // 区切り線（#322）。同じ時刻なら先に置く——起点以降の発言は線の下に並ぶ。
+    ...breaks.map((brk) => ({
+      at: brk.at.getTime(),
+      tie: -1,
+      entry: {
+        kind: "break" as const,
+        id: `break_${brk.id}`,
+        breakKind: brk.kind === "AUTO" ? ("AUTO" as const) : ("MANUAL" as const),
+        day: jstDayKey(brk.at),
+        time: jstTimeLabel(brk.at),
+      },
+    })),
   ];
 
   return rows.sort((a, b) => a.at - b.at || a.tie - b.tie).map((row) => row.entry);
@@ -255,6 +284,8 @@ const TOOL_CALL_FIELDS = {
   createdAt: true,
 } as const;
 
+const BREAK_FIELDS = { id: true, at: true, kind: true } as const;
+
 /** ある期間の発言と記録を、時刻順に混ぜて返す。 */
 async function entriesBetween(
   conversationId: string,
@@ -264,7 +295,7 @@ async function entriesBetween(
   const createdAt = { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) };
   const range = from || to ? { createdAt } : {};
 
-  const [messages, toolCalls] = await Promise.all([
+  const [messages, toolCalls, breaks] = await Promise.all([
     db.message.findMany({
       where: { conversationId, ...range },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -275,9 +306,14 @@ async function entriesBetween(
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       select: TOOL_CALL_FIELDS,
     }),
+    db.contextBreak.findMany({
+      where: { conversationId, ...(from || to ? { at: createdAt } : {}) },
+      orderBy: [{ at: "asc" }, { id: "asc" }],
+      select: BREAK_FIELDS,
+    }),
   ]);
 
-  return mergeEntries(messages, toolCalls);
+  return mergeEntries(messages, toolCalls, breaks);
 }
 
 /** その日1日ぶんの記録。 */
@@ -316,62 +352,11 @@ export async function entriesForToday(conversationId: string, now: Date): Promis
     select: TOOL_CALL_FIELDS,
   });
 
-  return [...mergeEntries(messages, toolCalls), ...today];
-}
-
-/**
- * その日の記録を消す（#157。#102のスレッド削除を日単位へ移したもの）。
- *
- * **消えるのは発言（`Message`）だけ。** 書き込みの記録（`ToolCall`）は相談との紐付けを
- * 外して行は残す——「取り消せない書き込みをした事実」まで消さないため（#81・#102）。
- * 使用量（`ApiUsage`）は連続セッションに紐づいたままで触らない（`/usage` の金額は減らない）。
- *
- * **要約へ畳んだ範囲（`summarizedCount`）の中の日を消したら、その数だけ戻す。**
- * `summarizedCount` は「古い方から数えた件数」で履歴の読み飛ばしに使うため、減らさずに
- * 消すと**畳んでいない発言まで読み飛ばされ、モデルへ渡らなくなる**（実測で、畳んだ2件を
- * 含む日を消した後、残っていた最古の2件が履歴から落ちた）。要約の本文はそのままにする
- * ——消した日のことが要約に残るが、次にcompactが走ったときに書き直される。
- *
- * **`summarizedCount` は引数で受け取らず、相談の行を握ってから読み直す**（#245）。
- * 呼び出し元が先に読んだ値は、最大120秒Codexを待つcompact（`compactIfNeeded()`）が
- * 進めた後だと古く、そこから引いた絶対値で書くと**compactが進めたぶんを巻き戻して**
- * 畳んでいない発言を読み飛ばさせる。行を握るのはcompactが最後に書く手前と同じ行なので、
- * どちらが先でも、後から来た側は先の結果を見てから件数を決める。書くのも絶対値では
- * なく `decrement`。
- *
- * 戻り値は消した発言の数。0なら、その日には元から何も無かった。
- */
-export async function deleteDay(conversationId: string, dayKey: string): Promise<number> {
-  const from = dayStart(dayKey);
-  const createdAt = { gte: from, lt: dayEnd(dayKey) };
-
-  return db.$transaction(async (tx) => {
-    // `FOR UPDATE` で相談の行を握る。`update` で握ると `updatedAt`（最後に話した時刻。#101）まで
-    // 動いてしまうので、読み取りだけで握れるこちらにしてある。
-    const [row] = await tx.$queryRaw<{ summarizedCount: number }[]>`
-      SELECT \`summarizedCount\` FROM \`Conversation\` WHERE \`id\` = ${conversationId} FOR UPDATE
-    `;
-    if (!row) return 0;
-
-    // 消すぶんのうち何件が畳んだ範囲に入っていたか（考え方は `removedFromSummary()` を参照）。
-    const [olderCount, dayCount] = await Promise.all([
-      tx.message.count({ where: { conversationId, createdAt: { lt: from } } }),
-      tx.message.count({ where: { conversationId, createdAt } }),
-    ]);
-
-    if (dayCount === 0) return 0;
-
-    const removed = removedFromSummary(row.summarizedCount, olderCount, dayCount);
-
-    const deleted = await tx.message.deleteMany({ where: { conversationId, createdAt } });
-    await tx.toolCall.updateMany({ where: { conversationId, createdAt }, data: { conversationId: null } });
-    if (removed > 0) {
-      await tx.conversation.update({
-        where: { id: conversationId },
-        data: { summarizedCount: { decrement: removed } },
-      });
-    }
-
-    return deleted.count;
+  const breaks = await db.contextBreak.findMany({
+    where: { conversationId, at: { gte: carryFrom, lt: from } },
+    orderBy: [{ at: "asc" }, { id: "asc" }],
+    select: BREAK_FIELDS,
   });
+
+  return [...mergeEntries(messages, toolCalls, breaks), ...today];
 }

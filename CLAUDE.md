@@ -315,14 +315,11 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
   切れるが、40発言に一度なので受け入れている
 - **境目は時刻ではなく件数（`summarizedCount`）で持つ。** 同じ時刻の発言があっても
   取りこぼさないため。履歴は「古い方からこの数だけ読み飛ばした先」から組み立てる
-- **畳んだ範囲の中の日を消したら、`summarizedCount` をその数だけ戻す**（`deleteDay()`）。
-  減らさずに消すと、**畳んでいない発言まで読み飛ばされてモデルへ渡らない**（実測で、
-  畳んだ2件を含む日を消した後、残っていた最古の2件が履歴から落ちた）
 - **二重起動を止める**（プロセス内のSet）。割り込み（#48）で往復が重なると同じ相談へ2回走り、
   `summarizedCount` が2回進んで**まだ畳んでいない発言まで要約済みになる**
 - **要約と件数は呼び出し元から渡さず、`compactIfNeeded()` が畳む直前に読み直す**（#245）。
-  Codexを待つ最大120秒のあいだに、別の往復が先に畳み終える・畳んだ範囲の日が消されて件数が戻る、
-  のどちらかが起きうる。往復の頭で読んだ値から絶対値で書くと、前者は先の要約を古い要約から
+  Codexを待つ最大120秒のあいだに、別の往復が先に畳み終える（#320で日の削除をやめたので、件数が戻る経路は
+  無くなった。下の確認は保険として残してある）ことが起きうる。往復の頭で読んだ値から絶対値で書くと、前者は先の要約を古い要約から
   畳み直して上書きし、後者は**戻された件数を押し戻して畳んでいない発言を読み飛ばさせる。**
   書くのは `updateMany({ where: { id, summarizedCount: 読んだ値 } })` を1つのトランザクションに
   入れ、件数が0なら捨てる。**件数が同じでも、畳もうとした範囲の発言のidが変わっていれば
@@ -330,30 +327,46 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
 - **畳んだことは画面に出す**（`CompactedNote`）。出さないと「昔の話を覚えていない」が
   不具合に見える。記録そのものは日付の一覧から辿れて消えていない
 
-### その日の記録を消す（#157。#102を日単位へ移したもの）
+### 記録を消す機能は無い（#320）
 
-左メニュー（`ConversationRail`）の各行の右端にバツを置き、確認をはさんで
-`DELETE /api/days/[date]` を叩く。
+**#157で日単位にした削除（左メニューのバツ・`DELETE /api/days/[date]`・`deleteDay()`）を#320で
+廃止した。** 左メニューは日付の一覧を見て開くだけで、利用者が発言を消す導線はどこにも無い。
 
-- **消えるのは発言（`Message`）だけ。** 使用量（`ApiUsage`）と書き込みの記録（`ToolCall`）は
-  行を残す（#51・#81。消したぶんの費用や、取り消せない書き込みをした事実まで消さないため）。
-  **`/usage` の金額は減らない**
-- **ただし `ToolCall` は行として残るだけで、画面からは辿れなくなる。** これを読んでいるのは
-  記録の画面（`src/lib/day-log.ts`）だけで、`conversationId` がnullになった行を出す導線は
-  どこにも無い。「Zaimに何を登録したか」を後から見る必要が出たら、まずこの一覧を作ること
-- **`deleteDay()` は `summarizedCount` を引数で受け取らない**（#245）。相談の行を
-  `SELECT … FOR UPDATE` で握ってから読み直し、書くときは `decrement`。呼び出し元が先に読んだ値は
-  compactが進めた後だと古く、絶対値で書くとそのぶんを巻き戻す。握る行はcompactが最後に書くときに
-  更新する行と同じで、**どちらが先でも後から来た側が先の結果を見て決める。`update` で握らない**
-  ——`updatedAt`（最後に話した時刻。#101）が動く
-- **記録の無い日にはバツを出さない**（まだ話していない今日）。消すものが無い
-- **バツを隠すかどうかは幅ではなくホバーの有無で決める**（`[@media(hover:hover)]:opacity-0`）。
-  Tailwindの `group-hover:` は `@media (hover: hover)` の中にしか出ないため、`md:opacity-0` で
-  隠すと**iPad（幅1180px・ホバー無し）ではバツが永久に出ない。** 幅の指定はPCとiPadを分けない
-- **確認ダイアログはドロワー（`ChatShell` の z-50）より前に出す。** スマホでは一覧そのものが
-  ドロワーの中にあるので、z-indexが同じだと確認が一覧の下に隠れる
-- **開いている日を消したら `/`（今日）へ戻す**（空になったページに取り残される）。スマホでは
-  同時に `onNavigate()` でドロワーも畳む。それ以外は `router.refresh()` で一覧だけを取り直す
+- **消したので、`summarizedCount` が戻ることは無くなった。** compact（`compactIfNeeded()`）の
+  書き込み手前の確認（件数とidが読んだときのままか）は、別の往復が先に畳んだ場合の保険として残してある
+- **`ToolCall` の `conversationId` がnullになる経路も無くなった。** すでに消された日のぶんの行は
+  DBに残っているが、画面からは辿れない
+- 削除を作り直すなら、畳んだ範囲から引く件数（旧 `removedFromSummary()`）と相談の行のロック
+  （`SELECT … FOR UPDATE`）が要った。**履歴（gitのPR #320より前）を読むこと**——引かずに消すと、
+  畳んでいない発言まで履歴から読み飛ばされる
+
+### 会話を区切る（#322）
+
+**1本の `Conversation` は保ったまま、モデルへ渡す文脈の起点（`Conversation.contextStartedAt`）だけを進める。**
+履歴の窓・要約・`summarizedCount` は**起点以降の発言だけ**を対象にする（`contextMessageWhere()`。
+`src/lib/context-break.ts`）。それ以前の発言・`ToolCall`・通知・`ApiUsage` は消さず付け替えもしない
+（日別の記録から読める）。区切り履歴は `ContextBreak`（記録の画面に線を出すための控え。**正は
+`contextStartedAt`**）。区切りは削除ではない——画面の説明（`ContextBreakControl`）にもそう書いてある。
+
+- **起点を「時刻」で持つ。** 発言に世代番号を持たせる案は、発言を作る全経路（相談・朝の見通し・お知らせ・
+  声かけ）が世代を渡し忘れると、その発言が履歴から消えるので採らなかった。時刻なら経路を触らずに済む
+- **手動**: `POST /api/conversation/break`。現在の文脈に発言が無ければ何もしない（連打で線が並ばない）。
+  **自動**: 利用者本人の最後の発言（`lastUserMessageAt`）が日本時間で今日ではなく、かつ6時間
+  （`IDLE_BREAK_HOURS`）以上あいていれば、**次の書き込みの前**に区切る（`shouldAutoBreak()`。
+  Prismaに触れない `context-break-rule.ts`。境目は `test/context-break.test.ts` が固定）。**日付だけでは
+  区切らない**（日をまたいで続けて話している最中は6時間未満で落ちる）。区切った後に利用者が話していない
+  ときは、また区切らない
+- **`lastUserMessageAt` は利用者の発言でしか進めない。** 朝の見通し・急ぎのお知らせ・声かけは進めない
+  （`updatedAt` は自動発言でも進むので代わりにならない）。**自動発言を積む前にも `rolloverIfIdle()` を通す**
+  （`appendSecretaryExchange()`・`appendNudge()`）——通さないと、朝の見通しが古い文脈へ入って区切った後の
+  会話から見えなくなる
+- **区切りと生成・要約が重なっても欠落・誤保存しない。** (1) 区切りは `contextStartedAt` のCAS＋要約と件数の
+  リセットを1トランザクションで行う (2) compactの書き込みCASに `contextStartedAt` も含める（件数が0のまま同じでも、
+  古い文脈の要約を新しい会話へ書かない） (3) **生成中に区切られた往復の返答は、区切りの1ms前の時刻で保存する**
+  （`replySavedAt()`）——新しい会話へ古い話が入らず、返答も失われない。手動区切りは生成の終わりを待たない
+- 発言を保存する時刻は明示する（`createdAt`）。区切った直後の発言が起点より前の時刻で入ると旧文脈に残る
+- **開発DBのシードは区切りをまっさらへ戻す。** 自動区切りを試すには `Conversation.lastUserMessageAt` を
+  前日の6時間以上前へ、`contextStartedAt` をそれより前へ書き換えてから送信する
 
 ### 返答への割り込み（#48）
 
@@ -1168,6 +1181,34 @@ ops-dashboardの「アプリ別のAI利用」（ops-dashboard#325）が、`GET /
 - 天気は `aide_weather` が**今日と明日・自宅の地域ぶんだけ**返す。交通は未実装
   （`guchi-apps/aide#33`）。この2つが「聞くと場所を聞かれる」の実際の中身
 
+## 継続記憶（#323）
+
+**会話を区切っても（#322）、本人が続けてほしい希望・判断・進行中の用件を思い出せる仕組み。**
+会話の要約（`Conversation.summary`。#157）とは別テーブル（`Memory`）で、利用者単位。**要約を
+「確定した記憶」へ移行しない**（出典・有効期限が無いため）。
+
+- **状態は候補 → 確定 →（忘れる）、候補 →（見送り）。相談へ渡すのは確定だけ**
+  （`memoryBlockForChat()`。`src/lib/memory.ts`）。候補は返答の後（`after()`）に、利用者の発言から
+  Codexが抜き出す（`memory-extract.ts`。3発言以上たまり10分あいたときだけ）。**出典は利用者の発言に
+  限り、引用と日時はモデルの文ではなく実際の発言から取る**（`parseCandidates()`）。雑談・仮説を確定にしない
+  のは、自動で確定へ進める経路が無いことで守っている
+- **秘密情報は機械的にも落とす**（`containsSecret()`）。プロンプトの指示だけに頼らない。直す操作にも同じ判定
+- **忘れる・見送るは本文を残す。** `(userId, dedupeKey)` の一意制約で、同じ内容を候補へ蘇らせない。
+  直す（edit）は本文を置き換え、Notionの照合結果も捨てる（前の内容の状態を引き継がない）
+- **正本はNotionの「いつかやりたいこと」。複製を作らない。** 「Notionへ記録」は利用者が押したときだけ走り、
+  **書く前に必ず照合し直して、すでにあれば追加せずリンクだけ紐づける**（`recordWishToNotion()`）。
+  照合できなかったときは書かない。**Notionの実スキーマ（プロパティ名）は実物で確かめていない**——
+  プロンプトは探す場所を名指ししすぎない書き方にしてある。実機で崩れたらここを見直す
+- **Notionで達成・見送りの希望は回答の根拠から外す**（`isUsableForAnswer()`）。照合は返答の後に1日1回
+  （`refreshStaleNotionStates()`。失敗後は3時間あける）。確認が7日より古い・未確認のときは、プロンプトに
+  「確認できていない」と書く（「覚えていない」と断定させない）。記憶の読み出し自体に失敗した回も、
+  `MEMORY_UNAVAILABLE_NOTE` を載せる
+- **判定は `memory-rule.ts`（純粋）、表示用の定数は `memory-labels.ts`（クライアントからもimport。
+  `node:crypto` を持ち込まない）、DBは `memory.ts`。** テストは `test/memory-rule.test.ts`
+- 画面は左メニューの「記憶」（`/memory`）。**取り出すだけで抽出もNotion照合も走らせない**。
+  開発DBのシードに、候補・確定・Notionで達成済み・忘れたの各状態を入れてある
+- 会話の区切り（#322）・履歴・日別表示・compactには手を入れていない。**記憶は `Conversation` に紐づけない**
+
 ## 音声対話（話す / 書く）
 
 **このアプリの本来の使い方は音声**で、文字入力は声を出せない場面と言い直しのために残している（#27）。
@@ -1856,6 +1897,21 @@ pnpm dev:https    # tailnetへHTTPSで公開し、iPhoneで開くURLを出す
   使えるトークンを持った接続を入れると、開発環境で相談を送るたび実在しない資格情報で
   外部へ繋ぎに行き、返答の生成そのものが失敗する
 
+### 希望リストと空き時間の提案（#324）
+
+**「今から1〜2時間で何をしよう」「土日に何をしたらいい？」に、Notionの「いつかやりたいこと」と
+AIDEの空き時間（`aide_schedule`）を組み合わせて答える。** 実装はプロンプトだけ
+（`suggestionRules()`。`src/lib/anthropic.ts`）で、新しい道具・接続・保存先は無い。
+
+- **希望はaide-bot内にもAIDEにも別保存しない。** 正本はNotionのDB。候補は「やってみたい」「検討中」だけ
+- **過ごし方を尋ねられた回だけNotionを引かせる。** 一般の質問ごとに検索すると約9秒ずつ遅れる（#131）
+- **Notion未接続の回は、設定の接続から追加する案内を返す**（AIDE未接続なら空き時間を確かめられないと伝える）。
+  接続の有無は `findPreset(url)?.id`（`notion` / `aide`）で見る
+- **取れなかった（Notion検索失敗・`complete:false`）と「候補なし」「空いている」を混ぜない**
+- **書き込みは提案では行わない。** 本人が選んだあと明示的に頼まれたときだけ既存の登録の道具を使う
+- 効きはプロンプトによるので回ごとに揺れる。実物Codex＋スタブMCPでの呼び分けの実測は未実施
+  （文言は `test/suggestion-rules.test.ts` が固定するだけ）
+
 ### 予定（カレンダー）の連携（#184）
 
 **Googleカレンダーの予定は、AIDEの `aide_schedule`（DaySpan経由。aide#173）で本番からすでに引ける。**
@@ -2037,16 +2093,14 @@ CI専用のプレースホルダーでよい。
 - **対象は「外から来た値を判定する関数」と、ずれると静かに壊れる件数の計算。** いまは
   `isInternalPath()` / `safeInternalPath()`・`safeNoticeUrl()`・`public/sw.js` の `safeTarget()`
   との一致・`historyWindowSkip()`・`readJsonObject()`（#262）・`parseNoticeInput()`
-  （`notice-ingest.ts`）・`parseChoice()`（`notice-choice.ts`）・`removedFromSummary()`
-  （`summary-range.ts`。`deleteDay()` が畳んだ範囲から引く件数。#265）・`shouldGenerate()`（`notice-schedule.ts`。お知らせ選定を呼び直す条件。#227）・`SampleSlot`
+  （`notice-ingest.ts`）・`parseChoice()`（`notice-choice.ts`）・`shouldGenerate()`（`notice-schedule.ts`。お知らせ選定を呼び直す条件。#227）・`SampleSlot`
   （`sample-slot.ts`。試し聞きを止めたら持ち主へ知らせる約束。#279）・`buildAiUsageReport()` /
   `hasValidBearer()`（`ai-usage-report.ts`・`bearer-auth.ts`。使用量APIの組み立てとBearer検証。#297）・
   `pendingNoticeWhere()` ほか（`notice-conditions.ts`。お知らせの未読・表示中の条件。#229）・
-  `throwIfCodexFailed()`（`codex.ts`。Codexの打ち切り・失敗の文言。#229）。**PrismaやSupabaseへ触れる
+  `throwIfCodexFailed()`（`codex.ts`。Codexの打ち切り・失敗の文言。#229）・`shouldAutoBreak()`（`context-break-rule.ts`。会話の自動区切りの条件。#322）。**PrismaやSupabaseへ触れる
   モジュールはimportしない**（テストからDBへ繋がない）。**DBに触れるモジュールの中にある計算を
   テストしたいなら、純粋な関数として別ファイルへ切り出す**（#265で `parseChoice()` を
-  `notices.ts` から、`removedFromSummary()` を `day-log.ts` から出した。`deleteDay()` 本体
-  ——行のロックと `decrement`——はDBが要るのでテストの外）。`@prisma/client` の `NoticePriority`
+  `notices.ts` から出した）。`@prisma/client` の `NoticePriority`
   のように、生成物を実行時にimportするだけのものは素のNodeでも読める
 - **入力の表は `test/cases.ts` に1つだけ置き、3か所に流す。** `sw.js` は `node:vm` で読み込んで
   `safeTarget()` を取り出す（`sw.js` をexportさせたり書き換えたりしない）。**判定を直したら、
@@ -2161,7 +2215,7 @@ chrome-headless-shell --headless --disable-gpu --no-sandbox --window-size=1060,3
 足してもCSSアニメーションは進まない。見たい時点があるなら、確認用のHTML側で
 `animation-delay: -0.5s` のように負の値を当てて、その姿で止めてから撮る。
 
-### ホバーで出る要素を確かめる（#102）
+### ホバーで出る要素を確かめる（#102。バツは#320で無くなったが、手順は他のホバー表示に使える）
 
 **ヘッドレスChromeは既定で `hover: none` を返し、`Emulation.setEmulatedMedia` では変えられない。**
 `features: [{ name: "hover", value: "hover" }]` を渡しても `matchMedia("(hover: hover)").matches` は

@@ -15,6 +15,7 @@ import { noteRecognition } from "@/lib/speech/recognition";
 import { voiceSettingsSnapshot } from "@/lib/speech/voice-settings";
 import { cn } from "@/lib/utils";
 
+import { ContextBreakControl } from "./context-break-control";
 import { CompactedNote, EntryList, SecretaryAvatar, SecretaryLabel } from "./entry-list";
 import { Markdown } from "./markdown";
 import type { ChatEntry } from "./types";
@@ -32,11 +33,13 @@ type Props = {
   todayKey: string;
   /** 要約へ畳んである発言の数（#157）。0なら印を出さない。 */
   compactedCount: number;
+  /** いまの会話の始まり（`9月24日 07:00`。#322）。区切っていなければnull。 */
+  contextSince: string | null;
 };
 
 type Status = "idle" | "thinking" | "streaming";
 
-export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
+export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSince }: Props) {
   const { send: sendMessage, abort } = useChatStream();
 
   const { entries, setEntries, addUser, addAssistant, addRecord } = useLocalEntries(initialEntries);
@@ -48,6 +51,8 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
   // 声で話している最中か（#279）。入れ替わるのは入力欄のところだけで、記録の流れは残る。
   const [voiceOpen, setVoiceOpen] = useState(false);
   // 秘書の一言（#279）の材料。問い合わせは声かけ（#278）の `useNudges()` が持っている。
+  // 手動で区切った後は、畳んだ発言の印も要らなくなる（要約は新しい会話へ持ち越さない。#322）。
+  const [brokeHere, setBrokeHere] = useState(false);
   const [bubble, setBubble] = useState<BubblePayload>(EMPTY_BUBBLE_PAYLOAD);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -300,7 +305,7 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
             </div>
           )}
 
-          {compactedCount > 0 && !isEmpty && <CompactedNote count={compactedCount} />}
+          {compactedCount > 0 && !brokeHere && !isEmpty && <CompactedNote count={compactedCount} />}
 
           <EntryList entries={entries} todayKey={todayKey} />
 
@@ -361,6 +366,18 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount }: Props) {
           ここに出し先が無いとこの輪ごと——ニュースの仕入れの起点も含めて——動かなくなる。**
         */}
         <SecretaryLine payload={bubble} />
+
+        <ContextBreakControl
+          contextSince={contextSince}
+          disabled={busy}
+          onBroke={(time) => {
+            setBrokeHere(true);
+            setEntries((previous) => [
+              ...previous,
+              { kind: "break", id: `local-break-${previous.length}`, breakKind: "MANUAL", time },
+            ]);
+          }}
+        />
 
         {/*
           声で話している間は、入力欄のところが音声バーに入れ替わる（#279）。記録の流れは

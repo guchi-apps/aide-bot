@@ -2,6 +2,7 @@ import { compactSystemPrompt } from "@/lib/anthropic";
 import { COMPACT_MODEL } from "@/lib/chat-model";
 import { runCodexRecorded } from "@/lib/codex-run";
 import { selectFoldable } from "@/lib/compact-budget";
+import { contextMessageWhere } from "@/lib/context-break";
 import { db } from "@/lib/db";
 
 /**
@@ -79,8 +80,7 @@ function buildPrompt(previous: string | null, folded: string): string {
  *
  * **要約と件数は呼び出し元から受け取らず、ここで読み直す**（#245）。呼び出し元が往復の
  * 頭で読んだ値は、Codexを待つあいだ（最大120秒）に古くなる。別の往復が先に畳み終えていれば、
- * 古い要約から同じ範囲を畳み直して先の要約を上書きし、日単位の削除（`deleteDay()`）が
- * 件数を戻していれば、古い件数へ足して書き戻して**畳んでいない発言を読み飛ばさせる。**
+ * 古い要約から同じ範囲を畳み直して先の要約を上書きする。
  */
 export async function compactIfNeeded(conversationId: string, userId: string): Promise<boolean> {
   if (running.has(conversationId)) return false;
@@ -90,12 +90,15 @@ export async function compactIfNeeded(conversationId: string, userId: string): P
   try {
     const conversation = await db.conversation.findUnique({
       where: { id: conversationId },
-      select: { summary: true, summarizedCount: true },
+      select: { summary: true, summarizedCount: true, contextStartedAt: true },
     });
     if (!conversation) return false;
 
-    const { summary, summarizedCount } = conversation;
-    const totalMessages = await db.message.count({ where: { conversationId } });
+    const { summary, summarizedCount, contextStartedAt } = conversation;
+    // 畳む対象は現在の文脈（`contextStartedAt` 以降）の発言だけ（#322）。区切る前の発言は
+    // 新しい会話の要約へ入れない。
+    const scope = contextMessageWhere(conversationId, contextStartedAt);
+    const totalMessages = await db.message.count({ where: scope });
 
     const pending = totalMessages - summarizedCount;
     if (pending <= COMPACT_THRESHOLD) return false;
@@ -105,7 +108,7 @@ export async function compactIfNeeded(conversationId: string, userId: string): P
     // 並びは `/api/chat` の履歴と同じキーで固定する。揺れると、畳んだ発言と履歴へ渡す
     // 発言の境目がずれ、同じ発言が二重に入るか抜け落ちる。
     const messages = await db.message.findMany({
-      where: { conversationId },
+      where: scope,
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       skip: summarizedCount,
       take: foldCount,
@@ -140,13 +143,14 @@ export async function compactIfNeeded(conversationId: string, userId: string): P
     const next = Array.from(text).slice(0, SUMMARY_MAX_LENGTH).join("");
 
     // Codexを待っているあいだに畳む対象が変わっていないかを、書く手前で確かめる。
-    // 相談の行を握ってから見るので、同時に動く日単位の削除（`deleteDay()`）とは
-    // どちらかが先に終わっており、後から来た側は先の結果を見て決める。
     const written = await db.$transaction(async (tx) => {
-      // 読んだときの件数のままでなければ、その間に別の往復が畳んだか、畳んだ範囲の日が
-      // 消されて件数が戻っている。どちらも読んだ範囲は畳む対象ではなくなっているので捨てる。
+      // 読んだときの件数のままでなければ、その間に別の往復が畳んでいる。
+      // 読んだ範囲は畳む対象ではなくなっているので捨てる。
       const updated = await tx.conversation.updateMany({
-        where: { id: conversationId, summarizedCount },
+        // 起点も読んだままであること（#322）。Codexを待つあいだに会話が区切られていたら、
+        // 要約と件数は0に戻されている。件数が0のまま同じでも、古い文脈の要約を新しい会話へ
+        // 書き込まないよう、起点の一致でも弾く。
+        where: { id: conversationId, summarizedCount, contextStartedAt },
         data: { summary: next, summarizedCount: summarizedCount + folded.count },
       });
       if (updated.count === 0) return false;
@@ -155,7 +159,7 @@ export async function compactIfNeeded(conversationId: string, userId: string): P
       // 畳んでいない発言まで畳んだことになる（まだ畳んでいない日を消した場合。件数は動かない）。
       // 上限（#244）で一部しか畳めなかった回は、実際に畳んだ `folded.count` 件だけを見る。
       const current = await tx.message.findMany({
-        where: { conversationId },
+        where: scope,
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         skip: summarizedCount,
         take: folded.count,

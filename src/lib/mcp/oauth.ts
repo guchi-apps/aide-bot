@@ -14,7 +14,7 @@ import { createHash, randomBytes } from "node:crypto";
 const REQUEST_TIMEOUT_MS = 10_000;
 
 /** aide-bot が動的クライアント登録で名乗る名前。相手の認可画面にこの名前が出る。 */
-const CLIENT_NAME = "aide-bot（秘書アプリ）";
+const CLIENT_NAME = "aide-bot（Morrow）";
 
 export type DiscoveredEndpoints = {
   authorizationEndpoint: string;

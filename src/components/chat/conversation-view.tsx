@@ -36,6 +36,8 @@ type Props = {
   todayKey: string;
   /** 要約へ畳んである発言の数（#157）。 */
   compactedCount: number;
+  /** いまの会話の始まり（`9月24日 07:00`。#322）。区切っていなければnull。 */
+  contextSince: string | null;
 };
 
 /**
@@ -48,12 +50,17 @@ type Props = {
  * `useNewConversationEpoch()` は「`/` を開いたまま新しいスレッドを始める」ための仕掛けで、
  * スレッドを分けなくなった今は始める対象そのものが無い。
  */
-export function ConversationView({ initialEntries, todayKey, compactedCount }: Props) {
+export function ConversationView({ initialEntries, todayKey, compactedCount, contextSince }: Props) {
   const { mode } = useTalkMode();
 
   return mode === "voice" ? (
     <VoicePanel initialEntries={initialEntries} todayKey={todayKey} />
   ) : (
-    <ChatPanel initialEntries={initialEntries} todayKey={todayKey} compactedCount={compactedCount} />
+    <ChatPanel
+      initialEntries={initialEntries}
+      todayKey={todayKey}
+      compactedCount={compactedCount}
+      contextSince={contextSince}
+    />
   );
 }

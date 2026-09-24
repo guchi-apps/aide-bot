@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 
 import { ConversationView } from "@/components/chat/conversation-view";
 import { getCurrentUser } from "@/lib/auth-user";
-import { jstDayKey } from "@/lib/day-key";
+import { dayHeading, jstDayKey, jstTimeLabel } from "@/lib/day-key";
 import { entriesForToday, primaryConversation } from "@/lib/day-log";
 
 /**
@@ -23,11 +23,17 @@ export default async function TodayPage() {
 
   const entries = await entriesForToday(conversation.id, now);
 
+  // いまの会話の始まり。日本時間で確定させて渡す（クライアントで組むとハイドレーションがずれる）。
+  const started = conversation.contextStartedAt;
+  const todayKey = jstDayKey(now);
+  const contextSince = started ? `${dayHeading(jstDayKey(started), todayKey)} ${jstTimeLabel(started)}` : null;
+
   return (
     <ConversationView
       initialEntries={entries}
-      todayKey={jstDayKey(now)}
+      todayKey={todayKey}
       compactedCount={conversation.summarizedCount}
+      contextSince={contextSince}
     />
   );
 }

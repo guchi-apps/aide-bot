@@ -79,8 +79,7 @@ function buildPrompt(previous: string | null, folded: string): string {
  *
  * **要約と件数は呼び出し元から受け取らず、ここで読み直す**（#245）。呼び出し元が往復の
  * 頭で読んだ値は、Codexを待つあいだ（最大120秒）に古くなる。別の往復が先に畳み終えていれば、
- * 古い要約から同じ範囲を畳み直して先の要約を上書きし、日単位の削除（`deleteDay()`）が
- * 件数を戻していれば、古い件数へ足して書き戻して**畳んでいない発言を読み飛ばさせる。**
+ * 古い要約から同じ範囲を畳み直して先の要約を上書きする。
  */
 export async function compactIfNeeded(conversationId: string, userId: string): Promise<boolean> {
   if (running.has(conversationId)) return false;
@@ -140,11 +139,9 @@ export async function compactIfNeeded(conversationId: string, userId: string): P
     const next = Array.from(text).slice(0, SUMMARY_MAX_LENGTH).join("");
 
     // Codexを待っているあいだに畳む対象が変わっていないかを、書く手前で確かめる。
-    // 相談の行を握ってから見るので、同時に動く日単位の削除（`deleteDay()`）とは
-    // どちらかが先に終わっており、後から来た側は先の結果を見て決める。
     const written = await db.$transaction(async (tx) => {
-      // 読んだときの件数のままでなければ、その間に別の往復が畳んだか、畳んだ範囲の日が
-      // 消されて件数が戻っている。どちらも読んだ範囲は畳む対象ではなくなっているので捨てる。
+      // 読んだときの件数のままでなければ、その間に別の往復が畳んでいる。
+      // 読んだ範囲は畳む対象ではなくなっているので捨てる。
       const updated = await tx.conversation.updateMany({
         where: { id: conversationId, summarizedCount },
         data: { summary: next, summarizedCount: summarizedCount + folded.count },

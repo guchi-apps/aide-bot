@@ -324,6 +324,35 @@ const NOTICE_SEEDS = [
 // 種類（category）は3つすべてを入れてある。1種類だけだとチップの出し分けを画面で確かめられない。
 // `fetchedMinutesAgo` は投入時刻からの相対で、24時間の期間を過ぎたものも1件入れてある
 // （一覧にも吹き出しにも出ないことを確かめる）。
+const MEMORY_SEEDS = [
+  {
+    kind: "WISH", status: "CANDIDATE", confidence: "MEDIUM", daysAgo: 1,
+    content: "京都の紅葉を見に行きたい", sourceQuote: "今年は京都の紅葉を見に行きたいなあ",
+  },
+  {
+    kind: "DECISION", status: "CANDIDATE", confidence: "LOW", daysAgo: 2,
+    content: "朝の見通しは短めにしてほしい", sourceQuote: "朝の通知は短くていいかも",
+  },
+  {
+    kind: "WISH", status: "CONFIRMED", confidence: "HIGH", daysAgo: 12, checkedDaysAgo: 1,
+    notionStatus: "open", notionUrl: "https://www.notion.so/dummy-open",
+    content: "温泉旅行に行く", sourceQuote: "いつか温泉旅行に行きたい",
+  },
+  {
+    kind: "WISH", status: "CONFIRMED", confidence: "HIGH", daysAgo: 30, checkedDaysAgo: 1,
+    notionStatus: "done", notionUrl: "https://www.notion.so/dummy-done",
+    content: "水族館へ行く（Notionでは達成済み）", sourceQuote: "水族館に行きたい",
+  },
+  {
+    kind: "ONGOING", status: "CONFIRMED", confidence: "MEDIUM", daysAgo: 5,
+    content: "引っ越しの見積もりを比べている", sourceQuote: "引っ越しの見積もりを3社から取って比べてる",
+  },
+  {
+    kind: "DECISION", status: "FORGOTTEN", confidence: "HIGH", daysAgo: 20,
+    content: "毎週日曜に長い散歩をする（忘れた）", sourceQuote: "日曜は長めに散歩することにした",
+  },
+];
+
 const TOPIC_SEEDS = [
   {
     category: "life",
@@ -825,6 +854,28 @@ async function main() {
   }
 
   console.log(`[aide-bot] 話題を${TOPIC_SEEDS.length}件投入しました`);
+
+  // 継続記憶（#323）。候補・確定・Notionで達成済み・忘れたの各状態を入れておく
+  // （空だと、状態ごとの出し分けを画面から確かめられない）。dedupeKeyは本番の正規化ハッシュと
+  // 一致しなくてよい（一意であればよいダミー）。
+  const DAY = 24 * 60 * 60 * 1000;
+  for (const [index, seed] of MEMORY_SEEDS.entries()) {
+    const { daysAgo, checkedDaysAgo, ...rest } = seed;
+    const data = {
+      ...rest,
+      sourceAt: new Date(now.getTime() - daysAgo * DAY),
+      notionCheckedAt: checkedDaysAgo === undefined ? null : new Date(now.getTime() - checkedDaysAgo * DAY),
+      confirmedAt: rest.status === "CANDIDATE" ? null : new Date(now.getTime() - daysAgo * DAY),
+    };
+    const dedupeKey = createHash("sha256").update(`seed-memory-${index}`).digest("hex");
+    await db.memory.upsert({
+      where: { userId_dedupeKey: { userId: user.id, dedupeKey } },
+      update: data,
+      create: { userId: user.id, dedupeKey, ...data },
+    });
+  }
+
+  console.log(`[aide-bot] 継続記憶を${MEMORY_SEEDS.length}件投入しました`);
 }
 
 main()

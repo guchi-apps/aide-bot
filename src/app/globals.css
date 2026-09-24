@@ -203,352 +203,73 @@ body {
 }
 
 /*
- * 画面中央の「秘書」のロボット（#49）。絵は `src/components/voice/robot.tsx` にあり、
+ * 画面中央の秘書の立ち絵（#326）。絵は `src/components/voice/secretary.tsx` にあり、
  * 状態ごとの動きだけをここに置く——キーフレームをTailwindのユーティリティでは書けないため。
- * 大きさは呼ぶ側がwidth/heightで決める（スマホでは大きく、PCではやや小さく置くため）。
+ *
+ * **5枚を重ねて置き、いまの状態の1枚だけを見せる**（`.sec-pose`）。描き直すたびに `src` を
+ * 差し替えると、読み込みが間に合わない回に一瞬だけ空白が出る。重ねておけば最初にまとめて
+ * 読み込み、切り替えは不透明度のフェードだけで済む。
+ *
+ * 絵は背景を抜いた切り抜きで、細い髪の縁にはわずかに元の白が残る。後ろに淡い円（`.sec-stage`）を
+ * 敷き、腰から下はマスクで消して、ダークモードでも切り抜きの縁が浮かないようにしてある。
  */
-.bot {
-  display: block;
-  flex: none;
+.sec-stage {
+  background: radial-gradient(
+    closest-side,
+    color-mix(in oklab, var(--surface) 100%, transparent) 0%,
+    color-mix(in oklab, var(--accent-surface) 45%, transparent) 58%,
+    transparent 100%
+  );
 }
 
-/* アンテナの波と「考え中」の点は、その状態のときだけ出す。 */
-.bot-wave,
-.bot-think {
+@media (prefers-color-scheme: dark) {
+  .sec-stage {
+    background: radial-gradient(
+      closest-side,
+      rgb(255 236 224 / 0.16) 0%,
+      rgb(255 236 224 / 0.07) 60%,
+      transparent 100%
+    );
+  }
+}
+
+.sec-figure {
+  transform-origin: 50% 100%;
+  -webkit-mask-image: linear-gradient(#000 78%, transparent 100%);
+  mask-image: linear-gradient(#000 78%, transparent 100%);
+}
+
+.sec-pose {
   opacity: 0;
+  transition: opacity 0.2s ease;
 }
 
-/*
- * 変形の基準はviewBoxの座標で直に指定する。既定の fill-box だと部品ごとの外接矩形が
- * 基準になるため、目や口が自分の中心ではないところを軸に動く。
- */
-.bot-body,
-.bot-eye,
-.bot-mouth,
-.bot-lamp,
-.bot-wave,
-.bot-foot {
-  transform-box: view-box;
-}
-
-/* 足元を軸にすると、体が伸び縮みしても地面から浮かない。 */
-.bot-body {
-  transform-origin: 256px 440px;
-}
-
-.bot-eye-l {
-  transform-origin: 206px 302px;
-}
-
-.bot-eye-r {
-  transform-origin: 306px 302px;
-}
-
-.bot-mouth {
-  transform-origin: 256px 354px;
-}
-
-.bot-lamp,
-.bot-wave {
-  transform-origin: 256px 130px;
-}
-
-/* 足上げ（#215）で動かす1本の足。自分の付け根を基準にする。 */
-.bot-foot {
-  transform-origin: 306px 454px;
-}
-
-.bot-idle .bot-body {
-  animation: bot-breathe 5s ease-in-out infinite;
-}
-
-.bot-idle .bot-eye {
-  animation: bot-blink 6.2s ease-in-out infinite;
-}
-
-.bot-idle .bot-lamp {
-  animation: bot-dim 5s ease-in-out infinite;
-}
-
-.bot-listening .bot-body {
-  animation: bot-lean 1.6s ease-in-out infinite;
-}
-
-.bot-listening .bot-eye {
-  animation: bot-wide 1.6s ease-in-out infinite;
-}
-
-.bot-listening .bot-wave {
-  animation: bot-wave 1.8s ease-out infinite;
-}
-
-/* 声が届いた直後だけ、前のめりと波を速くして反応を返す。 */
-.bot-listening.bot-reacting .bot-body {
-  animation-duration: 0.8s;
-}
-
-.bot-listening.bot-reacting .bot-wave {
-  animation-duration: 1s;
-}
-
-/*
- * 考え中と、VOICEVOXの声の用意待ち（#52）は同じ動きにする。返答はもう出ているが、まだ
- * 鳴らない——「待てば来る」ことだけ伝われば足りるので、絵は分けずに文言だけを分ける。
- */
-.bot-thinking .bot-body,
-.bot-preparing .bot-body {
-  animation: bot-tilt 3.4s ease-in-out infinite;
-}
-
-/* 目を細める。考えている間はまばたきさせない。 */
-.bot-thinking .bot-eye,
-.bot-preparing .bot-eye {
-  transform: scaleY(0.55);
-}
-
-.bot-thinking .bot-think,
-.bot-preparing .bot-think {
+.sec-pose[data-active] {
   opacity: 1;
 }
 
-.bot-thinking .bot-dot,
-.bot-preparing .bot-dot {
-  animation: bot-hop 1.25s ease-in-out infinite;
+/* 待っている間は、呼吸するようにごくわずかに上下する。 */
+.sec-idle .sec-figure,
+.sec-notifying .sec-figure {
+  animation: sec-breathe 5s ease-in-out infinite;
 }
 
-.bot-speaking .bot-body {
-  animation: bot-nod 1.05s ease-in-out infinite;
+/* 声が届いた直後だけ、少し前へ寄って「聞こえた」ことを返す。 */
+.sec-figure {
+  transition: transform 0.25s ease;
 }
 
-.bot-speaking .bot-mouth {
-  animation: bot-talk 0.42s ease-in-out infinite;
+.sec-reacting .sec-figure {
+  transform: scale(1.025);
 }
 
-.bot-speaking .bot-wave {
-  animation: bot-wave 1.5s ease-out infinite;
-}
-
-/*
- * 触れられたときの反応（#180）。**ここが効くのはWebGLが使えずSVGで出ているときだけ**で、
- * 3Dで描けている端末では同じ動きを `robot-3d/model.ts` が作る。状態ごとの動きを
- * 上書きするため、必ず `.bot-idle` などの指定より後ろに置くこと（詳しさが同じなので
- * 後から書いた方が勝つ）。**状態ごとの動きを重ねるのではなく、反応の間だけ丸ごと差し替える。**
- * 状態と反応の組み合わせぶん（5通り）のキーフレームを書くより、反応の0.7秒だけ揺れが止まる方を
- * 採った——3Dで描けている端末ではこの経路を通らないため、書き分けに見合わない。
- *
- * **会釈・ジャンプ・足上げ（#215）は排他。** 体を押されるたびに`pickBodyReaction()`が
- * この3つから1つだけ選ぶので、同時に2つのクラスが付くことはない。
- */
-.bot-bow .bot-body {
-  animation: bot-bow 0.7s ease-in-out;
-}
-
-.bot-jump .bot-body {
-  animation: bot-jump 0.7s ease-in-out;
-}
-
-.bot-legup .bot-body {
-  animation: bot-legtilt 0.7s ease-in-out;
-}
-
-.bot-legup .bot-foot {
-  animation: bot-footup 0.7s ease-in-out;
-}
-
-.bot-flash .bot-lamp {
-  animation: bot-flash 0.6s ease-out;
-}
-
-/* 波と点は時間差で出して、途切れずに広がって見せる。 */
-.bot-wave-2 {
-  animation-delay: 0.4s;
-}
-
-.bot-wave-3 {
-  animation-delay: 0.8s;
-}
-
-.bot-wave-4 {
-  animation-delay: 1.2s;
-}
-
-.bot-dot-2 {
-  animation-delay: 0.16s;
-}
-
-.bot-dot-3 {
-  animation-delay: 0.32s;
-}
-
-@keyframes bot-breathe {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.025);
-  }
-}
-
-@keyframes bot-blink {
-  0%,
-  92%,
-  100% {
-    transform: scaleY(1);
-  }
-  95% {
-    transform: scaleY(0.08);
-  }
-}
-
-@keyframes bot-dim {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-@keyframes bot-lean {
-  0%,
-  100% {
-    transform: translateY(0) scale(1);
-  }
-  50% {
-    transform: translateY(-10px) scale(1.03);
-  }
-}
-
-@keyframes bot-wide {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.1);
-  }
-}
-
-@keyframes bot-tilt {
-  0%,
-  100% {
-    transform: rotate(-3deg);
-  }
-  50% {
-    transform: rotate(3deg);
-  }
-}
-
-@keyframes bot-nod {
+@keyframes sec-breathe {
   0%,
   100% {
     transform: translateY(0);
   }
   50% {
-    transform: translateY(-5px);
-  }
-}
-
-@keyframes bot-talk {
-  0%,
-  100% {
-    transform: scaleY(0.45);
-  }
-  50% {
-    transform: scaleY(1.35);
-  }
-}
-
-@keyframes bot-hop {
-  0%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.35;
-  }
-  50% {
-    transform: translateY(-7px);
-    opacity: 1;
-  }
-}
-
-@keyframes bot-wave {
-  0% {
-    transform: scale(0.55);
-    opacity: 0;
-  }
-  25% {
-    opacity: 0.9;
-  }
-  100% {
-    transform: scale(1.3);
-    opacity: 0;
-  }
-}
-
-/* 会釈。出て、戻る。基準は足元（`.bot-body` の transform-origin）なので前へ沈んで見える。 */
-@keyframes bot-bow {
-  0%,
-  100% {
-    transform: translateY(0) scaleY(1);
-  }
-  40% {
-    transform: translateY(20px) scaleY(0.95);
-  }
-}
-
-/*
- * ジャンプ（#215）。沈んでから跳ね上がり、スクワッシュ&ストレッチを付けて着地する。
- * 3D側（`robot-3d/model.ts`）は同じ進み方（`Math.sin(progress * Math.PI)`）を`root`の
- * 位置・`body`の伸び縮みに使っている。
- */
-@keyframes bot-jump {
-  0%,
-  100% {
-    transform: translateY(0) scaleY(1);
-  }
-  18% {
-    transform: translateY(6px) scaleY(0.92);
-  }
-  55% {
-    transform: translateY(-30px) scaleY(1.08);
-  }
-  85% {
-    transform: translateY(2px) scaleY(0.95);
-  }
-}
-
-/* 足上げ（#215）。体をわずかに傾け、`.bot-foot`（1本だけ）を独立して持ち上げる。 */
-@keyframes bot-legtilt {
-  0%,
-  100% {
-    transform: rotate(0deg);
-  }
-  45% {
-    transform: rotate(-4deg);
-  }
-}
-
-@keyframes bot-footup {
-  0%,
-  100% {
-    transform: translate(0, 0) rotate(0deg);
-  }
-  45% {
-    transform: translate(-4px, -34px) rotate(-20deg);
-  }
-}
-
-/* アンテナの発光。明るさを一段上げてから戻す。 */
-@keyframes bot-flash {
-  0% {
-    transform: scale(1.3);
-    filter: brightness(2.2);
-  }
-  100% {
-    transform: scale(1);
-    filter: brightness(1);
+    transform: translateY(-2px);
   }
 }
 
@@ -706,30 +427,17 @@ body {
 }
 
 /*
- * 動きを減らす設定の端末では、ロボットを止める。状態は文言（「はい、聞いていますよ」等）でも
- * 出しているため、止めても何が起きているかは分かる。ただし波は動きが消えると出ないまま
- * になるので、静止したまま出しておく。
+ * 動きを減らす設定の端末では、立ち絵の揺れとフェードを止める（絵の差し替えだけにする）。
+ * 状態は文言（「はい、聞いていますよ」等）でも出しているため、止めても何が起きているかは分かる。
  *
  * 吹き出しも同じ扱い。**止めるだけで消さない**——`bubble-pop` は `both` で始まりが
  * 透明なので、animationごと無効にしないと出たまま見えなくなる。
  */
 @media (prefers-reduced-motion: reduce) {
-  .bot * {
+  .sec-figure,
+  .sec-pose {
     animation: none !important;
-  }
-
-  .bot-listening .bot-wave,
-  .bot-speaking .bot-wave {
-    opacity: 0.5;
-  }
-
-  /*
-   * 触れられても体は動かさず、アンテナの明るさだけで応える（#180。3D側の
-   * `scene.ts` の `react()` も同じ扱いにしてある）。上の `animation: none` に
-   * 消されないよう、キーフレームではなく素の指定で書く。
-   */
-  .bot-flash .bot-lamp {
-    filter: brightness(1.8);
+    transition: none !important;
   }
 
   .bubble-pop,

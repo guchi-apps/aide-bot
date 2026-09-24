@@ -55,6 +55,7 @@ model User {
   notificationLogs  NotificationLog[]
   notices           Notice[]
   topics            Topic[]
+  memories          Memory[]
 }
 
 // --- チャット ---
@@ -453,4 +454,67 @@ model Topic {
   @@unique([userId, urlHash])
   // 取り出しは「自分のぶんを新しい順・期間で切る」だけ。
   @@index([userId, fetchedAt])
+}
+
+// --- 継続記憶（#323） ---
+// 会話を区切っても（#322）、本人が続けてほしい希望・判断・進行中の用件を思い出せるようにする。
+// **会話の要約（`Conversation.summary`。#157）とは別物**——あちらは作業用の畳み込みで、出典も
+// 有効期限も直す導線も無い。要約を無条件にここへ移さない。`Conversation` には紐づけず利用者単位で持つ
+// （区切りをまたいで残るため）。「候補」は自動抽出しただけで、相談へ渡すのは利用者が残した「確定」だけ。
+
+enum MemoryKind {
+  /// 行きたい・やりたい。正本はNotionの「いつかやりたいこと」で、こちらは複製を作らない。
+  WISH
+  /// 本人が決めたこと・続けてほしい方針。
+  DECISION
+  /// 進行中の用件。
+  ONGOING
+}
+
+enum MemoryStatus {
+  CANDIDATE
+  CONFIRMED
+  /// 見送り。候補のまま採らなかったもの。同じ内容を再び候補にしない。
+  DISMISSED
+  /// 忘れる。確定を取り下げたもの。本文は残すが、回答の根拠には二度と使わない。
+  FORGOTTEN
+}
+
+enum MemoryConfidence {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+model Memory {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  kind       MemoryKind
+  content    String           @db.VarChar(400)
+  status     MemoryStatus     @default(CANDIDATE)
+  confidence MemoryConfidence @default(MEDIUM)
+
+  /// 元の発言。**FKにしない**（発言を消す機能は無いが、記憶は発言より長く残す前提のため、
+  /// 引用と時刻を自分で持つ）。`sourceMessageId` は辿るためだけの参照。
+  sourceMessageId String?
+  sourceQuote     String   @db.VarChar(400)
+  /// 元の発言の日時。「いつ言ったことか」を画面と回答に出す。
+  sourceAt        DateTime
+
+  /// 正規化した本文のハッシュ。同じ内容の候補を作り直さず、忘れた・見送ったものを蘇らせない。
+  dedupeKey String @db.VarChar(64)
+
+  /// Notion側の状態（WISHのみ）: open / done / skipped / not_found。nullは未確認。
+  notionStatus    String?   @db.VarChar(20)
+  notionUrl       String?   @db.VarChar(500)
+  notionCheckedAt DateTime?
+
+  confirmedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, status, updatedAt])
 }

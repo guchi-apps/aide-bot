@@ -7,6 +7,9 @@ import { selectedChatModels } from "@/lib/chat-model-server";
 import { runCodexExec, type CodexToolCallEvent } from "@/lib/codex";
 import { recordCodexUsage } from "@/lib/codex-run";
 import { compactIfNeeded } from "@/lib/compact";
+import { memoryBlockForChat } from "@/lib/memory";
+import { extractCandidatesIfDue, refreshStaleNotionStates } from "@/lib/memory-extract";
+import { MEMORY_UNAVAILABLE_NOTE } from "@/lib/memory-rule";
 import { MAX_MESSAGE_LENGTH } from "@/lib/conversation";
 import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
@@ -190,6 +193,7 @@ function buildConversationText(
 function buildCodexPrompt(
   style: ReplyStyle,
   homeProfile: string | null,
+  memoryBlock: string,
   summary: string | null,
   history: { role: "USER" | "ASSISTANT"; content: string; interrupted: boolean }[],
   topics: string,
@@ -215,6 +219,19 @@ function buildCodexPrompt(
             "場所や暮らしの話では、どこの話かを聞き返さずにここを前提にしてよい。" +
             "取り込んだ時点の内容なので、手続きや金額に関わる判断で使うときは本人に確かめる）:",
           homeProfile,
+        ]),
+    // 継続記憶（#323）。**利用者が残すと選んだものだけ**（確定）。会話の要約とは別物で、区切り
+    // （#322）をまたいで残る。要約より前に置くのは、要約が「これまでの話」なのに対しこちらは前提のため。
+    ...(memoryBlock === ""
+      ? []
+      : [
+          "---",
+          "利用者が「残す」と選んだ継続記憶（希望・決めたこと・進行中の用件。各行の日付は元の発言と更新の日）。" +
+            "聞かれたときや関係するときだけ使い、頼まれていないのに持ち出さない。**ここに無いことを「覚えていない」と" +
+            "断定せず**、分からなければ確認できないと言う。予定・タスク・Notionなど正本の現在の状態" +
+            "（達成・変更・見送り）が記憶と食い違うときは、正本を優先して記憶を根拠にしない。" +
+            "使うときは、いつの発言かを添えて答えられるようにしておく:",
+          memoryBlock,
         ]),
     ...(summary === null
       ? []
@@ -320,6 +337,15 @@ export async function POST(request: Request) {
   // 仕入れてある話題（#144）。DBを引くだけで、無ければ空文字（プロンプトの形は変わらない）。
   const topics = await topicsForChat(user.id);
 
+  // 継続記憶（#323）。引けなかった回は、空にせず「確認できない」と伝える（覚えていないと断定させない）。
+  let memoryBlock = "";
+  try {
+    memoryBlock = await memoryBlockForChat(user.id, new Date());
+  } catch (error) {
+    console.error("[aide-bot] 継続記憶の読み出しに失敗した", error);
+    memoryBlock = MEMORY_UNAVAILABLE_NOTE;
+  }
+
   // 繋いでいる外部サービス（#46・#131）。読み出しに失敗しても相談そのものは通す。
   // 繋がっていないぶんは答えられないだけで、送信ごと弾くより実害が小さい。
   let servers: ConnectedServer[] = [];
@@ -347,6 +373,7 @@ export async function POST(request: Request) {
     // 自宅と暮らしの前提（#167）。`getCurrentUser()` が引いた行にもう載っているので、
     // ここでDBを引き直さない（相談1往復の待ち時間を増やさない）。
     user.homeProfile,
+    memoryBlock,
     conversation.summary,
     history,
     topics,
@@ -528,6 +555,11 @@ export async function POST(request: Request) {
         // 要約と件数はここで渡さない。Codexを待つあいだに古くなるので、`compactIfNeeded()` が
         // 畳む直前に読み直す（#245）。
         after(() => compactIfNeeded(conversation.id, user.id));
+
+        // 継続記憶の候補の抽出と、Notionでの状態の取り直し（#323）。**どちらも返答の後**で、
+        // 間隔と件数で絞ってある（`memory-extract.ts`）。例外は中で握る。
+        after(() => extractCandidatesIfDue(user.id, conversation.id));
+        after(() => refreshStaleNotionStates(user.id));
       }
     },
   });

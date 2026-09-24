@@ -69,6 +69,14 @@ export const COMPACT_MODEL = "gpt-5.6-terra";
 export const HOME_PROFILE_MODEL = "gpt-5.6-terra";
 
 /**
+ * 継続記憶（#323）の候補抽出とNotion照合のモデル。設定の画面からは選べない（返答を返した後の
+ * 後始末と、記憶の画面のボタンで走る）。**Terra**にしてあるのは、雑談や仮説を「継続的な希望」と
+ * 取り違えず、Notionの状態も読み違えないため。候補は利用者が確かめるまで使われないが、
+ * 走る回数を絞ってある（`memory-extract.ts`）ので利用枠への影響は小さい。
+ */
+export const MEMORY_MODEL = "gpt-5.6-terra";
+
+/**
  * `/usage` 画面の単価表。**Anthropic（Claude）の単価だけを載せる。**
  *
  * **#183で、いま新しく積まれる記録はすべてCodex（サブスク定額）になった。** この表が効くのは

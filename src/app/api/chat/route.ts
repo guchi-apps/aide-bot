@@ -1,6 +1,11 @@
 import { after, NextResponse } from "next/server";
 
-import { INTERRUPTED_NOTE, historyWindowSkip, secretarySystemPrompt } from "@/lib/anthropic";
+import {
+  INTERRUPTED_NOTE,
+  historyWindowSkip,
+  secretarySystemPrompt,
+  type SuggestionConnections,
+} from "@/lib/anthropic";
 import { getCurrentUser } from "@/lib/auth-user";
 import type { ReplyStyle } from "@/lib/chat-model";
 import { selectedChatModels } from "@/lib/chat-model-server";
@@ -15,7 +20,7 @@ import { contextMessageWhere, replySavedAt, rolloverIfIdle } from "@/lib/context
 import { primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { listConnectedServers, toCodexMcpServers, type ConnectedServer } from "@/lib/mcp/connections";
-import { hintsFor, writeToolsFor } from "@/lib/mcp/presets";
+import { findPreset, hintsFor, writeToolsFor } from "@/lib/mcp/presets";
 import { readJsonObject } from "@/lib/json-body";
 import { writeToolsAllowed } from "@/lib/mcp/write-tools";
 import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
@@ -201,11 +206,19 @@ function buildCodexPrompt(
   connectedLabels: string[],
   writeToolsWithheld: boolean,
   connectedHints: string[],
+  suggestion: SuggestionConnections,
 ): string {
   // 繋いでいる接続の名前と「書き込みの道具を止めている」ことを体裁の指示に含める（#46・#78）。
   // 接続の増減はまれなので、プレフィックスの先頭側が変わることは受け入れる。
   // 接続先ごとの指示（#184）も同じ場所に入る。今日の日付もここ（1日1回だけ変わる）。
-  const system = secretarySystemPrompt(style, connectedLabels, writeToolsWithheld, connectedHints);
+  const system = secretarySystemPrompt(
+    style,
+    connectedLabels,
+    writeToolsWithheld,
+    connectedHints,
+    new Date(),
+    suggestion,
+  );
   const conversation = buildConversationText(history);
 
   return [
@@ -394,6 +407,11 @@ export async function POST(request: Request) {
     withheldTools.length > 0,
     // 繋いでいる接続先の指示（#184）。プリセットに無い接続先ぶんは空。
     servers.flatMap((server) => hintsFor(server.url)),
+    // 希望リストの提案（#324）。NotionとAIDEのどちらを繋いでいるかで指示が変わる。
+    {
+      notion: servers.some((server) => findPreset(server.url)?.id === "notion"),
+      aide: servers.some((server) => findPreset(server.url)?.id === "aide"),
+    },
   );
 
   // 次に割り込んでくるリクエストへ「この生成の後片付けが終わった」と伝えるための錠（#48）。

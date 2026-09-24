@@ -128,6 +128,8 @@ export const MCP_PRESETS: McpPreset[] = [
     provides: [
       "Notionのページ・データベースの検索と閲覧",
       "自宅の情報（住まい・暮らしの決まりごと）の取り込み元（#167）",
+      // #324。希望の正本はこのDBで、aide-botは別保存しない。提案の指示は suggestionRules()。
+      "「いつかやりたいこと」の希望リスト。空き時間（AIDE）と組み合わせた過ごし方の提案（#324）",
     ],
     missing: [],
     hints: [],

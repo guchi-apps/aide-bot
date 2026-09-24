@@ -156,6 +156,45 @@ function connectedServiceRules(
 }
 
 /**
+ * 繋いでいる接続の組み合わせ（#324。希望リストの提案に使う）。
+ * `notion` / `aide` は `MCP_PRESETS` の接続先を繋いでいるかどうか。
+ */
+export type SuggestionConnections = { notion: boolean; aide: boolean };
+
+/**
+ * 「今から1〜2時間で何をしよう」「土日に何をしたらいい？」への提案の指示（#324）。
+ *
+ * 希望の正本はNotionの「いつかやりたいこと」で、**aide-bot内にもAIDEにも別保存しない**。
+ * 空き時間は既存の `aide_schedule`。新しい道具は作らず、既存の接続を使わせる指示だけを置く。
+ * **一般の質問ごとにNotionを検索させない**——待ち時間が約9秒ずつ増える（#131）ため、
+ * 過ごし方を尋ねられた回だけ引かせる。
+ * Notionを繋いでいない回も、設定の接続で追加する案内を返せるよう指示を出す（会話は続ける）。
+ */
+export function suggestionRules(connections: SuggestionConnections): string[] {
+  if (!connections.notion) {
+    return [
+      "「何をしよう」「どこかへ行きたい」のように、やりたいことや過ごし方の提案を求められたが、Notionに繋がっていないときは、希望リストを見られないので提案は作れないと伝え、設定の画面の接続からNotionを追加すれば「いつかやりたいこと」を踏まえて提案できると案内する。案内したうえで、本人が話した範囲の内容なら会話は続ける",
+    ];
+  }
+
+  return [
+    "「今から1〜2時間で何をしよう」「土日に何をしたらいい？」のように過ごし方の提案を求められたときだけ、Notionの「いつかやりたいこと」（https://app.notion.com/p/326d8c89a4fc4794932787bded98a99a）を読む。提案を求められていない一般の質問ではNotionを検索しない",
+    "候補にするのはステータスが「やってみたい」「検討中」のものだけ。「達成」「見送り」は通常の提案に出さない。優先度・カテゴリ・メモを選ぶ材料にする",
+    ...(connections.aide
+      ? [
+          "空き時間は aide_schedule で取る（今からなら今日、土日ならその日付。起点の日付と日数を渡す）。埋まっている時間には提案を入れない。すでに予定に入っている、または予定・タスクで完了と確認できる項目は重複して提案しない。予定の時刻を過ぎたというだけで実施済みとは判断しない",
+        ]
+      : [
+          "AIDEに繋がっていないので予定や空き時間は分からない。空き時間を確かめられていないと伝え、空いていると決めつけない",
+        ]),
+    "提案は最大3件程度。1件ごとに、選んだ理由と、Notionの元項目へのリンクを添える。「休む・何もしない」も選択肢にしてよい。休日の予定を勝手に埋めない",
+    "根拠のない所要時間・距離・費用・営業時間・天気は断定しない。分からないことは分からないと言い、確かめる方法を添える。取得した情報がいつ時点のものかを踏まえて答える",
+    "提案するだけでは、Notion・カレンダー・タスクへ書き込まない。本人が選んだあとで明示的に登録を頼まれたときだけ、登録の道具（予定なら aide_create_event）を使う",
+    "Notionを検索できなかったときは「取得できなかった」と言い、候補が無いとは言わない。予定が取れなかった（configured・complete が false）ときは「空いている」と言わない。取れたうえで未達成の希望が無いときだけ「候補がありません」と言う",
+  ];
+}
+
+/**
  * 相談のシステムプロンプト。
  *
  * **今日の日付を入れる**（#184）。無いと「明後日」「来週の月曜」を予定の道具へ渡す日付に
@@ -171,12 +210,14 @@ export function secretarySystemPrompt(
   writeToolsWithheld = false,
   connectedHints: string[] = [],
   now: Date = new Date(),
+  suggestion: SuggestionConnections = { notion: false, aide: false },
 ): string {
   const rules = [
     `今日は ${jstTodayLabel(now)} です（日本時間）。「明日」「来週」のような相対の日付はここから数える`,
     ...COMMON_RULES,
     ...SECRETARY_VOICE_RULES,
     ...connectedServiceRules(connectedLabels, connectedHints, writeToolsWithheld),
+    ...suggestionRules(suggestion),
     ...(style === "voice" ? VOICE_FORMAT_RULES : TEXT_FORMAT_RULES),
   ];
 

@@ -1,6 +1,8 @@
 import { AUTO_REQUEST_PREFIX } from "@/lib/auto-request";
 import type { ReplyStyle } from "@/lib/chat-model";
-import { jstTodayLabel } from "@/lib/day-key";
+import { jstTimeLabel, jstTodayLabel } from "@/lib/day-key";
+import { PROACTIVE_KIND_LABELS, type ProactiveKind } from "@/lib/proactive-labels";
+import { PROACTIVE_SKIP_TOKEN } from "@/lib/proactive-rule";
 import { SECRETARY_INTRO, SECRETARY_VOICE_RULES } from "@/lib/persona";
 
 /**
@@ -347,6 +349,51 @@ export function briefingSystemPrompt(connectedLabels: string[]): string {
   const intro = `${SECRETARY_INTRO}\n\n今は朝です。利用者から聞かれる前に、あなたの方から今日の見通しを1本だけ届けます。`;
 
   return `${intro}\n\n${rules.map((rule) => `- ${rule}`).join("\n")}`;
+}
+
+/**
+ * 先回りの提案（#325）を頼む文面。**そのまま相談の1通目（USER）として保存される**（朝の見通しと同じ。
+ * 履歴の先頭をUSERにするため）。記録の画面には出さない（`AUTO_REQUEST_PREFIX`。#280）。
+ */
+export const PROACTIVE_REQUEST = `${AUTO_REQUEST_PREFIX}いまの空き時間や、進行中の用件を見て、先回りで今ならできそうなことを教えて。`;
+
+/**
+ * 先回りの提案を書かせるシステムプロンプト（#325）。
+ *
+ * **希望の読み方と空き時間の扱いは相談側（`suggestionRules()`。#324）と同じ**——通知から開いた会話で
+ * 続きを話したときに、通知と相談で言うことが食い違わないようにするため。違うのは、相手がその場に
+ * おらず**確かめる相手がいない**こと。だから書き込みの道具は呼ばせず、取得に失敗した回・材料が
+ * 揃わない回は黙らせる（`PROACTIVE_SKIP_TOKEN`）。
+ *
+ * - `kinds`: いま考えてよい種類。オフの種類・曜日で対象外の種類は渡らない
+ * - `recentCandidates`: 最近すでに伝えた候補。**同じ候補を繰り返さない**ための材料
+ */
+export function proactiveSystemPrompt(params: {
+  kinds: ProactiveKind[];
+  recentCandidates: string[];
+  now: Date;
+}): string {
+  const { kinds, recentCandidates, now } = params;
+
+  const rules = [
+    `いまは日本時間の${jstTodayLabel(now)} ${jstTimeLabel(now)}。利用者は画面を開いていません。今ならできること・そろそろ対応したいことを、あなたの方から通知で1件だけ提案します`,
+    `考えてよい提案の種類は次の${kinds.length}つだけ。1行目の種類の欄にはこの名前をそのまま書く`,
+    ...kinds.map((kind) => `  - ${kind}（${PROACTIVE_KIND_LABELS[kind]}）`),
+    "材料はすべて道具で取る。Notionの「いつかやりたいこと」（https://app.notion.com/p/326d8c89a4fc4794932787bded98a99a）と、AIDEの予定・空き時間（aide_schedule）、未完了の用件（aide_dev_status など、取れるAIDEの道具）。必要な道具は順に呼ばず、まとめて一度に呼ぶ",
+    "希望の候補にするのはステータスが「やってみたい」「検討中」のものだけ。「達成」「見送り」は出さない。すでに予定に入っている・予定やタスクで完了と確認できるものは出さない。予定の時刻を過ぎたというだけで実施済みとは判断しない",
+    "空き時間は本人の予定が入っていない時間だけ。平日の勤務・通勤の時間帯は空きとして数えない。予定の変更やキャンセルでできた空きは、変更を確かめられたときだけ言う",
+    "Notion・予定・タスクのどれか1つでも取れなかった（道具が失敗した・configured や complete が false）ときは、「何もない」と解釈せず提案しない",
+    ...(recentCandidates.length > 0
+      ? [`最近すでに伝えた候補は繰り返さない: ${recentCandidates.join("、")}`]
+      : []),
+    "記録の追加・登録・変更をする道具は呼ばない。提案するだけで、Notion・カレンダー・タスクへは何も書き込まない",
+    `いま伝える理由が無いとき、または材料が揃わないときは、本文を書かずに ${PROACTIVE_SKIP_TOKEN} とだけ返す。無理に何か書かない`,
+    "返答の形は次のとおり。1行目は `種類|候補の名前|予定の状態` を「|」で区切る（候補の名前はNotionの項目名かタスク名、予定の状態は空き時間の日付と時間帯）。2行目以降が通知の本文。前置き・道具を呼ぶ前の確認の一言は書かない",
+    "本文は200文字以内。なぜ今なのか（空き時間・期限）と、根拠にした項目の名前を入れる。見出し・箇条書き・記号の装飾・URLは使わない",
+    ...SECRETARY_VOICE_RULES,
+  ];
+
+  return `${SECRETARY_INTRO}\n\n${rules.map((rule) => (rule.startsWith("  - ") ? rule : `- ${rule}`)).join("\n")}`;
 }
 
 /**

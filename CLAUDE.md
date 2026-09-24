@@ -315,14 +315,11 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
   切れるが、40発言に一度なので受け入れている
 - **境目は時刻ではなく件数（`summarizedCount`）で持つ。** 同じ時刻の発言があっても
   取りこぼさないため。履歴は「古い方からこの数だけ読み飛ばした先」から組み立てる
-- **畳んだ範囲の中の日を消したら、`summarizedCount` をその数だけ戻す**（`deleteDay()`）。
-  減らさずに消すと、**畳んでいない発言まで読み飛ばされてモデルへ渡らない**（実測で、
-  畳んだ2件を含む日を消した後、残っていた最古の2件が履歴から落ちた）
 - **二重起動を止める**（プロセス内のSet）。割り込み（#48）で往復が重なると同じ相談へ2回走り、
   `summarizedCount` が2回進んで**まだ畳んでいない発言まで要約済みになる**
 - **要約と件数は呼び出し元から渡さず、`compactIfNeeded()` が畳む直前に読み直す**（#245）。
-  Codexを待つ最大120秒のあいだに、別の往復が先に畳み終える・畳んだ範囲の日が消されて件数が戻る、
-  のどちらかが起きうる。往復の頭で読んだ値から絶対値で書くと、前者は先の要約を古い要約から
+  Codexを待つ最大120秒のあいだに、別の往復が先に畳み終える（#320で日の削除をやめたので、件数が戻る経路は
+  無くなった。下の確認は保険として残してある）ことが起きうる。往復の頭で読んだ値から絶対値で書くと、前者は先の要約を古い要約から
   畳み直して上書きし、後者は**戻された件数を押し戻して畳んでいない発言を読み飛ばさせる。**
   書くのは `updateMany({ where: { id, summarizedCount: 読んだ値 } })` を1つのトランザクションに
   入れ、件数が0なら捨てる。**件数が同じでも、畳もうとした範囲の発言のidが変わっていれば
@@ -330,30 +327,18 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
 - **畳んだことは画面に出す**（`CompactedNote`）。出さないと「昔の話を覚えていない」が
   不具合に見える。記録そのものは日付の一覧から辿れて消えていない
 
-### その日の記録を消す（#157。#102を日単位へ移したもの）
+### 記録を消す機能は無い（#320）
 
-左メニュー（`ConversationRail`）の各行の右端にバツを置き、確認をはさんで
-`DELETE /api/days/[date]` を叩く。
+**#157で日単位にした削除（左メニューのバツ・`DELETE /api/days/[date]`・`deleteDay()`）を#320で
+廃止した。** 左メニューは日付の一覧を見て開くだけで、利用者が発言を消す導線はどこにも無い。
 
-- **消えるのは発言（`Message`）だけ。** 使用量（`ApiUsage`）と書き込みの記録（`ToolCall`）は
-  行を残す（#51・#81。消したぶんの費用や、取り消せない書き込みをした事実まで消さないため）。
-  **`/usage` の金額は減らない**
-- **ただし `ToolCall` は行として残るだけで、画面からは辿れなくなる。** これを読んでいるのは
-  記録の画面（`src/lib/day-log.ts`）だけで、`conversationId` がnullになった行を出す導線は
-  どこにも無い。「Zaimに何を登録したか」を後から見る必要が出たら、まずこの一覧を作ること
-- **`deleteDay()` は `summarizedCount` を引数で受け取らない**（#245）。相談の行を
-  `SELECT … FOR UPDATE` で握ってから読み直し、書くときは `decrement`。呼び出し元が先に読んだ値は
-  compactが進めた後だと古く、絶対値で書くとそのぶんを巻き戻す。握る行はcompactが最後に書くときに
-  更新する行と同じで、**どちらが先でも後から来た側が先の結果を見て決める。`update` で握らない**
-  ——`updatedAt`（最後に話した時刻。#101）が動く
-- **記録の無い日にはバツを出さない**（まだ話していない今日）。消すものが無い
-- **バツを隠すかどうかは幅ではなくホバーの有無で決める**（`[@media(hover:hover)]:opacity-0`）。
-  Tailwindの `group-hover:` は `@media (hover: hover)` の中にしか出ないため、`md:opacity-0` で
-  隠すと**iPad（幅1180px・ホバー無し）ではバツが永久に出ない。** 幅の指定はPCとiPadを分けない
-- **確認ダイアログはドロワー（`ChatShell` の z-50）より前に出す。** スマホでは一覧そのものが
-  ドロワーの中にあるので、z-indexが同じだと確認が一覧の下に隠れる
-- **開いている日を消したら `/`（今日）へ戻す**（空になったページに取り残される）。スマホでは
-  同時に `onNavigate()` でドロワーも畳む。それ以外は `router.refresh()` で一覧だけを取り直す
+- **消したので、`summarizedCount` が戻ることは無くなった。** compact（`compactIfNeeded()`）の
+  書き込み手前の確認（件数とidが読んだときのままか）は、別の往復が先に畳んだ場合の保険として残してある
+- **`ToolCall` の `conversationId` がnullになる経路も無くなった。** すでに消された日のぶんの行は
+  DBに残っているが、画面からは辿れない
+- 削除を作り直すなら、畳んだ範囲から引く件数（旧 `removedFromSummary()`）と相談の行のロック
+  （`SELECT … FOR UPDATE`）が要った。**履歴（gitのPR #320より前）を読むこと**——引かずに消すと、
+  畳んでいない発言まで履歴から読み飛ばされる
 
 ### 返答への割り込み（#48）
 
@@ -2037,16 +2022,14 @@ CI専用のプレースホルダーでよい。
 - **対象は「外から来た値を判定する関数」と、ずれると静かに壊れる件数の計算。** いまは
   `isInternalPath()` / `safeInternalPath()`・`safeNoticeUrl()`・`public/sw.js` の `safeTarget()`
   との一致・`historyWindowSkip()`・`readJsonObject()`（#262）・`parseNoticeInput()`
-  （`notice-ingest.ts`）・`parseChoice()`（`notice-choice.ts`）・`removedFromSummary()`
-  （`summary-range.ts`。`deleteDay()` が畳んだ範囲から引く件数。#265）・`shouldGenerate()`（`notice-schedule.ts`。お知らせ選定を呼び直す条件。#227）・`SampleSlot`
+  （`notice-ingest.ts`）・`parseChoice()`（`notice-choice.ts`）・`shouldGenerate()`（`notice-schedule.ts`。お知らせ選定を呼び直す条件。#227）・`SampleSlot`
   （`sample-slot.ts`。試し聞きを止めたら持ち主へ知らせる約束。#279）・`buildAiUsageReport()` /
   `hasValidBearer()`（`ai-usage-report.ts`・`bearer-auth.ts`。使用量APIの組み立てとBearer検証。#297）・
   `pendingNoticeWhere()` ほか（`notice-conditions.ts`。お知らせの未読・表示中の条件。#229）・
   `throwIfCodexFailed()`（`codex.ts`。Codexの打ち切り・失敗の文言。#229）。**PrismaやSupabaseへ触れる
   モジュールはimportしない**（テストからDBへ繋がない）。**DBに触れるモジュールの中にある計算を
   テストしたいなら、純粋な関数として別ファイルへ切り出す**（#265で `parseChoice()` を
-  `notices.ts` から、`removedFromSummary()` を `day-log.ts` から出した。`deleteDay()` 本体
-  ——行のロックと `decrement`——はDBが要るのでテストの外）。`@prisma/client` の `NoticePriority`
+  `notices.ts` から出した）。`@prisma/client` の `NoticePriority`
   のように、生成物を実行時にimportするだけのものは素のNodeでも読める
 - **入力の表は `test/cases.ts` に1つだけ置き、3か所に流す。** `sw.js` は `node:vm` で読み込んで
   `safeTarget()` を取り出す（`sw.js` をexportさせたり書き換えたりしない）。**判定を直したら、
@@ -2161,7 +2144,7 @@ chrome-headless-shell --headless --disable-gpu --no-sandbox --window-size=1060,3
 足してもCSSアニメーションは進まない。見たい時点があるなら、確認用のHTML側で
 `animation-delay: -0.5s` のように負の値を当てて、その姿で止めてから撮る。
 
-### ホバーで出る要素を確かめる（#102）
+### ホバーで出る要素を確かめる（#102。バツは#320で無くなったが、手順は他のホバー表示に使える）
 
 **ヘッドレスChromeは既定で `hover: none` を返し、`Emulation.setEmulatedMedia` では変えられない。**
 `features: [{ name: "hover", value: "hover" }]` を渡しても `matchMedia("(hover: hover)").matches` は

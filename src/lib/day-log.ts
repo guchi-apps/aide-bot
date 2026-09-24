@@ -4,7 +4,6 @@ import { cache } from "react";
 import type { ChatEntry } from "@/components/chat/types";
 import { dayEnd, dayHeading, dayStart, jstDayKey, jstTimeLabel, monthLabel } from "@/lib/day-key";
 import { db } from "@/lib/db";
-import { removedFromSummary } from "@/lib/summary-range";
 
 /**
  * 連続セッションと、その日ごとの取り出し（#157）。**サーバー専用**（Prismaを引き込む）。
@@ -317,61 +316,4 @@ export async function entriesForToday(conversationId: string, now: Date): Promis
   });
 
   return [...mergeEntries(messages, toolCalls), ...today];
-}
-
-/**
- * その日の記録を消す（#157。#102のスレッド削除を日単位へ移したもの）。
- *
- * **消えるのは発言（`Message`）だけ。** 書き込みの記録（`ToolCall`）は相談との紐付けを
- * 外して行は残す——「取り消せない書き込みをした事実」まで消さないため（#81・#102）。
- * 使用量（`ApiUsage`）は連続セッションに紐づいたままで触らない（`/usage` の金額は減らない）。
- *
- * **要約へ畳んだ範囲（`summarizedCount`）の中の日を消したら、その数だけ戻す。**
- * `summarizedCount` は「古い方から数えた件数」で履歴の読み飛ばしに使うため、減らさずに
- * 消すと**畳んでいない発言まで読み飛ばされ、モデルへ渡らなくなる**（実測で、畳んだ2件を
- * 含む日を消した後、残っていた最古の2件が履歴から落ちた）。要約の本文はそのままにする
- * ——消した日のことが要約に残るが、次にcompactが走ったときに書き直される。
- *
- * **`summarizedCount` は引数で受け取らず、相談の行を握ってから読み直す**（#245）。
- * 呼び出し元が先に読んだ値は、最大120秒Codexを待つcompact（`compactIfNeeded()`）が
- * 進めた後だと古く、そこから引いた絶対値で書くと**compactが進めたぶんを巻き戻して**
- * 畳んでいない発言を読み飛ばさせる。行を握るのはcompactが最後に書く手前と同じ行なので、
- * どちらが先でも、後から来た側は先の結果を見てから件数を決める。書くのも絶対値では
- * なく `decrement`。
- *
- * 戻り値は消した発言の数。0なら、その日には元から何も無かった。
- */
-export async function deleteDay(conversationId: string, dayKey: string): Promise<number> {
-  const from = dayStart(dayKey);
-  const createdAt = { gte: from, lt: dayEnd(dayKey) };
-
-  return db.$transaction(async (tx) => {
-    // `FOR UPDATE` で相談の行を握る。`update` で握ると `updatedAt`（最後に話した時刻。#101）まで
-    // 動いてしまうので、読み取りだけで握れるこちらにしてある。
-    const [row] = await tx.$queryRaw<{ summarizedCount: number }[]>`
-      SELECT \`summarizedCount\` FROM \`Conversation\` WHERE \`id\` = ${conversationId} FOR UPDATE
-    `;
-    if (!row) return 0;
-
-    // 消すぶんのうち何件が畳んだ範囲に入っていたか（考え方は `removedFromSummary()` を参照）。
-    const [olderCount, dayCount] = await Promise.all([
-      tx.message.count({ where: { conversationId, createdAt: { lt: from } } }),
-      tx.message.count({ where: { conversationId, createdAt } }),
-    ]);
-
-    if (dayCount === 0) return 0;
-
-    const removed = removedFromSummary(row.summarizedCount, olderCount, dayCount);
-
-    const deleted = await tx.message.deleteMany({ where: { conversationId, createdAt } });
-    await tx.toolCall.updateMany({ where: { conversationId, createdAt }, data: { conversationId: null } });
-    if (removed > 0) {
-      await tx.conversation.update({
-        where: { id: conversationId },
-        data: { summarizedCount: { decrement: removed } },
-      });
-    }
-
-    return deleted.count;
-  });
 }

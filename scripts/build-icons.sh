@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# public/icon.svg から、PWA用のPNGとファビコン(.ico)を書き出す。
+# public/icon.svg（と maskable 用の public/icon-maskable.svg）から、PWA用のPNGとファビコン(.ico)を書き出す。
 #
 # アイコンの正は public/icon.svg の1枚だけ。ここで書き出したPNG・icoはその写しなので、
 # 絵を直すときはSVGだけを直してこのスクリプトを流し、生成物ごとコミットする
@@ -24,14 +24,16 @@ for cmd in rsvg-convert convert; do
   }
 done
 
-render() { # render <サイズ> <出力先>
-  rsvg-convert --width "$1" --height "$1" --output "$2" "$src"
+render() { # render <サイズ> <出力先> [元のSVG]
+  rsvg-convert --width "$1" --height "$1" --output "$2" "${3:-$src}"
   echo "  $2 (${1}x${1})"
 }
 
 echo "PWA用のPNGを書き出します"
 render 192 public/icon-192.png
 render 512 public/icon-512.png
+# maskable（purpose: "maskable"）は余白を確保した別SVGから書き出す。
+render 512 public/icon-maskable-512.png public/icon-maskable.svg
 # iOSのホーム画面用。180pxがApple指定のサイズ。
 render 180 public/apple-icon.png
 

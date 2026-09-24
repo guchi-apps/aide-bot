@@ -3,7 +3,7 @@
 import { BarChart3, Bell, Brain, CalendarDays, Newspaper, Settings } from "lucide-react";
 import Link from "next/link";
 
-import { AppIcon } from "@/components/brand/app-icon";
+import { AppLogo } from "@/components/brand/app-icon";
 import { dayHeading, monthLabel } from "@/lib/day-key";
 import { cn } from "@/lib/utils";
 
@@ -83,10 +83,7 @@ export function ConversationRail({
   return (
     <div className="flex h-full min-h-0 flex-col bg-rail">
       <div className="flex flex-col gap-3.5 px-4 pb-3.5 pt-4">
-        <div className="flex items-center gap-2.5 text-[0.9375rem] font-semibold">
-          <AppIcon className="size-6" />
-          秘書アプリ
-        </div>
+        <AppLogo className="text-xl" />
 
         {/*
           #157で「新しい相談」から「今日の記録」へ変わった。押しても新しいスレッドは

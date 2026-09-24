@@ -1,5 +1,5 @@
 /*
- * 秘書アプリの Service Worker（#79）。
+ * Morrowの Service Worker（#79）。
  *
  * **役割は通知の受け取りだけ。** 画面やAPIのキャッシュは一切しない。相談の内容は都度
  * サーバーから取るもので、古い返答を出す方が実害が大きいため。`fetch` ハンドラを
@@ -24,7 +24,7 @@ self.addEventListener("activate", (event) => {
 
 /** 通知の既定値。payloadが壊れていても無音で消えないようにする。 */
 const FALLBACK = {
-  title: "秘書アプリ",
+  title: "Morrow",
   body: "お知らせがあります。",
   url: "/",
   tag: "aide-bot",

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Morrow">
+  <!--
+    maskable（Androidのアダプティブアイコン）用。中心から半径約410pxの円の外は切り落とされうる。
+    承認図のままだと線端の円が約440pxの位置に来て欠けるため、中心から0.8倍にして収める。
+    絵を直すときは icon.svg と揃えること。
+  -->
+  <rect width="1024" height="1024" fill="#FFFAF5"/>
+  <g transform="translate(512 512) scale(0.8) translate(-512 -512)">
+    <path d="M156 696 C192 412 260 300 336 300 C408 300 460 412 512 568 C564 412 616 300 688 300 C764 300 832 412 868 696" fill="none" stroke="#344458" stroke-width="84" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M172 732 C296 820 436 760 512 604 C588 760 728 820 852 732" fill="none" stroke="#E99A80" stroke-width="68" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="156" cy="696" r="40" fill="#344458"/>
+    <circle cx="868" cy="696" r="40" fill="#344458"/>
+  </g>
+</svg>

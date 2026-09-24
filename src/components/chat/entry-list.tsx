@@ -82,6 +82,7 @@ export function DaySeparator({ heading }: { heading: string }) {
 
 function Entry({ entry }: { entry: ChatEntry }) {
   if (entry.kind === "tool") return <ToolCallNote call={entry} />;
+  if (entry.kind === "break") return <ContextBreakLine breakKind={entry.breakKind} time={entry.time} />;
 
   if (entry.role === "USER") {
     return (
@@ -101,6 +102,26 @@ function Entry({ entry }: { entry: ChatEntry }) {
         <Markdown>{entry.content}</Markdown>
         {entry.interrupted && <InterruptedNote />}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 会話を区切った線（#322）。**上の記録は消えていない**ので、線は「ここから先は前の話を
+ * 引き継がない」だけを示し、履歴の削除に見えない弱い色で置く。
+ */
+export function ContextBreakLine({ breakKind, time }: { breakKind: "MANUAL" | "AUTO"; time?: string }) {
+  return (
+    <div className="flex items-center gap-3 text-[0.6875rem] font-bold tracking-[0.06em] text-accent">
+      <span className="h-px flex-1 border-t border-dashed border-accent/50" aria-hidden="true" />
+      <span>
+        ここから新しい会話
+        <span className="ml-1.5 font-medium text-muted">
+          （{breakKind === "AUTO" ? "しばらく話さなかったため自動で区切りました" : "区切りました"}
+          {time ? ` ${time}` : ""}）
+        </span>
+      </span>
+      <span className="h-px flex-1 border-t border-dashed border-accent/50" aria-hidden="true" />
     </div>
   );
 }

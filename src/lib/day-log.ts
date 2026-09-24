@@ -3,6 +3,7 @@ import { cache } from "react";
 
 import type { ChatEntry } from "@/components/chat/types";
 import { dayEnd, dayHeading, dayStart, jstDayKey, jstTimeLabel, monthLabel } from "@/lib/day-key";
+import { rolloverIfIdle } from "@/lib/context-break";
 import { db } from "@/lib/db";
 
 /**
@@ -16,6 +17,14 @@ import { db } from "@/lib/db";
  * 日付の組み立て（鍵・見出し）は `src/lib/day-key.ts` に分けてある。記録の画面
  * （`EntryList`）がクライアントコンポーネントで、Prismaを引き込めないため。
  */
+
+const PRIMARY_SELECT = {
+  id: true,
+  summary: true,
+  summarizedCount: true,
+  contextStartedAt: true,
+  lastUserMessageAt: true,
+} as const;
 
 /** 連続セッションの見出し。画面には出ないが、`Conversation.title` は必須のため入れる。 */
 export const PRIMARY_CONVERSATION_TITLE = "秘書との記録";
@@ -57,12 +66,14 @@ export const primaryConversation = cache(async function primaryConversation(user
   id: string;
   summary: string | null;
   summarizedCount: number;
+  contextStartedAt: Date | null;
+  lastUserMessageAt: Date | null;
 }> {
   const find = () =>
     db.conversation.findFirst({
       where: { userId, isPrimary: true },
       orderBy: { createdAt: "asc" },
-      select: { id: true, summary: true, summarizedCount: true },
+      select: PRIMARY_SELECT,
     });
 
   const existing = await find();
@@ -71,7 +82,7 @@ export const primaryConversation = cache(async function primaryConversation(user
   try {
     return await db.conversation.create({
       data: { id: primaryConversationId(userId), userId, isPrimary: true, title: PRIMARY_CONVERSATION_TITLE },
-      select: { id: true, summary: true, summarizedCount: true },
+      select: PRIMARY_SELECT,
     });
   } catch (error) {
     // 同時に来た別のリクエストが先に作った。作られた行をそのまま使う。
@@ -105,6 +116,10 @@ export function primaryConversationId(userId: string): string {
  *
  * `at` は**書き込む直前に取った時刻**を渡すこと（#261）。生成を待った後に、待つ前の時刻を
  * 渡すと、そのあいだに利用者が話しかけた発言より前へ割り込む。
+ *
+ * **書く前に、無操作のまま日をまたいでいたら自動で区切る**（#322）。区切りの起点は `at` なので、
+ * 2通とも新しい文脈に入る（見通しが古い文脈へ入って、区切った後の会話から見えなくなるのを避ける）。
+ * 利用者の最後の発言時刻（`lastUserMessageAt`）は進めない——自動発言で無操作時間を延ばさない。
  */
 export async function appendSecretaryExchange(
   conversationId: string,
@@ -112,6 +127,8 @@ export async function appendSecretaryExchange(
   reply: string,
   at: Date,
 ): Promise<void> {
+  await rolloverIfIdle(conversationId, at);
+
   await db.$transaction([
     db.message.createMany({
       data: [
@@ -199,6 +216,7 @@ function mergeEntries(
     failed: boolean;
     createdAt: Date;
   }[],
+  breaks: { id: string; at: Date; kind: string }[] = [],
 ): ChatEntry[] {
   const rows: { at: number; tie: number; entry: ChatEntry }[] = [
     ...messages.map((message) => ({
@@ -229,6 +247,18 @@ function mergeEntries(
         day: jstDayKey(call.createdAt),
       },
     })),
+    // 区切り線（#322）。同じ時刻なら先に置く——起点以降の発言は線の下に並ぶ。
+    ...breaks.map((brk) => ({
+      at: brk.at.getTime(),
+      tie: -1,
+      entry: {
+        kind: "break" as const,
+        id: `break_${brk.id}`,
+        breakKind: brk.kind === "AUTO" ? ("AUTO" as const) : ("MANUAL" as const),
+        day: jstDayKey(brk.at),
+        time: jstTimeLabel(brk.at),
+      },
+    })),
   ];
 
   return rows.sort((a, b) => a.at - b.at || a.tie - b.tie).map((row) => row.entry);
@@ -254,6 +284,8 @@ const TOOL_CALL_FIELDS = {
   createdAt: true,
 } as const;
 
+const BREAK_FIELDS = { id: true, at: true, kind: true } as const;
+
 /** ある期間の発言と記録を、時刻順に混ぜて返す。 */
 async function entriesBetween(
   conversationId: string,
@@ -263,7 +295,7 @@ async function entriesBetween(
   const createdAt = { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) };
   const range = from || to ? { createdAt } : {};
 
-  const [messages, toolCalls] = await Promise.all([
+  const [messages, toolCalls, breaks] = await Promise.all([
     db.message.findMany({
       where: { conversationId, ...range },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -274,9 +306,14 @@ async function entriesBetween(
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       select: TOOL_CALL_FIELDS,
     }),
+    db.contextBreak.findMany({
+      where: { conversationId, ...(from || to ? { at: createdAt } : {}) },
+      orderBy: [{ at: "asc" }, { id: "asc" }],
+      select: BREAK_FIELDS,
+    }),
   ]);
 
-  return mergeEntries(messages, toolCalls);
+  return mergeEntries(messages, toolCalls, breaks);
 }
 
 /** その日1日ぶんの記録。 */
@@ -315,5 +352,11 @@ export async function entriesForToday(conversationId: string, now: Date): Promis
     select: TOOL_CALL_FIELDS,
   });
 
-  return [...mergeEntries(messages, toolCalls), ...today];
+  const breaks = await db.contextBreak.findMany({
+    where: { conversationId, at: { gte: carryFrom, lt: from } },
+    orderBy: [{ at: "asc" }, { id: "asc" }],
+    select: BREAK_FIELDS,
+  });
+
+  return [...mergeEntries(messages, toolCalls, breaks), ...today];
 }

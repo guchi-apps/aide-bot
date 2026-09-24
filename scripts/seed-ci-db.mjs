@@ -543,9 +543,16 @@ async function main() {
     select: { createdAt: true },
   });
 
+  // 会話の区切り（#322）は毎回まっさらへ戻す。`summarizedCount` は記録全体の先頭から数えて
+  // いるので、区切りの起点が残っていると件数とずれる。区切りは画面のボタン・自動区切りの
+  // 動作確認で作る（`lastUserMessageAt` を過去へ書き換えれば次の送信で自動区切りが走る）。
+  await db.contextBreak.deleteMany({ where: { conversationId: conversation.id } });
+
   await db.conversation.update({
     where: { id: conversation.id },
     data: {
+      contextStartedAt: null,
+      lastUserMessageAt: null,
       summarizedCount,
       summary:
         summarizedCount === 0

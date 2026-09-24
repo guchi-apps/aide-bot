@@ -93,18 +93,43 @@ model Conversation {
   /// 時刻ではなく件数で持つのは、同じ時刻の発言があっても取りこぼさないため。
   summarizedCount Int @default(0)
 
+  /// 会話の作業文脈の起点（#322）。nullなら区切っていない（記録の先頭から）。
+  /// **履歴・要約・件数はこの時刻以降の発言だけを対象にする**（`src/lib/context-break.ts`）。
+  /// それ以前の発言・通知・書き込みの記録・使用量は消さず、日別の記録からそのまま読める。
+  contextStartedAt DateTime?
+  /// 利用者本人が最後に発言した時刻（#322）。自動区切りの「無操作時間」の基準。
+  /// **秘書の側が積んだ発言（朝の見通し・お知らせ・声かけ）では進めない**——進めると、
+  /// 自動発言だけで区切りが延び続ける。`updatedAt` は自動発言でも進むので代わりにならない。
+  lastUserMessageAt DateTime?
+
   createdAt DateTime @default(now())
   // 発言を足しても親のこの列は自動では動かないため、APIハンドラ側で明示的に更新する。
   // 連続セッションでは並び順に使わなくなったが、最後に話した時刻（#101のひとりごと）で読む。
   updatedAt DateTime @updatedAt
 
-  messages  Message[]
-  apiUsages ApiUsage[]
-  toolCalls ToolCall[]
+  messages      Message[]
+  apiUsages     ApiUsage[]
+  toolCalls     ToolCall[]
+  contextBreaks ContextBreak[]
 
   // 連続セッションの取り出しはこの組で引く。
   @@index([userId, isPrimary])
   @@index([userId, updatedAt])
+}
+
+/// 会話を区切った履歴（#322）。記録の画面に「ここから新しい会話」の線を出すために持つ。
+/// 文脈の起点そのものは `Conversation.contextStartedAt` が正で、これは表示用の控え。
+model ContextBreak {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  /// 区切った時刻（＝そのときの `contextStartedAt`）。
+  at   DateTime
+  /// `MANUAL`（利用者が押した）／`AUTO`（無操作のまま日をまたいだ）。
+  kind String   @db.VarChar(10)
+
+  @@index([conversationId, at])
 }
 
 enum MessageRole {

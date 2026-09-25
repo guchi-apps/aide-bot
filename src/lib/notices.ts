@@ -1,7 +1,7 @@
 import { NoticePriority, type Notice } from "@prisma/client";
 
 import { noticeSystemPrompt, URGENT_NOTICE_REQUEST } from "@/lib/anthropic";
-import { NOTICE_MODEL } from "@/lib/chat-model";
+import { modelFor } from "@/lib/chat-model-server";
 import { runCodexRecorded } from "@/lib/codex-run";
 import { appendSecretaryExchange, primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
@@ -302,7 +302,7 @@ async function chooseNotice(userId: string, pending: Notice[], now: Date): Promi
     userId,
     feature: "notice",
     label: "お知らせの選定",
-    model: NOTICE_MODEL,
+    model: await modelFor(userId, "notice"),
     prompt: buildNoticePrompt(pending, now),
     timeoutMs: CODEX_TIMEOUT_MS,
   });

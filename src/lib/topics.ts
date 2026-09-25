@@ -6,6 +6,7 @@ import { TOPIC_MODEL } from "@/lib/chat-model";
 import { runCodexRecorded } from "@/lib/codex-run";
 import { db } from "@/lib/db";
 import { safeNoticeUrl } from "@/lib/notice-url";
+import { SCHEDULED_PUSH_ALL } from "@/lib/scheduled-push-rule";
 import { SECRETARY_INTRO, SECRETARY_VOICE_RULES } from "@/lib/persona";
 import { listTopicCategories } from "@/lib/topic-category-store";
 import type { TopicCategory } from "@/lib/topic-categories";
@@ -509,4 +510,29 @@ export async function previewTopics(
     previewAttempts.delete(userId);
     return { ok: false, status: 502, error: "検索に失敗しました。時間をおいてもう一度お試しください。" };
   }
+}
+
+/**
+ * 定時のお知らせ（#344）に載せる、まだ振っていない話題。期間内のものを新しい順に。`category` が `all` なら種類を問わない。
+ * **例外は投げる**（呼び出し側が「黙る」と「失敗」を分ける）。
+ */
+export async function topicsForScheduledPush(
+  userId: string,
+  category: string,
+  limit: number,
+  now = new Date(),
+): Promise<TopicRow[]> {
+  const topics = await db.topic.findMany({
+    where: {
+      userId,
+      fetchedAt: { gt: new Date(now.getTime() - TOPIC_LIFETIME_MS) },
+      // すでに振った（声かけ・定時のお知らせ）話題は二度は出さない（`Topic.spokenAt`）。
+      spokenAt: null,
+      ...(category === SCHEDULED_PUSH_ALL ? {} : { category }),
+    },
+    orderBy: [{ fetchedAt: "desc" }, { id: "asc" }],
+    take: limit,
+  });
+
+  return topics.map(toRow);
 }

@@ -895,6 +895,15 @@ async function main() {
     });
   }
 
+  // 定時のお知らせ（#344）のダミー。有効・無効の両方を入れておく（画面で状態の出し分けを確かめるため）。
+  await db.scheduledPush.deleteMany({ where: { userId: user.id } });
+  await db.scheduledPush.createMany({
+    data: [
+      { userId: user.id, daysMask: 0b0111110, hour: 7, minute: 30, category: "all", enabled: true },
+      { userId: user.id, daysMask: 0b1000001, hour: 9, minute: 0, category: "tech", enabled: false },
+    ],
+  });
+
   console.log(`[aide-bot] 継続記憶を${MEMORY_SEEDS.length}件投入しました`);
 }
 

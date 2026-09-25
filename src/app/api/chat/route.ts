@@ -7,8 +7,7 @@ import {
   type SuggestionConnections,
 } from "@/lib/anthropic";
 import { getCurrentUser } from "@/lib/auth-user";
-import type { ReplyStyle } from "@/lib/chat-model";
-import { modelFor } from "@/lib/chat-model-server";
+import { resolveModelSettings, type ReplyStyle } from "@/lib/chat-model";
 import { runCodexExec, type CodexToolCallEvent } from "@/lib/codex";
 import { recordCodexUsage } from "@/lib/codex-run";
 import { compactIfNeeded } from "@/lib/compact";
@@ -358,7 +357,8 @@ export async function POST(request: Request) {
   const style: ReplyStyle = body.mode === "voice" ? "voice" : "text";
 
   // 返答に使うモデルは、「モデル」の画面で選んだもの。話すときと書くときで別々に持てる。
-  const model = await modelFor(user.id, style === "voice" ? "chat_voice" : "chat_text");
+  // `getCurrentUser()` が引いた行にもう載っているので、DBは引き直さない（相談の待ち時間を増やさない）。
+  const model = resolveModelSettings(user.modelSettings)[style === "voice" ? "chat_voice" : "chat_text"];
 
   // 仕入れてある話題（#144）。DBを引くだけで、無ければ空文字（プロンプトの形は変わらない）。
   const topics = await topicsForChat(user.id);

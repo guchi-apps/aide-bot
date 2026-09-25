@@ -1,5 +1,6 @@
 "use client";
 
+import { stripProposal } from "@/lib/settings-proposal";
 import { ArrowUp, Mic, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -329,7 +330,7 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSin
                   </p>
                 ) : (
                   <>
-                    <Markdown>{answer}</Markdown>
+                    <Markdown>{stripProposal(answer)}</Markdown>
                     <span className="sr-only">返答を受け取っています</span>
                   </>
                 )}

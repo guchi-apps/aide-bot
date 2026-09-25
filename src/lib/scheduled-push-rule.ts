@@ -21,12 +21,11 @@ export const LATE_LIMIT_MINUTES = 3 * 60;
 /** 通知に載せる話題の最大件数。 */
 export const SCHEDULED_PUSH_TOPIC_LIMIT = 3;
 
-export const SCHEDULED_PUSH_CATEGORIES = ["all", "general", "life", "tech"] as const;
-export type ScheduledPushCategory = (typeof SCHEDULED_PUSH_CATEGORIES)[number];
-
-export function isScheduledPushCategory(value: unknown): value is ScheduledPushCategory {
-  return typeof value === "string" && (SCHEDULED_PUSH_CATEGORIES as readonly string[]).includes(value);
-}
+/**
+ * 種類を問わず届けるときの `category` の値。それ以外は利用者の話題の種類（`TopicCategory.key`。#345）で、
+ * 種類が追加・削除できるので**ここでは形を決めない**——受け付けるときに利用者の種類と突き合わせる。
+ */
+export const SCHEDULED_PUSH_ALL = "all";
 
 /** 曜日の配列（0〜6）をビット列へ。範囲外・重複は落とす。 */
 export function daysToMask(days: readonly number[]): number {

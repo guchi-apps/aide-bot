@@ -8,9 +8,9 @@ import {
   WEEKDAYS,
   maskToDays,
   daysToMask,
-  type ScheduledPushCategory,
+  SCHEDULED_PUSH_ALL,
 } from "@/lib/scheduled-push-rule";
-import { TOPIC_CATEGORIES } from "@/lib/topic-categories";
+import type { TopicCategory } from "@/lib/topic-categories";
 import { cn } from "@/lib/utils";
 
 /**
@@ -27,10 +27,15 @@ export type ScheduleRow = {
   enabled: boolean;
 };
 
-const CATEGORY_OPTIONS: { value: ScheduledPushCategory; label: string }[] = [
-  { value: "all", label: "すべての話題" },
-  ...TOPIC_CATEGORIES.map((category) => ({ value: category.id, label: category.label })),
-];
+/** 選べる種類。削除された種類を指したままの行は、その行にだけ「（削除された種類）」を足す。 */
+function categoryOptions(categories: TopicCategory[], current: string): { value: string; label: string }[] {
+  const options = [
+    { value: SCHEDULED_PUSH_ALL, label: "すべての話題" },
+    ...categories.map((category) => ({ value: category.id, label: category.label })),
+  ];
+  if (!options.some((option) => option.value === current)) options.push({ value: current, label: "（削除された種類）" });
+  return options;
+}
 
 const TIMES = Array.from({ length: 48 }, (_, index) => ({ hour: Math.floor(index / 2), minute: (index % 2) * 30 }));
 
@@ -40,9 +45,9 @@ function timeLabel(hour: number, minute: number): string {
 
 const selectClass = "rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold disabled:opacity-50";
 
-type Props = { initial: ScheduleRow[]; hasDevice: boolean };
+type Props = { initial: ScheduleRow[]; hasDevice: boolean; categories: TopicCategory[] };
 
-export function ScheduledPushSettingsCard({ initial, hasDevice }: Props) {
+export function ScheduledPushSettingsCard({ initial, hasDevice, categories }: Props) {
   const [rows, setRows] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -72,7 +77,7 @@ export function ScheduledPushSettingsCard({ initial, hasDevice }: Props) {
 
   async function add() {
     // 初期値は「平日の朝7:00・すべての話題」。作ってから画面で直す。
-    const response = await call("POST", { days: [1, 2, 3, 4, 5], hour: 7, minute: 0, category: "all" });
+    const response = await call("POST", { days: [1, 2, 3, 4, 5], hour: 7, minute: 0, category: SCHEDULED_PUSH_ALL });
     if (!response) return;
     const { schedule } = (await response.json()) as { schedule: ScheduleRow };
     setRows((current) => [...current, schedule]);
@@ -166,7 +171,7 @@ export function ScheduledPushSettingsCard({ initial, hasDevice }: Props) {
                   value={row.category}
                   onChange={(event) => void patch(row.id, { category: event.target.value })}
                 >
-                  {CATEGORY_OPTIONS.map((option) => (
+                  {categoryOptions(categories, row.category).map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>

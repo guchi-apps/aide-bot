@@ -1063,10 +1063,19 @@ ops-dashboardの「アプリ別のAI利用」（ops-dashboard#325）が、`GET /
 - **輪の中の位置は後ろ寄り（4枠目から1つおき・最大3枠・35秒保持）。** お知らせの先頭固定と
   急ぎの回転停止は変えていない。吹き出しには「話題」チップ（`--topic` の青灰。accentは用件の色）
   を付け、**時刻は出さない**——時刻はお知らせの「いつ時点か」の印で、付けると用件に見える
-- **仕入れる種類（世の中・暮らし・技術とAI）は `User.topicCategories`** にカンマ区切りで持ち、
-  「話題」ページ（`/topics`）の上段から変える。設定ページに置かないのは、仕入れた結果のすぐ上に
-  ある方が効果が見えるため。**空文字は「仕入れない」**（既定へ戻さない）。定義の正は
-  `src/lib/topic-categories.ts`（クライアントからもimportするのでPrismaを持ち込まない）
+- **仕入れる種類は利用者が追加・編集・削除できる**（#345。`TopicCategory`。上限8件）。
+  「話題」ページ（`/topics`）の上段で管理する。設定ページに置かないのは、仕入れた結果のすぐ上に
+  ある方が効果が見えるため。**初期の3種類（`general`/`life`/`tech`）は初回の読み出しで投入する**
+  （`topic-category-store.ts` の `ensureInitialized()`。`User.topicCategoriesReady` のCAS。
+  移行元の `User.topicCategories` はこの初回にだけ読んでオン・オフを引き継ぐ）。**全部をオフ・
+  全部を削除した状態は「仕入れない」**（初期値へ戻さない）。`Topic.category` には種類の `key` を
+  入れ、**外部キーにしない**——削除しても仕入れ済みの記事は残り、チップは「その他」になる。
+  **「集める内容」（`scope`）はプロンプトへそのまま入る**ので、`validateTopicCategoryInput()` が
+  改行・制御文字を畳み長さ（200字）を制限する。型・検証は `src/lib/topic-categories.ts`
+  （クライアントからもimportするのでPrismaを持ち込まない）、DBは `topic-category-store.ts`
+- **説明文の「試しに検索」**（`POST /api/settings/topics/preview`）は、その1種類だけを仕入れと同じ
+  プロンプトで検索して記事を返す。**何も保存しない**。サブスク枠を1回ぶん使い20〜30秒かかるので、
+  利用者ごとに同時実行は1つ・終わってから1分あける（プロセス内の記録。`maxDuration` は180秒）。未保存の種類には `key` が無いので仮のid（`preview`）でプロンプトと `parseTopics()` を通す
 - 開発DBのシード（`scripts/seed-ci-db.mjs` の `TOPIC_SEEDS`）は実際の検索を走らせない。
   **期間（24時間）を過ぎた行を1件入れてある**——一覧にも吹き出しにも出ないことを確かめるため。
   実際の仕入れを手元で通すには、`Topic.fetchedAt` を2時間ほど戻してから `/api/notices/current` を
@@ -1137,6 +1146,10 @@ ops-dashboardの「アプリ別のAI利用」（ops-dashboard#325）が、`GET /
 ## 定時のお知らせ（#344）
 
 **曜日・時刻（30分刻み）・話題の種類を指定して、溜めてある話題（`Topic`。#144）の見出しを定時にWeb Pushで届ける。**
+
+- **`ScheduledPush.category` は `all` か話題の種類の `key`（#345）。** 種類は追加・削除できるので形は固定せず、
+  受け付けるときに利用者の種類と突き合わせる（`scheduled-push` のRoute Handler）。**削除された種類を指した行は残り**、
+  設定の画面では「（削除された種類）」と出る（記事は残っているので届く。件名のチップは「その他」）
 判定は `src/lib/scheduled-push-rule.ts`（純粋。`test/scheduled-push-rule.test.ts`）、実行は `src/lib/scheduled-push.ts`。
 
 - **起点は朝の見通しと同じcron**（`/api/briefing` の末尾で `after()`）。crontabの変更は要らない。**モデルは呼ばない**
@@ -1991,6 +2004,25 @@ AIDEのREADME「認可の分離」）。#184で足したのは、その道具を
   記録（`ChatToolCall`）の判別可能なユニオンで、「話す」「書く」の両方が同じ配列を並べる。
   生成中はSSEの `record` イベントで先に足す（`tool` イベントは従来どおり「いま調べています」の
   一瞬の表示で、こちらは残らない）
+
+## 会話からの設定変更（#346）
+
+**相談の中で「朝の見通しを6時半に」と頼むと、秘書が変更案のカードを出し、利用者が「変更する」を押したときだけ反映する。**
+モデルは書き込まない（取り消せない書き込みは確認を取る #78 と同じ方針）。
+
+- **案は返答の本文に、```` ```settings-change ```` の囲みとして入る**（`src/lib/settings-proposal.ts`）。
+  `Message` の列を増やさず、再読み込み後も残り、モデルへ渡す履歴にも残る。画面は `EntryList` が
+  `extractProposal()` で囲みを本文から外し、`SettingsProposalCard` を出す。生成中の表示は `stripProposal()`
+- **検証は `validateChange()` の1か所**で、カードを出すときと反映の入口（`POST /api/settings/actions`。
+  `settings-apply.ts` が書く）の両方が通る。壊れた案・知らない項目は捨てる。**対象を足すときは
+  `SettingsChange`・`validateChange()`・`describeChange()`・`applySettingsChanges()`・プロンプトの
+  `SETTINGS_PROPOSAL_RULES` の5か所を揃える**
+- **対象は今は2つ**: 朝の見通しの時刻（`briefing_time`）・先回りの提案（`proactive`）。ニュースの種類・
+  定時のお知らせは #345（ニュースの種類の追加・編集・削除）のマージ後に足す。**他アプリの設定は
+  対象外**——他アプリ側に設定を書く道具が無い（足すなら `MCP_PRESETS` の `writeTools` と `hints`）
+- **音声の相談では案を出さない**（聞き間違いがそのまま設定になりうる）。書く画面へ案内させる
+- 押す前の値との差分は出していない（新しい値だけ）。反映は同じ値を書くだけなので、何度押しても同じ結果
+- 効きはプロンプトによるので回ごとに揺れる。実物のCodexでの出し分けは未確認（文言と検証は `test/settings-proposal.test.ts`）
 
 ## アイコン
 

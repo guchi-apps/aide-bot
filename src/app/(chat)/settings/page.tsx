@@ -5,6 +5,7 @@ import { ConnectionList } from "@/components/settings/connection-list";
 import { HomeProfileCard } from "@/components/settings/home-profile-card";
 import { ProactiveSettingsCard } from "@/components/settings/proactive-settings";
 import { NotificationSettings } from "@/components/settings/notification-settings";
+import { listTopicCategories } from "@/lib/topic-category-store";
 import { ScheduledPushSettingsCard } from "@/components/settings/scheduled-push-settings";
 import { WakeTriggerCard } from "@/components/settings/wake-trigger-card";
 import { WriteToolPicker } from "@/components/settings/write-tool-picker";
@@ -50,7 +51,7 @@ export default async function SettingsPage({ searchParams }: Props) {
     redirect("/login");
   }
 
-  const [connections, query, writeToolPolicy, deviceCount, scheduledPushes] = await Promise.all([
+  const [connections, query, writeToolPolicy, deviceCount, scheduledPushes, topicCategories] = await Promise.all([
     listConnections(user.id),
     searchParams,
     selectedWriteToolPolicy(),
@@ -60,6 +61,7 @@ export default async function SettingsPage({ searchParams }: Props) {
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       select: { id: true, daysMask: true, hour: true, minute: true, category: true, enabled: true },
     }),
+    listTopicCategories(user.id),
   ]);
 
   // 繋いでいる接続すべてを並べる（#78）。いま相談へ渡っているのは「使用中」のものだけだが、
@@ -103,7 +105,7 @@ export default async function SettingsPage({ searchParams }: Props) {
           }}
         />
 
-        <ScheduledPushSettingsCard initial={scheduledPushes} hasDevice={deviceCount > 0} />
+        <ScheduledPushSettingsCard initial={scheduledPushes} hasDevice={deviceCount > 0} categories={topicCategories} />
 
         <BriefingTimePicker initial={{ hour: user.briefingHour, minute: user.briefingMinute }} />
 

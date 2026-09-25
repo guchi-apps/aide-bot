@@ -7,6 +7,8 @@ import { isAutoRequest } from "@/lib/auto-request";
 import { dayHeading } from "@/lib/day-key";
 
 import { Markdown } from "./markdown";
+import { SettingsProposalCard } from "./settings-proposal-card";
+import { extractProposal } from "@/lib/settings-proposal";
 import { ToolCallNote } from "./tool-call-note";
 import type { ChatEntry } from "./types";
 
@@ -94,12 +96,15 @@ function Entry({ entry }: { entry: ChatEntry }) {
     );
   }
 
+  const proposal = extractProposal(entry.content);
+
   return (
     <div className="flex gap-3">
       <SecretaryAvatar />
       <div className="min-w-0 flex-1">
         <SecretaryLabel time={entry.time} proactive={entry.proactive} />
-        <Markdown>{entry.content}</Markdown>
+        <Markdown>{proposal.text}</Markdown>
+        {proposal.changes.length > 0 && <SettingsProposalCard changes={proposal.changes} />}
         {entry.interrupted && <InterruptedNote />}
       </div>
     </div>

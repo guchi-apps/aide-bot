@@ -1992,6 +1992,25 @@ AIDEのREADME「認可の分離」）。#184で足したのは、その道具を
   生成中はSSEの `record` イベントで先に足す（`tool` イベントは従来どおり「いま調べています」の
   一瞬の表示で、こちらは残らない）
 
+## 会話からの設定変更（#346）
+
+**相談の中で「朝の見通しを6時半に」と頼むと、秘書が変更案のカードを出し、利用者が「変更する」を押したときだけ反映する。**
+モデルは書き込まない（取り消せない書き込みは確認を取る #78 と同じ方針）。
+
+- **案は返答の本文に、```` ```settings-change ```` の囲みとして入る**（`src/lib/settings-proposal.ts`）。
+  `Message` の列を増やさず、再読み込み後も残り、モデルへ渡す履歴にも残る。画面は `EntryList` が
+  `extractProposal()` で囲みを本文から外し、`SettingsProposalCard` を出す。生成中の表示は `stripProposal()`
+- **検証は `validateChange()` の1か所**で、カードを出すときと反映の入口（`POST /api/settings/actions`。
+  `settings-apply.ts` が書く）の両方が通る。壊れた案・知らない項目は捨てる。**対象を足すときは
+  `SettingsChange`・`validateChange()`・`describeChange()`・`applySettingsChanges()`・プロンプトの
+  `SETTINGS_PROPOSAL_RULES` の5か所を揃える**
+- **対象は今は2つ**: 朝の見通しの時刻（`briefing_time`）・先回りの提案（`proactive`）。ニュースの種類・
+  定時のお知らせは #345（ニュースの種類の追加・編集・削除）のマージ後に足す。**他アプリの設定は
+  対象外**——他アプリ側に設定を書く道具が無い（足すなら `MCP_PRESETS` の `writeTools` と `hints`）
+- **音声の相談では案を出さない**（聞き間違いがそのまま設定になりうる）。書く画面へ案内させる
+- 押す前の値との差分は出していない（新しい値だけ）。反映は同じ値を書くだけなので、何度押しても同じ結果
+- 効きはプロンプトによるので回ごとに揺れる。実物のCodexでの出し分けは未確認（文言と検証は `test/settings-proposal.test.ts`）
+
 ## アイコン
 
 - **アイコンの正は `public/icon.svg`（承認済みのMorrowのMマーク。1024×1024）。** `public/icon-192.png`・

@@ -1,5 +1,6 @@
 "use client";
 
+import { stripProposal } from "@/lib/settings-proposal";
 import { Volume2, VolumeX } from "lucide-react";
 import { memo } from "react";
 
@@ -69,7 +70,7 @@ export const TodayLog = memo(function TodayLog({ entries, todayKey, speak }: Pro
                           "rounded-[10px_10px_10px_3px] bg-accent-surface px-2.5 py-1.5",
                       )}
                     >
-                      {entry.content}
+                      {stripProposal(entry.content)}
                     </p>
                     {entry.interrupted && (
                       <p className="text-[0.625rem] text-muted">— ここで割り込みました</p>

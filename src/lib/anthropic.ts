@@ -1,4 +1,5 @@
 import { AUTO_REQUEST_PREFIX } from "@/lib/auto-request";
+import { SETTINGS_PROPOSAL_RULES } from "@/lib/settings-proposal";
 import type { ReplyStyle } from "@/lib/chat-model";
 import { jstTimeLabel, jstTodayLabel } from "@/lib/day-key";
 import { PROACTIVE_KIND_LABELS, type ProactiveKind } from "@/lib/proactive-labels";
@@ -78,6 +79,10 @@ const COMMON_RULES = [
 ];
 
 /** 画面で読む前提の体裁。 */
+const VOICE_SETTINGS_RULES = [
+  "設定（通知の時刻など）の変更を頼まれたら、この場では変えず、書く画面でもう一度頼んでもらうよう短く伝える",
+];
+
 const TEXT_FORMAT_RULES = [
   "内容が増えるときは見出しと箇条書き、比較は表にする（返答はMarkdownとして整形表示されます）",
 ];
@@ -220,6 +225,8 @@ export function secretarySystemPrompt(
     ...SECRETARY_VOICE_RULES,
     ...connectedServiceRules(connectedLabels, connectedHints, writeToolsWithheld),
     ...suggestionRules(suggestion),
+    // 設定の変更案（#346）。聞き間違いがそのまま設定になりうる音声では出さない（書く画面へ案内させる）。
+    ...(style === "voice" ? VOICE_SETTINGS_RULES : SETTINGS_PROPOSAL_RULES),
     ...(style === "voice" ? VOICE_FORMAT_RULES : TEXT_FORMAT_RULES),
   ];
 

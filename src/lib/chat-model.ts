@@ -69,10 +69,16 @@ export function billingKind(model: string | null | undefined): BillingKind {
  *
  * Astra＝最高性能、Sol＝バランス、Luna＝いちばん速く安い（`~/.codex/models_cache.json` の
  * `slug` から拾った。利用可能な名前を確かめるCLIコマンドは無い）。サブスクの利用枠
- * （5時間ローリング＋週次）はモデルが重いほど早く減る。GPT-5.6系は選択肢から外した——
- * 過去の使用量の記録には残るが、新しく積まれることは無い。
+ * （5時間ローリング＋週次）はモデルが重いほど早く減る。
+ * GPT-5.6系は、GPT-6系に対応していないアカウント向けの選択肢として末尾に並べる（#358）。
  */
-export type ChatModelId = "gpt-6-astra" | "gpt-6-sol" | "gpt-6-luna";
+export type ChatModelId =
+  | "gpt-6-astra"
+  | "gpt-6-sol"
+  | "gpt-6-luna"
+  | "gpt-5.6-sol"
+  | "gpt-5.6-terra"
+  | "gpt-5.6-luna";
 
 export type ChatModelOption = {
   id: ChatModelId;
@@ -86,6 +92,10 @@ export const CHAT_MODELS: ChatModelOption[] = [
   { id: "gpt-6-astra", label: "Astra", hint: "最高性能" },
   { id: "gpt-6-sol", label: "Sol", hint: "バランス" },
   { id: "gpt-6-luna", label: "Luna", hint: "高速" },
+  // GPT-6系にアカウントが対応していない環境向け（#358）。既定にはしない。
+  { id: "gpt-5.6-sol", label: "5.6 Sol", hint: "旧・高性能" },
+  { id: "gpt-5.6-terra", label: "5.6 Terra", hint: "旧・バランス" },
+  { id: "gpt-5.6-luna", label: "5.6 Luna", hint: "旧・高速" },
 ];
 
 /**

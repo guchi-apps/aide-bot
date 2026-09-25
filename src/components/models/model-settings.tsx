@@ -104,7 +104,7 @@ export function ModelSettings({ initial }: Props) {
                   <span className="block text-[0.72rem] leading-snug text-muted">{meta.hint}</span>
                 </div>
 
-                <div className="flex gap-1.5">
+                <div className="flex flex-wrap gap-1.5">
                   {CHAT_MODELS.map((model) => {
                     const checked = selected[use] === model.id;
 

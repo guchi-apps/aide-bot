@@ -10,12 +10,15 @@ import {
 import { sendPushToUser, usersWithSubscriptions } from "@/lib/push/subscriptions";
 import { topicCategoryShort } from "@/lib/topic-categories";
 import { listTopicCategories } from "@/lib/topic-category-store";
-import { topicsForScheduledPush } from "@/lib/topics";
+import { refreshTopicsForSchedule, topicsForScheduledPush } from "@/lib/topics";
 
 /**
  * 定時のお知らせ（#344）。**サーバー専用。** 起点は朝の見通しと同じcron（`/api/briefing` の末尾）。
  *
- * - **モデルは呼ばない。** 仕入れ済みの話題（`Topic`。24時間以内）の見出しをそのまま送る
+ * - **送る前にニュースを仕入れる**（#362。`refreshTopicsForSchedule()`）。送信対象の設定があり、まだ
+ *   送っていない回だけ。30分以内に仕入れ済みなら省く。失敗・実行中でも、溜まっている話題があれば送る
+ * - **文面はモデルに書かせない。** 仕入れ済みの話題（`Topic`。24時間以内）の見出しをそのまま送る
+ *   （仕入れそのものはCodexの検索を使う）。同じ出来事の記事は1件にまとめる
  * - **黙れる。** 話題が0件の回は送らず、記録も残さない（猶予の3時間内に仕入れられれば、次の起動で届く）
  * - **同じ日・同じ設定で二度送らない。** `NotificationLog` の一意制約（`<日付>:<設定id>`）。
  *   朝の見通し・急ぎ・先回りの提案とは `kind` を分けてあり、その枠を消費しない
@@ -66,6 +69,13 @@ export async function runScheduledPushes(now = new Date()): Promise<ScheduledPus
         continue;
       }
 
+      // 送る前に新しいニュースを仕入れる。仕入れに失敗しても・別の仕入れが走っていても、溜まっている
+      // 話題で送れるので結果では止めない（`busy` は走っている仕入れの終わりを待たず、いまあるぶんで送る）。
+      const refreshed = await refreshTopicsForSchedule(schedule.userId, now);
+      if (refreshed === "failed" || refreshed === "busy") {
+        console.warn(`[aide-bot] 定時のお知らせの前の仕入れは${refreshed}: 溜まっている話題で送る`);
+      }
+
       const topics = await topicsForScheduledPush(schedule.userId, schedule.category, SCHEDULED_PUSH_TOPIC_LIMIT, now);
       if (topics.length === 0) {
         outcomes.push({ ...base, status: "silent", delivered: 0, detail: "届ける話題がない" });
@@ -91,7 +101,8 @@ export async function runScheduledPushes(now = new Date()): Promise<ScheduledPus
       });
 
       // 送った話題に印を付ける。声かけ（#278）や別の定時が同じ話題をもう一度出さないため。
-      await db.topic.updateMany({ where: { id: { in: topics.map((topic) => topic.id) } }, data: { spokenAt: now } });
+      // まとめた記事も同じ話なので、グループ全体に付ける（#362）。
+      await db.topic.updateMany({ where: { id: { in: topics.flatMap((topic) => topic.mergedIds) } }, data: { spokenAt: now } });
 
       outcomes.push({ ...base, status: "sent", delivered });
     } catch (error) {

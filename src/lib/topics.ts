@@ -7,6 +7,7 @@ import { runCodexRecorded } from "@/lib/codex-run";
 import { db } from "@/lib/db";
 import { safeNoticeUrl } from "@/lib/notice-url";
 import { SCHEDULED_PUSH_ALL } from "@/lib/scheduled-push-rule";
+import { groupDuplicateTopics, type TopicGroup } from "@/lib/topic-dedupe";
 import { SECRETARY_INTRO, SECRETARY_VOICE_RULES } from "@/lib/persona";
 import { listTopicCategories } from "@/lib/topic-category-store";
 import type { TopicCategory } from "@/lib/topic-categories";
@@ -58,6 +59,15 @@ export const TOPIC_BUBBLE_LIMIT = 3;
 /** 相談の材料として添える件数。 */
 const TOPIC_CHAT_LIMIT = 8;
 
+/**
+ * 定時のお知らせ（#362）の前に仕入れるときの最小の間隔。前回の仕入れからこれだけあいていなければ、
+ * 溜まっている話題をそのまま使う（同じ時刻に複数の定時があっても、仕入れは1回で済む）。
+ */
+export const TOPIC_SCHEDULE_MIN_INTERVAL_MS = 30 * 60 * 1000;
+
+/** 重複をまとめる前に引く件数。まとめたあとに上限へ切るため、上限より多めに取る。 */
+const TOPIC_MERGE_FETCH = 60;
+
 /** 種類ごとに仕入れる件数。 */
 const TOPICS_PER_CATEGORY = 2;
 
@@ -101,6 +111,10 @@ export type TopicRow = {
   sourceName: string;
   publishedOn: string;
   fetchedAt: Date;
+  /** 同じ出来事を報じている他の記事（#362。まとめた記事）。無ければ空。 */
+  alsoReported: { title: string; url: string | null; sourceName: string }[];
+  /** まとめた記事すべて（代表を含む）の `Topic.id`。定時のお知らせが `spokenAt` を付けるのに使う。 */
+  mergedIds: string[];
 };
 
 export type TopicBoard = {
@@ -108,8 +122,10 @@ export type TopicBoard = {
   categories: TopicCategory[];
   /** 最後に仕入れた時刻。まだ一度も無ければnull。 */
   lastFetchedAt: Date | null;
-  /** 期間内の話題（新しい順）。 */
+  /** 期間内の話題（新しい順）。同じ出来事の記事は1件にまとめてある（#362）。 */
   topics: TopicRow[];
+  /** 重複としてまとめた記事の数（画面の注記に使う）。 */
+  mergedCount: number;
   /** 吹き出しへ回している件数の上限。画面の注記に使う。 */
   bubbleLimit: number;
   /** 期間（時間）。画面の注記に使う。 */
@@ -133,7 +149,7 @@ function jstStamp(now: Date): string {
   }).format(now);
 }
 
-function toRow(topic: Topic): TopicRow {
+function toRow(topic: Topic, others: Topic[] = []): TopicRow {
   return {
     id: topic.id,
     category: topic.category,
@@ -145,7 +161,17 @@ function toRow(topic: Topic): TopicRow {
     sourceName: topic.sourceName,
     publishedOn: topic.publishedOn,
     fetchedAt: topic.fetchedAt,
+    alsoReported: others.map((other) => ({
+      title: other.title,
+      url: safeNoticeUrl(other.url),
+      sourceName: other.sourceName,
+    })),
+    mergedIds: [topic.id, ...others.map((other) => other.id)],
   };
+}
+
+function groupToRow(group: TopicGroup<Topic>): TopicRow {
+  return toRow(group.primary, group.others);
 }
 
 /** 期間内の話題を新しい順に引く。 */
@@ -166,7 +192,9 @@ async function recentTopics(userId: string, now: Date, take: number): Promise<To
  */
 export async function topicsForBubble(userId: string, now = new Date()): Promise<TopicBubble[]> {
   try {
-    const topics = await recentTopics(userId, now, TOPIC_BUBBLE_LIMIT);
+    // 同じ出来事は1枠にまとめる（#362）。まとめる前に多めに引いてから上限へ切る。
+    const groups = groupDuplicateTopics(await recentTopics(userId, now, TOPIC_MERGE_FETCH)).slice(0, TOPIC_BUBBLE_LIMIT);
+    const topics = groups.map((group) => group.primary);
     return topics.map((topic) => ({
       id: topic.id,
       lead: topic.lead,
@@ -189,7 +217,9 @@ export async function topicsForBubble(userId: string, now = new Date()): Promise
 export async function topicsForChat(userId: string, now = new Date()): Promise<string> {
   let topics: Topic[];
   try {
-    topics = await recentTopics(userId, now, TOPIC_CHAT_LIMIT);
+    topics = groupDuplicateTopics(await recentTopics(userId, now, TOPIC_MERGE_FETCH))
+      .slice(0, TOPIC_CHAT_LIMIT)
+      .map((group) => group.primary);
   } catch (error) {
     console.error("[aide-bot] 相談の材料になる話題の取得に失敗した", error);
     return "";
@@ -209,7 +239,7 @@ export async function topicsForChat(userId: string, now = new Date()): Promise<s
 export async function topicBoard(userId: string, now = new Date()): Promise<TopicBoard> {
   const [categories, topics, latest] = await Promise.all([
     listTopicCategories(userId),
-    recentTopics(userId, now, 50),
+    recentTopics(userId, now, TOPIC_MERGE_FETCH),
     db.topic.findFirst({
       where: { userId },
       orderBy: { fetchedAt: "desc" },
@@ -217,20 +247,27 @@ export async function topicBoard(userId: string, now = new Date()): Promise<Topi
     }),
   ]);
 
+  const groups = groupDuplicateTopics(topics);
+
   return {
     categories,
     lastFetchedAt: latest?.fetchedAt ?? null,
-    topics: topics.map(toRow),
+    topics: groups.map(groupToRow),
+    mergedCount: topics.length - groups.length,
     bubbleLimit: TOPIC_BUBBLE_LIMIT,
     lifetimeHours: TOPIC_LIFETIME_MS / (60 * 60 * 1000),
   };
 }
 
-/** 左メニューに出す件数（期間内の話題）。 */
+/** 左メニューに出す件数（期間内の話題。同じ出来事は1件と数える。#362）。 */
 export async function recentTopicCount(userId: string, now = new Date()): Promise<number> {
-  return db.topic.count({
+  const topics = await db.topic.findMany({
     where: { userId, fetchedAt: { gt: new Date(now.getTime() - TOPIC_LIFETIME_MS) } },
+    select: { title: true, summary: true },
+    orderBy: [{ fetchedAt: "desc" }, { id: "asc" }],
+    take: TOPIC_MERGE_FETCH,
   });
+  return groupDuplicateTopics(topics).length;
 }
 
 /**
@@ -400,12 +437,47 @@ async function fetchTopics(userId: string, categories: TopicCategory[], now: Dat
  * 失敗はログに残して黙る。吹き出しにも相談にも影響させない（#93「吹き出しにエラーを出さない」）。
  */
 export function refreshTopicsIfStale(userId: string, now = new Date()): Promise<void> {
+  return startRefresh(userId, now, TOPIC_REFRESH_INTERVAL_MS).then(
+    () => undefined,
+    (error) => {
+      // 種類の読み出しなど、仕入れの前に落ちた回。次の問い合わせでやり直す。
+      console.error("[aide-bot] 話題の仕入れの前処理に失敗した", error);
+    },
+  );
+}
+
+/** 仕入れを試みた結果。定時のお知らせ（#362）が「送る前に何が起きたか」を読むために返す。 */
+export type TopicRefreshResult = "fetched" | "fresh" | "busy" | "failed" | "disabled";
+
+/**
+ * 定時のお知らせ（#362）の直前に仕入れる。**待って結果を返す**（`refreshTopicsIfStale()` は応答後に
+ * すぐ戻るが、こちらは仕入れが終わるまで待つ。呼び出し元はcronの `after()` の中）。
+ *
+ * 同じ利用者の仕入れと錠（`attempts`）を共有するので、画面を開いたときの仕入れと重ならない。
+ * 前回から `TOPIC_SCHEDULE_MIN_INTERVAL_MS` あいていなければ走らせず、溜まっているものを使う。
+ * **例外は外へ出さず `failed` で返す**——仕入れに失敗しても、溜まっている話題があれば送れる。
+ */
+export async function refreshTopicsForSchedule(userId: string, now = new Date()): Promise<TopicRefreshResult> {
+  try {
+    return await startRefresh(userId, now, TOPIC_SCHEDULE_MIN_INTERVAL_MS);
+  } catch (error) {
+    console.error("[aide-bot] 定時のお知らせの前の話題の仕入れに失敗した", error);
+    return "failed";
+  }
+}
+
+/**
+ * 仕入れの共通の入口。判定の順は `refreshTopicsIfStale()` の説明のとおり。`intervalMs` は
+ * 「成功した前回からこれだけあいていなければ走らせない」間隔。**仕入れ自体の失敗は投げず `failed`
+ * で返し**、その前（種類・DBの読み出し）で落ちた回だけ投げる。
+ */
+async function startRefresh(userId: string, now: Date, intervalMs: number): Promise<TopicRefreshResult> {
   const attempt = attempts.get(userId);
-  if (attempt?.running) return Promise.resolve();
+  if (attempt?.running) return "busy";
 
   if (attempt) {
-    const interval = attempt.failed ? TOPIC_RETRY_INTERVAL_MS : TOPIC_REFRESH_INTERVAL_MS;
-    if (now.getTime() - attempt.at < interval) return Promise.resolve();
+    const interval = attempt.failed ? TOPIC_RETRY_INTERVAL_MS : intervalMs;
+    if (now.getTime() - attempt.at < interval) return attempt.failed ? "failed" : "fresh";
   }
 
   // 「走っている」印は、ここまでの同期の判定を通った直後、DBを待つ前に立てる。DBを2回待った後に
@@ -419,45 +491,40 @@ export function refreshTopicsIfStale(userId: string, now = new Date()): Promise<
     else attempts.delete(userId);
   };
 
-  const run = async () => {
-    let categories: TopicCategory[];
-    try {
-      categories = (await listTopicCategories(userId)).filter((category) => category.enabled);
-      if (categories.length === 0) {
-        release();
-        return;
-      }
-
-      const latest = await db.topic.findFirst({
-        where: { userId },
-        orderBy: { fetchedAt: "desc" },
-        select: { fetchedAt: true },
-      });
-      if (latest && now.getTime() - latest.fetchedAt.getTime() < TOPIC_REFRESH_INTERVAL_MS) {
-        // 再起動の直後など、プロセス内の記録は無いがDB上は仕入れたばかり。記録だけ復元して戻る。
-        attempts.set(userId, { at: latest.fetchedAt.getTime(), failed: false, running: false });
-        return;
-      }
-    } catch (error) {
-      // 印を戻さないと、仕入れの前に落ちた回のあとずっと「走っている」ままになる。
+  let categories: TopicCategory[];
+  try {
+    categories = (await listTopicCategories(userId)).filter((category) => category.enabled);
+    if (categories.length === 0) {
       release();
-      throw error;
+      return "disabled";
     }
 
-    try {
-      const count = await fetchTopics(userId, categories, now);
-      console.log(`[aide-bot] 話題を${count}件仕入れた`);
-      attempts.set(userId, { at: now.getTime(), failed: false, running: false });
-    } catch (error) {
-      console.error("[aide-bot] 話題の仕入れに失敗した", error);
-      attempts.set(userId, { at: now.getTime(), failed: true, running: false });
+    const latest = await db.topic.findFirst({
+      where: { userId },
+      orderBy: { fetchedAt: "desc" },
+      select: { fetchedAt: true },
+    });
+    if (latest && now.getTime() - latest.fetchedAt.getTime() < intervalMs) {
+      // 再起動の直後など、プロセス内の記録は無いがDB上は仕入れたばかり。記録だけ復元して戻る。
+      attempts.set(userId, { at: latest.fetchedAt.getTime(), failed: false, running: false });
+      return "fresh";
     }
-  };
+  } catch (error) {
+    // 印を戻さないと、仕入れの前に落ちた回のあとずっと「走っている」ままになる。
+    release();
+    throw error;
+  }
 
-  return run().catch((error) => {
-    // 種類の読み出しなど、仕入れの前に落ちた回。次の問い合わせでやり直す。
-    console.error("[aide-bot] 話題の仕入れの前処理に失敗した", error);
-  });
+  try {
+    const count = await fetchTopics(userId, categories, now);
+    console.log(`[aide-bot] 話題を${count}件仕入れた`);
+    attempts.set(userId, { at: now.getTime(), failed: false, running: false });
+    return "fetched";
+  } catch (error) {
+    console.error("[aide-bot] 話題の仕入れに失敗した", error);
+    attempts.set(userId, { at: now.getTime(), failed: true, running: false });
+    return "failed";
+  }
 }
 
 /** 試し検索の間隔（利用者ごと）。1回が約1種類ぶんの検索で、押されるたびに走らせない。 */
@@ -521,7 +588,8 @@ export async function previewTopics(
 
 /**
  * 定時のお知らせ（#344）に載せる、まだ振っていない話題。期間内のものを新しい順に。`category` が `all` なら種類を問わない。
- * **例外は投げる**（呼び出し側が「黙る」と「失敗」を分ける）。
+ * **同じ出来事は1件にまとめ、そのうち1つでもすでに振っていれば出さない**（#362。別の媒体の記事だけ
+ * 新しく仕入れられても、同じ話を二度は送らない）。**例外は投げる**（呼び出し側が「黙る」と「失敗」を分ける）。
  */
 export async function topicsForScheduledPush(
   userId: string,
@@ -533,13 +601,15 @@ export async function topicsForScheduledPush(
     where: {
       userId,
       fetchedAt: { gt: new Date(now.getTime() - TOPIC_LIFETIME_MS) },
-      // すでに振った（声かけ・定時のお知らせ）話題は二度は出さない（`Topic.spokenAt`）。
-      spokenAt: null,
       ...(category === SCHEDULED_PUSH_ALL ? {} : { category }),
     },
     orderBy: [{ fetchedAt: "desc" }, { id: "asc" }],
-    take: limit,
+    take: TOPIC_MERGE_FETCH,
   });
 
-  return topics.map(toRow);
+  return groupDuplicateTopics(topics)
+    // すでに振った（声かけ・定時のお知らせ）話題は二度は出さない（`Topic.spokenAt`）。
+    .filter((group) => [group.primary, ...group.others].every((topic) => topic.spokenAt === null))
+    .slice(0, limit)
+    .map(groupToRow);
 }

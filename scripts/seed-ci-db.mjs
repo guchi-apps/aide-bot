@@ -372,6 +372,16 @@ const TOPIC_SEEDS = [
     sourceName: "テレビ朝日",
     fetchedMinutesAgo: 20,
   },
+  // 同じ出来事を別の媒体が報じたもの（#362）。話題の一覧では1件にまとまり「他の記事」に並ぶ。
+  {
+    category: "life",
+    title: "津軽地方に線状降水帯が発生、気象庁が厳重警戒を呼びかけ",
+    summary: "気象庁は青森県津軽地方に線状降水帯が発生したと発表。大雨による土砂災害や河川の増水に厳重な警戒を呼びかけている。",
+    lead: "津軽の線状降水帯、他の媒体も伝えているそうです",
+    url: "https://example.com/news/dev-tsugaru-rain-2",
+    sourceName: "NHK",
+    fetchedMinutesAgo: 25,
+  },
   {
     category: "tech",
     title: "Node.js 26がLTSに",

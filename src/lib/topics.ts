@@ -466,7 +466,7 @@ export function refreshTopicsIfStale(userId: string, now = new Date()): Promise<
 }
 
 /**
- * 定時のお知らせ（#344）に載せる話題。期間内のものを新しい順に。`category` が `all` なら種類を問わない。
+ * 定時のお知らせ（#344）に載せる、まだ振っていない話題。期間内のものを新しい順に。`category` が `all` なら種類を問わない。
  * **例外は投げる**（呼び出し側が「黙る」と「失敗」を分ける）。
  */
 export async function topicsForScheduledPush(
@@ -479,6 +479,8 @@ export async function topicsForScheduledPush(
     where: {
       userId,
       fetchedAt: { gt: new Date(now.getTime() - TOPIC_LIFETIME_MS) },
+      // すでに振った（声かけ・定時のお知らせ）話題は二度は出さない（`Topic.spokenAt`）。
+      spokenAt: null,
       ...(category === "all" ? {} : { category }),
     },
     orderBy: [{ fetchedAt: "desc" }, { id: "asc" }],

@@ -17,6 +17,7 @@ import { topicsForScheduledPush } from "@/lib/topics";
  * - **黙れる。** 話題が0件の回は送らず、記録も残さない（猶予の3時間内に仕入れられれば、次の起動で届く）
  * - **同じ日・同じ設定で二度送らない。** `NotificationLog` の一意制約（`<日付>:<設定id>`）。
  *   朝の見通し・急ぎ・先回りの提案とは `kind` を分けてあり、その枠を消費しない
+ * - **送った話題には `Topic.spokenAt` を付け、次からは選ばない**（声かけ・別の定時との二重出しを避ける）
  * - 押した先は「話題」ページ（`/topics`）。相談の記録へは積まない（会話の最中へ割り込むため。#278の錠を再実装しない）
  */
 
@@ -82,6 +83,9 @@ export async function runScheduledPushes(now = new Date()): Promise<ScheduledPus
       await db.notificationLog.create({
         data: { userId: schedule.userId, kind: SCHEDULED_PUSH_KIND, dedupeKey, title, body, deliveredCount: delivered },
       });
+
+      // 送った話題に印を付ける。声かけ（#278）や別の定時が同じ話題をもう一度出さないため。
+      await db.topic.updateMany({ where: { id: { in: topics.map((topic) => topic.id) } }, data: { spokenAt: now } });
 
       outcomes.push({ ...base, status: "sent", delivered });
     } catch (error) {

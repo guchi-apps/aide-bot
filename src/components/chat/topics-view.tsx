@@ -17,7 +17,7 @@ type Props = {
  * 並べる順は新しい順。上段に「仕入れる種類」を置くのは、変えた効果がすぐ下の一覧で見えるため。
  */
 export function TopicsView({ board, now }: Props) {
-  const { categories: allCategories, lastFetchedAt, topics, bubbleLimit, lifetimeHours } = board;
+  const { categories: allCategories, lastFetchedAt, topics, mergedCount, bubbleLimit, lifetimeHours } = board;
 
   const categories = allCategories.filter((category) => category.enabled);
 
@@ -33,7 +33,11 @@ export function TopicsView({ board, now }: Props) {
         </section>
 
         <div className="grid grid-cols-3 gap-2.5 md:gap-3">
-          <Stat label="溜まっている" value={`${topics.length}`} unit="件" note={`仕入れてから${lifetimeHours}時間で入れ替わる`} highlighted />
+          <Stat label="溜まっている" value={`${topics.length}`} unit="件" note={
+              mergedCount > 0
+                ? `同じ出来事${mergedCount}件を1件にまとめて表示`
+                : `仕入れてから${lifetimeHours}時間で入れ替わる`
+            } highlighted />
           <Stat
             label="最後に仕入れた"
             value={lastFetchedAt ? timeLabel(lastFetchedAt) : "—"}
@@ -58,7 +62,7 @@ export function TopicsView({ board, now }: Props) {
           <section className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
             <div className="flex items-baseline justify-between gap-3">
               <h2 className="text-[0.8125rem] font-bold">いまの話題（{topics.length}件）</h2>
-              <span className="text-[0.6875rem] text-muted">新しい順</span>
+              <span className="text-[0.6875rem] text-muted">新しい順・同じ出来事はまとめて表示</span>
             </div>
             <div className="flex flex-col">
               {topics.map((topic) => (
@@ -167,13 +171,40 @@ function TopicArticle({ topic, categories }: { topic: TopicRow; categories: Topi
         <span className="mr-1.5 text-[0.625rem] tracking-wider text-muted">秘書の一言</span>
         {topic.lead}
       </p>
-      {meta.length > 0 && (
+      {(meta.length > 0 || topic.alsoReported.length > 0) && (
         <div className="flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-muted">
+          {topic.alsoReported.length > 0 && (
+            <span className="rounded-md bg-accent-surface px-2 py-0.5 font-bold text-accent">
+              {topic.alsoReported.length + 1}社が報道
+            </span>
+          )}
           {meta.map((part, index) => (
             <span key={part + index}>
               {index > 0 && <span className="mr-1.5 opacity-50">・</span>}
               {part}
             </span>
+          ))}
+        </div>
+      )}
+      {topic.alsoReported.length > 0 && (
+        <div className="mt-0.5 flex flex-col gap-1 rounded-lg border border-dashed border-border px-2.5 py-2 text-xs">
+          <span className="text-[0.6875rem] text-muted">同じ出来事の他の記事</span>
+          {topic.alsoReported.map((other, index) => (
+            <div key={(other.url ?? other.title) + index} className="flex flex-col gap-0.5">
+              {other.url ? (
+                <a
+                  href={other.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline decoration-muted underline-offset-[3px]"
+                >
+                  {other.title}
+                </a>
+              ) : (
+                <span>{other.title}</span>
+              )}
+              {other.sourceName !== "" && <span className="text-[0.6875rem] text-muted">{other.sourceName}</span>}
+            </div>
           ))}
         </div>
       )}

@@ -14,69 +14,6 @@
 export type ReplyStyle = "text" | "voice";
 
 /**
- * 朝の見通し（#79）を書くモデル。**#183でCodexへ移した最後の1本。**
- *
- * #128（チャット）・#132（お知らせ選定）・#167（自宅の前提）に続く移行で、これで
- * アプリからAnthropic（従量課金）を呼ぶ経路は無くなった。
- *
- * **ここだけ旗艦のSolにしてある。** 10本の道具から集めた材料を、条件（`BRIEFING_MATERIAL_RULES`）
- * で取捨選択したうえで200文字に収める、という判断の要る仕事で、**1日1本しか走らない**ので
- * サブスクの利用枠への影響も小さい。しかも書き損じても直す機会が無い（届いたら終わり）。
- *
- * 設定の画面からは選べない——選ぶ主体が居ない場面（cronから叩かれる）で使うため、
- * Cookieを読めない。
- */
-export const BRIEFING_MODEL = "gpt-5.6-sol";
-
-/**
- * 吹き出しに出すお知らせを1件選ぶモデル（#93）。**#132でCodexへ移した。**
- *
- * `ChatModelId` と同じCodexのモデル名だが、型は分けてある——こちらは設定の画面から選べず、
- * 選ぶ主体が居ない場面（10分ごとの問い合わせ）で使うため。**いちばん速く安いLunaにしてある。**
- * やらせているのは「12件の候補から1件選んで40字前後に言い直す」だけで、賢さより往復の速さが効く
- * （`/api/notices/current` の応答がそのぶん待たされる）。
- */
-export const NOTICE_MODEL = "gpt-5.6-luna";
-
-/**
- * 話題（#144）を仕入れるモデル。`codex --search exec` でウェブ検索させる。
- *
- * `NOTICE_MODEL` と同じく設定の画面からは選べない（仕入れは応答後のバックグラウンドで走り、
- * 選ぶ主体が居ない）。Lunaにしてあるのは、やらせているのが「検索結果から数件を選んで
- * 短く要約する」だけで、1回あたり27秒前後・入力6万トークン超（実測）と重い経路のため、
- * これより重いモデルにするとサブスクの利用枠の減りが早くなる。
- */
-export const TOPIC_MODEL = "gpt-5.6-luna";
-
-/**
- * 連続セッションの古い発言を要約へ畳むモデル（#157のcompact）。
- *
- * `NOTICE_MODEL`・`TOPIC_MODEL` と同じく設定の画面からは選べない（返答を返した後の
- * 後始末で走り、選ぶ主体が居ない）。**ここだけ中位のTerraにしてある。** 落とすものを
- * 選び損ねると、その要約が以後ずっと文脈として使われ、あとから直す機会が無い——
- * 40発言ごとに1回しか走らないので、利用枠への影響も小さい。
- */
-export const COMPACT_MODEL = "gpt-5.6-terra";
-
-/**
- * Notionから「自宅・暮らしの前提」を取り込むモデル（#167）。
- *
- * `COMPACT_MODEL` と同じ理由で中位のTerraにしてある。**取り込んだ覚え書きは相談の
- * プロンプトへ毎回載り、次に取り込み直すまで（最短でも1日）使われ続ける**ので、
- * 探し損ね・読み違いが1日ぶんそのまま効く。走るのは1日1回＋設定の画面のボタンだけで、
- * 利用枠への影響も小さい。設定の画面からは選べない（選ぶ主体が居ない場面で走る）。
- */
-export const HOME_PROFILE_MODEL = "gpt-5.6-terra";
-
-/**
- * 継続記憶（#323）の候補抽出とNotion照合のモデル。設定の画面からは選べない（返答を返した後の
- * 後始末と、記憶の画面のボタンで走る）。**Terra**にしてあるのは、雑談や仮説を「継続的な希望」と
- * 取り違えず、Notionの状態も読み違えないため。候補は利用者が確かめるまで使われないが、
- * 走る回数を絞ってある（`memory-extract.ts`）ので利用枠への影響は小さい。
- */
-export const MEMORY_MODEL = "gpt-5.6-terra";
-
-/**
  * `/usage` 画面の単価表。**Anthropic（Claude）の単価だけを載せる。**
  *
  * **#183で、いま新しく積まれる記録はすべてCodex（サブスク定額）になった。** この表が効くのは
@@ -127,7 +64,15 @@ export function billingKind(model: string | null | undefined): BillingKind {
   return (model ?? "").startsWith("gpt-") ? "subscription" : "metered";
 }
 
-export type ChatModelId = "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna";
+/**
+ * 選べるモデル（Codex CLIが提供するGPT-6系。#349）。賢い順に並べる（画面の並びもこの順）。
+ *
+ * Astra＝最高性能、Sol＝バランス、Luna＝いちばん速く安い（`~/.codex/models_cache.json` の
+ * `slug` から拾った。利用可能な名前を確かめるCLIコマンドは無い）。サブスクの利用枠
+ * （5時間ローリング＋週次）はモデルが重いほど早く減る。GPT-5.6系は選択肢から外した——
+ * 過去の使用量の記録には残るが、新しく積まれることは無い。
+ */
+export type ChatModelId = "gpt-6-astra" | "gpt-6-sol" | "gpt-6-luna";
 
 export type ChatModelOption = {
   id: ChatModelId;
@@ -137,48 +82,117 @@ export type ChatModelOption = {
   hint: string;
 };
 
-/**
- * 選べるモデル（Codex CLIが提供するGPT-5.6系。賢い順に並べる。画面の並びもこの順）。
- *
- * Sol＝旗艦（いちばん賢い）、Terra＝GPT-5.5相当の中位、Luna＝いちばん速く安いモデル
- * （出典: https://openai.com/index/gpt-5-6/）。サブスクの利用枠（5時間ローリング＋週次）は
- * モデルが重いほど早く減るため、「話す」「書く」ごとに選べる（既定は両方Sol。`DEFAULT_CHAT_MODEL`）。
- */
 export const CHAT_MODELS: ChatModelOption[] = [
-  { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "いちばん賢い" },
-  { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", hint: "中間" },
-  { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "いちばん速い" },
+  { id: "gpt-6-astra", label: "Astra", hint: "最高性能" },
+  { id: "gpt-6-sol", label: "Sol", hint: "バランス" },
+  { id: "gpt-6-luna", label: "Luna", hint: "高速" },
 ];
 
 /**
- * 何も選んでいないときのモデル。
+ * モデルを選べる用途（#349）。**正はここ**——画面・保存・各呼び出しが同じ表を引く。
  *
- * 既定を変えると、設定を触っていない端末の返答が黙って変わるので、変えるときは画面の案内も
- * 一緒に見直す。
+ * 以前は相談だけがCookieで選べ、残りは定数で固定だった。設定の値を読むのが
+ * cronや返答後の後始末（Cookieの届かない経路）でもあるので、保存は利用者ごとのDB
+ * （`User.modelSettings`）へ持つ。用途を足したら `MODEL_USES`・`MODEL_USE_META`・`DEFAULT_MODELS`
+ * の3つを揃える（型で漏れは落ちる）。
  */
-export const DEFAULT_CHAT_MODEL: ChatModelId = "gpt-5.6-sol";
+export type ModelUse =
+  | "chat_voice"
+  | "chat_text"
+  | "briefing"
+  | "proactive"
+  | "notice"
+  | "topic"
+  | "compact"
+  | "home_profile"
+  | "memory";
 
-/**
- * 選んだモデルを置くCookie（`aide-bot-talk-mode` と同じ考え方）。
- *
- * localStorageではなくCookieなのは、**サーバー側でも同じ値を読む必要がある**ため。
- * 返答を生成するのは `/api/chat`（Route Handler）。
- */
-export const CHAT_MODEL_COOKIE: Record<ReplyStyle, string> = {
-  text: "aide-bot-chat-model-text",
-  voice: "aide-bot-chat-model-voice",
+export const MODEL_USES: readonly ModelUse[] = [
+  "chat_voice",
+  "chat_text",
+  "briefing",
+  "proactive",
+  "notice",
+  "topic",
+  "compact",
+  "home_profile",
+  "memory",
+];
+
+export type ModelUseGroup = "chat" | "scheduled" | "background";
+
+export const MODEL_USE_GROUP_LABELS: Record<ModelUseGroup, string> = {
+  chat: "相談",
+  scheduled: "定時・通知",
+  background: "バックグラウンド",
 };
 
-/** 1年。相談のたびに選び直させないため、実質「次に変えるまで」の意味で置く。 */
-export const CHAT_MODEL_MAX_AGE = 60 * 60 * 24 * 365;
+export const MODEL_USE_META: Record<ModelUse, { group: ModelUseGroup; label: string; hint: string }> = {
+  chat_voice: { group: "chat", label: "話す", hint: "音声の短い返事" },
+  chat_text: { group: "chat", label: "書く", hint: "見出しや表を使う長い返事" },
+  briefing: { group: "scheduled", label: "朝の見通し", hint: "毎朝1回・10本の道具を集約" },
+  proactive: { group: "scheduled", label: "先回りの提案", hint: "空き時間と希望から判断" },
+  notice: { group: "scheduled", label: "お知らせの選定", hint: "吹き出しに出す1件を選ぶ" },
+  topic: { group: "background", label: "話題の仕入れ", hint: "ウェブ検索でニュース収集（重い）" },
+  compact: { group: "background", label: "会話の要約", hint: "古い発言を畳む" },
+  home_profile: { group: "background", label: "自宅の前提", hint: "Notionから取り込み" },
+  memory: { group: "background", label: "継続記憶", hint: "候補の抽出と照合" },
+};
 
 /**
- * Cookieの値をモデル名に均す。
+ * 何も選んでいない用途のモデル。従来の役割に合わせてある（5.6のSol→Astra、Terra→Sol、Luna→Luna）。
  *
- * 知らない値は既定へ落とす。利用者が書き換えられる値なので、そのまま渡すと存在しないモデル名で
- * `codex exec` が失敗し、相談そのものが通らなくなる。
+ * 変えると、設定を触っていない利用者の返答が黙って変わる。
  */
-export function normalizeChatModel(value: string | undefined | null): ChatModelId {
-  const known = CHAT_MODELS.find((model) => model.id === value);
-  return known ? known.id : DEFAULT_CHAT_MODEL;
+export const DEFAULT_MODELS: Record<ModelUse, ChatModelId> = {
+  chat_voice: "gpt-6-astra",
+  chat_text: "gpt-6-astra",
+  briefing: "gpt-6-astra",
+  proactive: "gpt-6-astra",
+  notice: "gpt-6-luna",
+  topic: "gpt-6-luna",
+  compact: "gpt-6-sol",
+  home_profile: "gpt-6-sol",
+  memory: "gpt-6-sol",
+};
+
+export function isChatModelId(value: unknown): value is ChatModelId {
+  return CHAT_MODELS.some((model) => model.id === value);
+}
+
+/**
+ * 保存してある値（`User.modelSettings`）を、全用途ぶんのモデルへ均す。
+ *
+ * 知らない用途・知らないモデル名（GPT-5.6系や書き換えられた値）は既定へ落とす。存在しない名前を
+ * `codex exec -m` へ渡すと、相談を含むすべての生成が失敗するため。
+ */
+export function resolveModelSettings(stored: unknown): Record<ModelUse, ChatModelId> {
+  const record =
+    typeof stored === "object" && stored !== null && !Array.isArray(stored)
+      ? (stored as Record<string, unknown>)
+      : {};
+
+  const resolved = { ...DEFAULT_MODELS };
+  for (const use of MODEL_USES) {
+    const value = record[use];
+    if (isChatModelId(value)) resolved[use] = value;
+  }
+
+  return resolved;
+}
+
+/** 変更を保存済みの値へ重ねる。既定と同じ値は持たず、既定を後から変えても追従できるようにする。 */
+export function mergeModelSettings(stored: unknown, changes: Partial<Record<ModelUse, ChatModelId>>) {
+  const current =
+    typeof stored === "object" && stored !== null && !Array.isArray(stored)
+      ? (stored as Record<string, unknown>)
+      : {};
+
+  const next: Record<string, ChatModelId> = {};
+  for (const use of MODEL_USES) {
+    const value = use in changes ? changes[use] : current[use];
+    if (isChatModelId(value) && value !== DEFAULT_MODELS[use]) next[use] = value;
+  }
+
+  return next;
 }

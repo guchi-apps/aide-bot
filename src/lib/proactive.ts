@@ -1,5 +1,5 @@
 import { PROACTIVE_REQUEST, proactiveSystemPrompt } from "@/lib/anthropic";
-import { BRIEFING_MODEL } from "@/lib/chat-model";
+import { modelFor } from "@/lib/chat-model-server";
 import { runCodexRecorded } from "@/lib/codex-run";
 import { dayStart, jstDayKey } from "@/lib/day-key";
 import { appendSecretaryExchange, primaryConversation } from "@/lib/day-log";
@@ -128,7 +128,7 @@ async function runFor(user: ProactiveUser, now: Date): Promise<ProactiveOutcome>
       userId,
       feature: "proactive",
       label: "先回りの提案の生成",
-      model: BRIEFING_MODEL,
+      model: await modelFor(userId, "proactive"),
       prompt: [proactiveSystemPrompt({ kinds: gate.kinds, recentCandidates, now }), "---", PROACTIVE_REQUEST].join(
         "\n\n",
       ),

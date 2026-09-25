@@ -215,6 +215,11 @@ Codexへ移り、**Claudeを呼ぶ経路は残っていない**（下記「朝�
   the native Responses web_search tool is available`）。**まだ使っていない**が、外部情報を
   取らせたくなったとき、検索用のサービスを新たに契約する前にこちらを検討すること——
   同じサブスク枠で動くので、APIキーも依存パッケージも増えない（#144で検討中）
+- **アカウントが対応していないモデルは、GPT-5.6系へ1度だけ落としてやり直す**（#358）。`models_cache.json` に載っていても、
+  ChatGPTアカウントの契約によっては実行時に `The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account.`
+  （400）で断られる（サブPCでは通り、本番のアカウントでだけ出た）。`runCodexExec()` が起動の時点でこのエラーが返った回だけ、
+  `UNSUPPORTED_MODEL_FALLBACKS`（astra→5.6-sol、sol→5.6-terra、luna→5.6-luna）でやり直す。本文が届いた後は再実行しない。
+  使用量の記録のモデル名は指定した方（GPT-6系）のまま。`test/codex-fallback.test.ts` が固定する
 - **利用可能なモデル名を確認できるCLIコマンドは無い。** `~/.codex/models_cache.json` の
   `models[].slug` から拾う（2026-08-31時点: `gpt-5.6-sol` / `gpt-5.6-terra` /
   `gpt-5.6-luna` 等）。Sol＝旗艦（いちばん賢い）、Terra＝GPT-5.5相当の中位、Luna＝いちばん

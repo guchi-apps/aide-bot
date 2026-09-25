@@ -1,4 +1,4 @@
-import { MEMORY_MODEL } from "@/lib/chat-model";
+import { modelFor } from "@/lib/chat-model-server";
 import { runCodexRecorded } from "@/lib/codex-run";
 import { db } from "@/lib/db";
 import { AUTO_REQUEST_PREFIX } from "@/lib/auto-request";
@@ -79,7 +79,7 @@ export async function extractCandidatesIfDue(userId: string, conversationId: str
       conversationId,
       feature: "memory",
       label: "継続記憶の候補の抽出",
-      model: MEMORY_MODEL,
+      model: await modelFor(userId, "memory"),
       prompt: buildExtractPrompt(sources),
       timeoutMs: CODEX_TIMEOUT_MS,
     });
@@ -123,7 +123,7 @@ export async function checkNotionStates(
     userId,
     feature: "memory",
     label: "継続記憶のNotion照合",
-    model: MEMORY_MODEL,
+    model: await modelFor(userId, "memory"),
     prompt: buildNotionCheckPrompt(targets),
     timeoutMs: CODEX_TIMEOUT_MS,
     mcpServers,
@@ -206,7 +206,7 @@ export async function recordWishToNotion(userId: string, id: string): Promise<No
     userId,
     feature: "memory",
     label: "継続記憶のNotionへの記録",
-    model: MEMORY_MODEL,
+    model: await modelFor(userId, "memory"),
     prompt: [
       "利用者のNotionの「いつかやりたいこと」（行きたい場所・やりたいことのリスト）に、次の1件を追加してください。",
       "同じ内容の項目がすでにあれば追加せず、その項目のURLだけを返してください。追加するのは1件だけで、他のページは変更しないでください。",

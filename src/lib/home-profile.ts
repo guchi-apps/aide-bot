@@ -1,4 +1,4 @@
-import { HOME_PROFILE_MODEL } from "@/lib/chat-model";
+import { modelFor } from "@/lib/chat-model-server";
 import { runCodexRecorded } from "@/lib/codex-run";
 import { db } from "@/lib/db";
 import { listConnectedServers, toCodexMcpServers } from "@/lib/mcp/connections";
@@ -156,7 +156,7 @@ export async function refreshHomeProfile(userId: string, now = new Date()): Prom
     userId,
     feature: "home_profile",
     label: "自宅の情報の取り込み",
-    model: HOME_PROFILE_MODEL,
+    model: await modelFor(userId, "home_profile"),
     prompt: buildHomeProfilePrompt(),
     timeoutMs: CODEX_TIMEOUT_MS,
     mcpServers,

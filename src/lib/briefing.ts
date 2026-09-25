@@ -3,7 +3,7 @@ import {
   MORNING_BRIEFING_REQUEST,
   briefingSystemPrompt,
 } from "@/lib/anthropic";
-import { BRIEFING_MODEL } from "@/lib/chat-model";
+import { modelFor } from "@/lib/chat-model-server";
 import { runCodexRecorded } from "@/lib/codex-run";
 import { jstDayKey } from "@/lib/day-key";
 import { appendSecretaryExchange, primaryConversation } from "@/lib/day-log";
@@ -130,7 +130,7 @@ async function generateBriefing(userId: string): Promise<string> {
     userId,
     feature: "briefing",
     label: "朝の見通しの生成",
-    model: BRIEFING_MODEL,
+    model: await modelFor(userId, "briefing"),
     prompt: buildBriefingPrompt(servers.map((server) => server.label)),
     timeoutMs: CODEX_TIMEOUT_MS,
     mcpServers,

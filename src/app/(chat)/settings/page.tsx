@@ -3,14 +3,12 @@ import { redirect } from "next/navigation";
 import { BriefingTimePicker } from "@/components/settings/briefing-time-picker";
 import { ConnectionList } from "@/components/settings/connection-list";
 import { HomeProfileCard } from "@/components/settings/home-profile-card";
-import { ModelPicker } from "@/components/settings/model-picker";
 import { ProactiveSettingsCard } from "@/components/settings/proactive-settings";
 import { NotificationSettings } from "@/components/settings/notification-settings";
 import { ScheduledPushSettingsCard } from "@/components/settings/scheduled-push-settings";
 import { WakeTriggerCard } from "@/components/settings/wake-trigger-card";
 import { WriteToolPicker } from "@/components/settings/write-tool-picker";
 import { getCurrentUser } from "@/lib/auth-user";
-import { selectedChatModels } from "@/lib/chat-model-server";
 import { listConnections } from "@/lib/mcp/connections";
 import { writeToolsFor } from "@/lib/mcp/presets";
 import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
@@ -22,7 +20,7 @@ import { db } from "@/lib/db";
 
 export const metadata = { title: "設定" };
 
-// 接続の状態は認可から戻った直後に変わる。選んでいるモデルもCookie次第なのでキャッシュさせない。
+// 接続の状態は認可から戻った直後に変わるのでキャッシュさせない。
 export const dynamic = "force-dynamic";
 
 /**
@@ -52,10 +50,9 @@ export default async function SettingsPage({ searchParams }: Props) {
     redirect("/login");
   }
 
-  const [connections, query, models, writeToolPolicy, deviceCount, scheduledPushes] = await Promise.all([
+  const [connections, query, writeToolPolicy, deviceCount, scheduledPushes] = await Promise.all([
     listConnections(user.id),
     searchParams,
-    selectedChatModels(),
     selectedWriteToolPolicy(),
     countSubscriptions(user.id),
     db.scheduledPush.findMany({
@@ -83,7 +80,7 @@ export default async function SettingsPage({ searchParams }: Props) {
         <header>
           <h2 className="text-lg font-medium">設定</h2>
           <p className="mt-2 text-sm leading-relaxed text-muted">
-            秘書からのお知らせ、返答に使うモデル、自宅の情報、外部サービスとの接続、書き込みの道具の
+            秘書からのお知らせ、自宅の情報、外部サービスとの接続、書き込みの道具の
             扱いをここで変えられます。
           </p>
         </header>
@@ -115,8 +112,6 @@ export default async function SettingsPage({ searchParams }: Props) {
           issuedAtLabel={user.wakeTokenHash ? jstDateTimeLabel(user.wakeTokenCreatedAt) : null}
           usedAtLabel={user.wakeTokenHash ? jstDateTimeLabel(user.wakeTokenUsedAt) : null}
         />
-
-        <ModelPicker initial={models} />
 
         <HomeProfileCard
           initialProfile={user.homeProfile}

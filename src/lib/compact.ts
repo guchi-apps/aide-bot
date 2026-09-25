@@ -1,5 +1,5 @@
 import { compactSystemPrompt } from "@/lib/anthropic";
-import { COMPACT_MODEL } from "@/lib/chat-model";
+import { modelFor } from "@/lib/chat-model-server";
 import { runCodexRecorded } from "@/lib/codex-run";
 import { selectFoldable } from "@/lib/compact-budget";
 import { contextMessageWhere } from "@/lib/context-break";
@@ -130,7 +130,7 @@ export async function compactIfNeeded(conversationId: string, userId: string): P
       conversationId,
       feature: "compact",
       label: "記録の要約",
-      model: COMPACT_MODEL,
+      model: await modelFor(userId, "compact"),
       prompt: buildPrompt(summary, folded.text),
       timeoutMs: CODEX_TIMEOUT_MS,
     });

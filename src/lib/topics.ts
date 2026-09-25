@@ -7,12 +7,8 @@ import { runCodexRecorded } from "@/lib/codex-run";
 import { db } from "@/lib/db";
 import { safeNoticeUrl } from "@/lib/notice-url";
 import { SECRETARY_INTRO, SECRETARY_VOICE_RULES } from "@/lib/persona";
-import {
-  TOPIC_CATEGORIES,
-  isTopicCategoryId,
-  parseTopicCategories,
-  type TopicCategoryId,
-} from "@/lib/topic-categories";
+import { listTopicCategories } from "@/lib/topic-category-store";
+import type { TopicCategory } from "@/lib/topic-categories";
 
 /**
  * 話題（#144）。**サーバー専用。**
@@ -107,8 +103,8 @@ export type TopicRow = {
 };
 
 export type TopicBoard = {
-  /** いま仕入れる設定になっている種類。 */
-  categories: TopicCategoryId[];
+  /** 利用者が持っている種類（無効のものも含む。並び順どおり）。 */
+  categories: TopicCategory[];
   /** 最後に仕入れた時刻。まだ一度も無ければnull。 */
   lastFetchedAt: Date | null;
   /** 期間内の話題（新しい順）。 */
@@ -210,8 +206,8 @@ export async function topicsForChat(userId: string, now = new Date()): Promise<s
 
 /** 「話題」ページに出す一式。 */
 export async function topicBoard(userId: string, now = new Date()): Promise<TopicBoard> {
-  const [user, topics, latest] = await Promise.all([
-    db.user.findUnique({ where: { id: userId }, select: { topicCategories: true } }),
+  const [categories, topics, latest] = await Promise.all([
+    listTopicCategories(userId),
     recentTopics(userId, now, 50),
     db.topic.findFirst({
       where: { userId },
@@ -221,7 +217,7 @@ export async function topicBoard(userId: string, now = new Date()): Promise<Topi
   ]);
 
   return {
-    categories: parseTopicCategories(user?.topicCategories ?? ""),
+    categories,
     lastFetchedAt: latest?.fetchedAt ?? null,
     topics: topics.map(toRow),
     bubbleLimit: TOPIC_BUBBLE_LIMIT,
@@ -244,8 +240,7 @@ export async function recentTopicCount(userId: string, now = new Date()): Promis
  * 5つの項目があり、行の形では区切りが本文に紛れる。コードフェンスで包まれたり前置きが付いたり
  * する揺れは `parseTopics()` 側で吸収する。
  */
-function buildTopicPrompt(categories: TopicCategoryId[], now: Date): string {
-  const chosen = TOPIC_CATEGORIES.filter((category) => categories.includes(category.id));
+function buildTopicPrompt(chosen: TopicCategory[], now: Date): string {
   const total = chosen.length * TOPICS_PER_CATEGORY;
 
   const rules = [
@@ -260,8 +255,8 @@ function buildTopicPrompt(categories: TopicCategoryId[], now: Date): string {
   ];
 
   const shape =
-    '[{"category": "general|life|tech", "title": "見出し（40文字以内）", "summary": "要点（80文字以内）", ' +
-    '"lead": "秘書の一言（50文字以内）", "url": "https://...", "source": "媒体名", "publishedOn": "YYYY-MM-DD"}]';
+    `[{"category": "${chosen.map((category) => category.id).join("|")}", "title": "見出し（40文字以内）", "summary": "要点（80文字以内）", ' +
+    '"lead": "秘書の一言（50文字以内）", "url": "https://...", "source": "媒体名", "publishedOn": "YYYY-MM-DD"}]`;
 
   return [
     `${SECRETARY_INTRO}利用者が雑談の話題にできそうな最近のニュースを、ウェブ検索で集めてください。`,
@@ -277,7 +272,7 @@ function buildTopicPrompt(categories: TopicCategoryId[], now: Date): string {
 }
 
 type ParsedTopic = {
-  category: TopicCategoryId;
+  category: string;
   title: string;
   summary: string;
   lead: string;
@@ -300,7 +295,7 @@ function clip(value: unknown, max: number): string {
  *   アプリ内のパス（`/` 始まり）は記事ではない
  * - `category` は今回仕入れる種類に含まれるものだけ。外した種類の記事が混じって来ても入れない
  */
-function parseTopics(answer: string, categories: TopicCategoryId[]): ParsedTopic[] {
+function parseTopics(answer: string, categories: TopicCategory[]): ParsedTopic[] {
   const start = answer.indexOf("[");
   const end = answer.lastIndexOf("]");
   if (start < 0 || end <= start) return [];
@@ -321,7 +316,7 @@ function parseTopics(answer: string, categories: TopicCategoryId[]): ParsedTopic
     const record = item as Record<string, unknown>;
 
     const category = record.category;
-    if (!isTopicCategoryId(category) || !categories.includes(category)) continue;
+    if (typeof category !== "string" || !categories.some((item) => item.id === category)) continue;
 
     const url = safeNoticeUrl(typeof record.url === "string" ? record.url : null);
     if (!url || url.startsWith("/") || seen.has(url)) continue;
@@ -353,7 +348,7 @@ function parseTopics(answer: string, categories: TopicCategoryId[]): ParsedTopic
  * 付かない）。上限に掛かった回は `usage` がnullで行が作られない——`turn.completed` が届いて
  * いないので、そこまでの消費量が分からない。
  */
-async function fetchTopics(userId: string, categories: TopicCategoryId[], now: Date): Promise<number> {
+async function fetchTopics(userId: string, categories: TopicCategory[], now: Date): Promise<number> {
   const result = await runCodexRecorded({
     userId,
     feature: "topic",
@@ -424,10 +419,9 @@ export function refreshTopicsIfStale(userId: string, now = new Date()): Promise<
   };
 
   const run = async () => {
-    let categories: ReturnType<typeof parseTopicCategories>;
+    let categories: TopicCategory[];
     try {
-      const user = await db.user.findUnique({ where: { id: userId }, select: { topicCategories: true } });
-      categories = parseTopicCategories(user?.topicCategories ?? "");
+      categories = (await listTopicCategories(userId)).filter((category) => category.enabled);
       if (categories.length === 0) {
         release();
         return;
@@ -463,4 +457,56 @@ export function refreshTopicsIfStale(userId: string, now = new Date()): Promise<
     // 種類の読み出しなど、仕入れの前に落ちた回。次の問い合わせでやり直す。
     console.error("[aide-bot] 話題の仕入れの前処理に失敗した", error);
   });
+}
+
+/** 試し検索の間隔（利用者ごと）。1回が約1種類ぶんの検索で、押されるたびに走らせない。 */
+const PREVIEW_INTERVAL_MS = 60 * 1000;
+const previewAttempts = new Map<string, number>();
+
+export type TopicPreview =
+  | { ok: true; articles: { title: string; summary: string; url: string; sourceName: string; publishedOn: string }[] }
+  | { ok: false; error: string; status: 429 | 502 };
+
+/**
+ * 種類の説明文でどんな記事が集まるかを試す（#345）。**DBへは何も書かない**——記事も吹き出しへの
+ * 反映もしない。仕入れと同じプロンプト・同じ読み取りを1種類だけで通す。使った量は `ApiUsage`
+ * へ残る（`fetchTopics()` と同じ `runCodexRecorded()`）。
+ */
+export async function previewTopics(
+  userId: string,
+  draft: { label: string; scope: string },
+  now = new Date(),
+): Promise<TopicPreview> {
+  const last = previewAttempts.get(userId);
+  if (last !== undefined && now.getTime() - last < PREVIEW_INTERVAL_MS) {
+    return { ok: false, status: 429, error: "試し検索は1分に1回までです。少し待ってからもう一度お試しください。" };
+  }
+  previewAttempts.set(userId, now.getTime());
+
+  const category: TopicCategory = { id: "preview", label: draft.label, short: draft.label, scope: draft.scope, enabled: true };
+  try {
+    const result = await runCodexRecorded({
+      userId,
+      feature: "topic",
+      label: "話題の試し検索",
+      model: TOPIC_MODEL,
+      prompt: buildTopicPrompt([category], now),
+      timeoutMs: CODEX_TIMEOUT_MS,
+      search: true,
+    });
+    const answer = result.messages.filter((message) => message.trim() !== "").at(-1) ?? "";
+    const articles = parseTopics(answer, [category]).map(({ title, summary, url, sourceName, publishedOn }) => ({
+      title,
+      summary,
+      url,
+      sourceName,
+      publishedOn,
+    }));
+    return { ok: true, articles };
+  } catch (error) {
+    console.error("[aide-bot] 話題の試し検索に失敗した", error);
+    // 失敗した回は間隔を戻す（すぐやり直せるように）。
+    previewAttempts.delete(userId);
+    return { ok: false, status: 502, error: "検索に失敗しました。時間をおいてもう一度お試しください。" };
+  }
 }

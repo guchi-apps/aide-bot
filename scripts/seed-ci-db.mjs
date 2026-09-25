@@ -855,6 +855,26 @@ async function main() {
 
   console.log(`[aide-bot] 話題を${TOPIC_SEEDS.length}件投入しました`);
 
+  // 話題の種類（#345）。初期の3種類（`src/lib/topic-categories.ts` の `DEFAULT_TOPIC_CATEGORIES` と
+  // 同じ値）に加え、自作の種類と、仕入れを外している種類を1件ずつ入れる（管理画面の各状態を
+  // 確かめるため）。`topicCategoriesReady` を立てておかないと、初回の読み出しが3種類を重ねて入れる。
+  const TOPIC_CATEGORY_SEEDS = [
+    { key: "general", label: "世の中のこと", short: "世の中", scope: "政治・経済・社会の主な出来事（日本のもの、および日本に影響する海外のもの）", enabled: true },
+    { key: "life", label: "暮らしに関わること", short: "暮らし", scope: "値上げ・制度や手続きの変更・災害や気象・交通など、日本での暮らしに直接関わること", enabled: true },
+    { key: "tech", label: "技術とAI", short: "技術", scope: "ソフトウェア開発・AI・IT業界の動向（新しいリリース・大きな変更・障害など）", enabled: true },
+    { key: "c_devlocal01", label: "地元のできごと", short: "地元", scope: "東京都内の鉄道の運行情報や、新しい商業施設の開業", enabled: true },
+    { key: "c_devpaused01", label: "スポーツ（お休み中）", short: "スポーツ", scope: "プロ野球とサッカー日本代表の試合結果", enabled: false },
+  ];
+  for (const [index, seed] of TOPIC_CATEGORY_SEEDS.entries()) {
+    await db.topicCategory.upsert({
+      where: { userId_key: { userId: user.id, key: seed.key } },
+      create: { userId: user.id, sortOrder: index, ...seed },
+      update: { sortOrder: index, ...seed },
+    });
+  }
+  await db.user.update({ where: { id: user.id }, data: { topicCategoriesReady: true } });
+  console.log(`[aide-bot] 話題の種類を${TOPIC_CATEGORY_SEEDS.length}件投入しました`);
+
   // 継続記憶（#323）。候補・確定・Notionで達成済み・忘れたの各状態を入れておく
   // （空だと、状態ごとの出し分けを画面から確かめられない）。dedupeKeyは本番の正規化ハッシュと
   // 一致しなくてよい（一意であればよいダミー）。

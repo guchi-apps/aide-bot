@@ -34,7 +34,12 @@ model User {
   // 話題（#144）として仕入れるニュースの種類。`general` / `life` / `tech` をカンマで繋いだ文字列で、
   // 正は `src/lib/topic-categories.ts`。空文字なら仕入れない。Cookieにしないのは、仕入れが
   // 利用者の画面とは別のタイミング（応答後のバックグラウンド）で走り、そこで読む必要があるため。
+  // **#345から `TopicCategory`（利用者ごとの行）へ移した。この列は移行元としてだけ読む**（初回に
+  // 3種類のオン・オフを引き継ぐ。`topicCategoriesReady` が立った後は読まない）。
   topicCategories String @default("general,life,tech") @db.VarChar(120)
+  /// `TopicCategory` へ初期データを入れたか（#345）。立てるのは `updateMany` のCASで、二重に入れない。
+  topicCategoriesReady Boolean @default(false)
+  topicCategoryList    TopicCategory[]
 
   /// Notionから取り込んだ「自宅・暮らしの前提」の覚え書き（#167）。nullなら一度も取り込めていない。
   /// 相談のプロンプトへ毎回そのまま載る（`src/lib/home-profile.ts`）。道具として引かせないのは、
@@ -560,4 +565,28 @@ model Memory {
 
   @@unique([userId, dedupeKey])
   @@index([userId, status, updatedAt])
+}
+
+// --- 話題の種類（#345） ---
+// 仕入れるニュースの種類。利用者が「話題」ページで追加・編集・削除する。`Topic.category` には
+// `key` を入れる（外部キーにしない——削除しても仕入れ済みの記事は残し、チップは「その他」になる）。
+// 初期の3種類（`general` / `life` / `tech`）は初回の読み出しで投入する（`topic-category-store.ts`）。
+model TopicCategory {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// `Topic.category` に入る識別子。作ったあと変えない。
+  key       String   @db.VarChar(20)
+  label     String   @db.VarChar(30)
+  /// チップに出す短い名前。
+  short     String   @db.VarChar(12)
+  /// 仕入れのプロンプトへそのまま入る「何を集めるか」。
+  scope     String   @db.VarChar(200)
+  enabled   Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, key])
+  @@index([userId, sortOrder])
 }

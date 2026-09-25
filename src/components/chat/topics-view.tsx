@@ -1,4 +1,4 @@
-import { topicCategoryShort } from "@/lib/topic-categories";
+import { topicCategoryShort, type TopicCategory } from "@/lib/topic-categories";
 import type { TopicBoard, TopicRow } from "@/lib/topics";
 import { cn } from "@/lib/utils";
 
@@ -17,7 +17,9 @@ type Props = {
  * 並べる順は新しい順。上段に「仕入れる種類」を置くのは、変えた効果がすぐ下の一覧で見えるため。
  */
 export function TopicsView({ board, now }: Props) {
-  const { categories, lastFetchedAt, topics, bubbleLimit, lifetimeHours } = board;
+  const { categories: allCategories, lastFetchedAt, topics, bubbleLimit, lifetimeHours } = board;
+
+  const categories = allCategories.filter((category) => category.enabled);
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
@@ -25,9 +27,9 @@ export function TopicsView({ board, now }: Props) {
         <section className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
           <div className="flex items-baseline justify-between gap-3">
             <h2 className="text-[0.8125rem] font-bold">仕入れる種類</h2>
-            <span className="text-[0.6875rem] text-muted">選んだ種類だけを、アプリを開いたときにウェブで調べます</span>
+            <span className="text-[0.6875rem] text-muted">チェックした種類だけを、アプリを開いたときにウェブで調べます</span>
           </div>
-          <TopicCategoryPicker initial={categories} />
+          <TopicCategoryPicker initial={allCategories} />
         </section>
 
         <div className="grid grid-cols-3 gap-2.5 md:gap-3">
@@ -49,7 +51,7 @@ export function TopicsView({ board, now }: Props) {
         {topics.length === 0 ? (
           <p className="rounded-xl border border-border bg-surface px-4 py-3 text-xs leading-relaxed text-muted">
             {categories.length === 0
-              ? "仕入れを止めています。上の種類を1つ以上選ぶと、次に「話す」画面を開いたときに仕入れます。"
+              ? "仕入れを止めています。上の種類を1つ以上チェックすると、次に「話す」画面を開いたときに仕入れます。"
               : "まだ話題がありません。「話す」画面を開くと仕入れが始まり、30秒ほどで並びます（画面は読み込み直してください）。"}
           </p>
         ) : (
@@ -60,7 +62,7 @@ export function TopicsView({ board, now }: Props) {
             </div>
             <div className="flex flex-col">
               {topics.map((topic) => (
-                <TopicArticle key={topic.id} topic={topic} />
+                <TopicArticle key={topic.id} topic={topic} categories={allCategories} />
               ))}
             </div>
           </section>
@@ -116,14 +118,14 @@ function Stat({
  * 見出しと「開く」を1つのリンクにまとめる（`/notices` の `Title` と同じ理由）。出典は外部の
  * 記事なので常に新しいタブで開く。
  */
-function TopicArticle({ topic }: { topic: TopicRow }) {
+function TopicArticle({ topic, categories }: { topic: TopicRow; categories: TopicCategory[] }) {
   const meta = [topic.sourceName, topic.publishedOn].filter((part) => part !== "");
 
   return (
     <article className="flex flex-col gap-1 border-b border-border py-2.5 first:pt-0 last:border-b-0 last:pb-0">
       <div className="flex flex-wrap items-center gap-2">
         <span className="shrink-0 rounded-full bg-topic-surface px-2 py-0.5 text-[0.625rem] font-bold tracking-wider text-topic">
-          {topicCategoryShort(topic.category)}
+          {topicCategoryShort(categories, topic.category)}
         </span>
         {topic.url ? (
           <a

@@ -1,23 +1,22 @@
-import { cookies } from "next/headers";
-
-import {
-  CHAT_MODEL_COOKIE,
-  normalizeChatModel,
-  type ChatModelId,
-  type ReplyStyle,
-} from "@/lib/chat-model";
+import { db } from "@/lib/db";
+import { resolveModelSettings, type ChatModelId, type ModelUse } from "@/lib/chat-model";
 
 /**
- * この端末が選んでいるモデルをCookieから読む（#71）。
+ * 利用者が用途ごとに選んだモデルを読む（#349）。
  *
- * **サーバー専用。** `next/headers` はクライアント側のビルドに入れられないため、
- * モデルの定義（`src/lib/chat-model.ts`）とは別のファイルへ分けてある。
+ * **サーバー専用。** 保存先は `User.modelSettings`（Cookieにしないのは、cronや返答後の後始末など
+ * Cookieの届かない経路でも同じ値を読むため）。読めなかった回は既定へ落として生成を止めない。
  */
-export async function selectedChatModels(): Promise<Record<ReplyStyle, ChatModelId>> {
-  const store = await cookies();
+export async function modelSettingsFor(userId: string): Promise<Record<ModelUse, ChatModelId>> {
+  try {
+    const user = await db.user.findUnique({ where: { id: userId }, select: { modelSettings: true } });
+    return resolveModelSettings(user?.modelSettings);
+  } catch (error) {
+    console.error("モデル設定を読めなかったので既定を使います", error);
+    return resolveModelSettings(null);
+  }
+}
 
-  return {
-    text: normalizeChatModel(store.get(CHAT_MODEL_COOKIE.text)?.value),
-    voice: normalizeChatModel(store.get(CHAT_MODEL_COOKIE.voice)?.value),
-  };
+export async function modelFor(userId: string, use: ModelUse): Promise<ChatModelId> {
+  return (await modelSettingsFor(userId))[use];
 }

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { Topic } from "@prisma/client";
 
-import { TOPIC_MODEL } from "@/lib/chat-model";
+import { modelFor } from "@/lib/chat-model-server";
 import { runCodexRecorded } from "@/lib/codex-run";
 import { db } from "@/lib/db";
 import { safeNoticeUrl } from "@/lib/notice-url";
@@ -354,7 +354,7 @@ async function fetchTopics(userId: string, categories: TopicCategory[], now: Dat
     userId,
     feature: "topic",
     label: "話題の仕入れ",
-    model: TOPIC_MODEL,
+    model: await modelFor(userId, "topic"),
     prompt: buildTopicPrompt(categories, now),
     timeoutMs: CODEX_TIMEOUT_MS,
     search: true,
@@ -496,7 +496,7 @@ export async function previewTopics(
       userId,
       feature: "topic",
       label: "話題の試し検索",
-      model: TOPIC_MODEL,
+      model: await modelFor(userId, "topic"),
       prompt: buildTopicPrompt([category], now),
       timeoutMs: CODEX_TIMEOUT_MS,
       search: true,

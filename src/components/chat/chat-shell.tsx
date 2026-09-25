@@ -63,6 +63,7 @@ export function ChatShell({
   const isNotices = pathname === "/notices";
   const isTopics = pathname === "/topics";
   const isMemory = pathname === "/memory";
+  const isModels = pathname === "/models";
   // 開いている日の見出し。一覧に無い日（記録を消した直後など）でも空にしないよう、
   // 見つからなければ日付そのものを出す。
   const activeDayHeading = activeDate
@@ -80,6 +81,8 @@ export function ChatShell({
           ? "話題"
           : isMemory
             ? "記憶"
+            : isModels
+            ? "モデル"
             : activeDayHeading
             ? `${activeDayHeading}の記録`
             : "今日の記録";
@@ -110,6 +113,7 @@ export function ChatShell({
           isNoticesActive={isNotices}
           isTopicsActive={isTopics}
           isMemoryActive={isMemory}
+          isModelsActive={isModels}
           pendingNoticeCount={pendingNoticeCount}
           topicCount={topicCount}
           monthlyUsageLabel={monthlyUsageLabel}
@@ -144,6 +148,7 @@ export function ChatShell({
               isNoticesActive={isNotices}
               isTopicsActive={isTopics}
           isMemoryActive={isMemory}
+              isModelsActive={isModels}
               pendingNoticeCount={pendingNoticeCount}
               topicCount={topicCount}
               monthlyUsageLabel={monthlyUsageLabel}

@@ -7,6 +7,7 @@ import { NOTICE_DISPLAY_TTL_MS } from "@/lib/notice-conditions";
 import { safeNoticeUrl } from "@/lib/notice-url";
 import { URGENT_NOTICE_KIND } from "@/lib/notices";
 import { quietEnough, topicNudgeDue, withSourceLink } from "@/lib/nudge-choice";
+import { groupDuplicateTopics, unspokenGroups } from "@/lib/topic-dedupe";
 import { TOPIC_LIFETIME_MS } from "@/lib/topics";
 
 /**
@@ -257,16 +258,21 @@ export async function nudgeFromTopic(userId: string, now = new Date()): Promise<
       return null;
     }
 
-    const topic = await db.topic.findFirst({
-      where: { userId, spokenAt: null, fetchedAt: { gt: new Date(now.getTime() - TOPIC_LIFETIME_MS) } },
+    // 期間内の全件（振り済みも含む）を同じ出来事ごとにまとめ、まだ振っていないグループの先頭を選ぶ。
+    // 振り済みを先に除くと、定時で代表を送った出来事の別媒体の記事を後から振ってしまう（#362）。
+    const recent = await db.topic.findMany({
+      where: { userId, fetchedAt: { gt: new Date(now.getTime() - TOPIC_LIFETIME_MS) } },
       // 新しい順。同じ回に仕入れたものは `fetchedAt` が同じなので、第2のキーで並びを固定する。
       orderBy: [{ fetchedAt: "desc" }, { id: "asc" }],
-      select: { id: true, lead: true, title: true, sourceName: true, url: true },
+      take: 60,
+      select: { id: true, lead: true, title: true, summary: true, sourceName: true, url: true, spokenAt: true },
     });
-    if (!topic) {
+    const group = unspokenGroups(groupDuplicateTopics(recent))[0];
+    if (!group) {
       release();
       return null;
     }
+    const topic = group.primary;
 
     const nudge = await appendNudge({
       conversationId: conversation.id,
@@ -276,9 +282,14 @@ export async function nudgeFromTopic(userId: string, now = new Date()): Promise<
     });
 
     // 振った印。これが入っている話題はもう選ばれない（吹き出しの候補からは外さない）。
+    // まとめた別媒体の記事も同じ話なので、グループ全体に付ける（#362）。
     // **声かけを積めた回だけ付ける**——先に付けると、重複で積まなかった回にも印だけが残る。
-    if (nudge) await db.topic.update({ where: { id: topic.id }, data: { spokenAt: now } });
-    else release();
+    if (nudge) {
+      await db.topic.updateMany({
+        where: { id: { in: [topic.id, ...group.others.map((other) => other.id)] } },
+        data: { spokenAt: now },
+      });
+    } else release();
 
     return nudge;
   } catch (error) {

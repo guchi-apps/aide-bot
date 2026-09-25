@@ -339,14 +339,49 @@ type CodexEvent = {
  *   「いま調べています」を画面に出せるのはこの経路だけ
  * - `features.apps=false` は接続の有無によらず常に付ける（上のモジュールコメント）
  */
-export async function runCodexExec(params: {
+type CodexExecParams = {
   model: string;
   prompt: string;
   signal: AbortSignal;
   search?: boolean;
   mcpServers?: CodexMcpServer[];
   onToolCall?: (event: CodexToolCallEvent) => void;
-}): Promise<CodexResult> {
+};
+
+/**
+ * ChatGPTアカウントが対応していないモデルを指定したときのエラーか（#358）。
+ * 例: `The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account.`
+ */
+export function isUnsupportedModelError(message: string | null): boolean {
+  return message !== null && /model is not supported/i.test(message);
+}
+
+/**
+ * 対応していないときに代わりに試すモデル（#358）。GPT-6系がまだ使えないアカウントでも
+ * 生成が止まらないよう、役割の近い GPT-5.6系へ1度だけ落とす。`codex exec` のモデル名は
+ * 利用者のアカウントの契約で使える範囲が変わり、`~/.codex/models_cache.json` に載っていても
+ * 実行してみるまで分からない。
+ */
+const UNSUPPORTED_MODEL_FALLBACKS: Record<string, string> = {
+  "gpt-6-astra": "gpt-5.6-sol",
+  "gpt-6-sol": "gpt-5.6-terra",
+  "gpt-6-luna": "gpt-5.6-luna",
+};
+
+export async function runCodexExec(params: CodexExecParams): Promise<CodexResult> {
+  const result = await runCodexExecOnce(params);
+  const fallback = UNSUPPORTED_MODEL_FALLBACKS[params.model];
+
+  // 起動の時点で断られた回だけやり直す（本文も道具の呼び出しも始まっていない）。
+  if (!fallback || !isUnsupportedModelError(result.errorMessage) || result.messages.length > 0) {
+    return result;
+  }
+
+  console.warn(`[aide-bot] ${params.model} は対応していないため ${fallback} でやり直す`);
+  return runCodexExecOnce({ ...params, model: fallback });
+}
+
+async function runCodexExecOnce(params: CodexExecParams): Promise<CodexResult> {
   const { model, prompt, signal, search = false, mcpServers = [], onToolCall } = params;
 
   // 呼ばれる前にすでに中断されていたら、起動しない（#259）。`abort` イベントは中断の瞬間に

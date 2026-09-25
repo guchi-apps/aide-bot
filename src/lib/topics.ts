@@ -256,8 +256,8 @@ function buildTopicPrompt(chosen: TopicCategory[], now: Date): string {
   ];
 
   const shape =
-    `[{"category": "${chosen.map((category) => category.id).join("|")}", "title": "見出し（40文字以内）", "summary": "要点（80文字以内）", ' +
-    '"lead": "秘書の一言（50文字以内）", "url": "https://...", "source": "媒体名", "publishedOn": "YYYY-MM-DD"}]`;
+    `[{"category": "${chosen.map((category) => category.id).join("|")}", "title": "見出し（40文字以内）", "summary": "要点（80文字以内）", ` +
+    '"lead": "秘書の一言（50文字以内）", "url": "https://...", "source": "媒体名", "publishedOn": "YYYY-MM-DD"}]';
 
   return [
     `${SECRETARY_INTRO}利用者が雑談の話題にできそうな最近のニュースを、ウェブ検索で集めてください。`,

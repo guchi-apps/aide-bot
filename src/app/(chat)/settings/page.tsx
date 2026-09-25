@@ -3,13 +3,12 @@ import { redirect } from "next/navigation";
 import { BriefingTimePicker } from "@/components/settings/briefing-time-picker";
 import { ConnectionList } from "@/components/settings/connection-list";
 import { HomeProfileCard } from "@/components/settings/home-profile-card";
-import { ModelPicker } from "@/components/settings/model-picker";
 import { ProactiveSettingsCard } from "@/components/settings/proactive-settings";
 import { NotificationSettings } from "@/components/settings/notification-settings";
+import { ScheduledPushSettingsCard } from "@/components/settings/scheduled-push-settings";
 import { WakeTriggerCard } from "@/components/settings/wake-trigger-card";
 import { WriteToolPicker } from "@/components/settings/write-tool-picker";
 import { getCurrentUser } from "@/lib/auth-user";
-import { selectedChatModels } from "@/lib/chat-model-server";
 import { listConnections } from "@/lib/mcp/connections";
 import { writeToolsFor } from "@/lib/mcp/presets";
 import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
@@ -17,10 +16,11 @@ import { hasNotionConnection } from "@/lib/home-profile";
 import { pushPublicKey } from "@/lib/push/config";
 import { normalizeFrequency } from "@/lib/proactive-labels";
 import { countSubscriptions } from "@/lib/push/subscriptions";
+import { db } from "@/lib/db";
 
 export const metadata = { title: "設定" };
 
-// 接続の状態は認可から戻った直後に変わる。選んでいるモデルもCookie次第なのでキャッシュさせない。
+// 接続の状態は認可から戻った直後に変わるのでキャッシュさせない。
 export const dynamic = "force-dynamic";
 
 /**
@@ -50,12 +50,16 @@ export default async function SettingsPage({ searchParams }: Props) {
     redirect("/login");
   }
 
-  const [connections, query, models, writeToolPolicy, deviceCount] = await Promise.all([
+  const [connections, query, writeToolPolicy, deviceCount, scheduledPushes] = await Promise.all([
     listConnections(user.id),
     searchParams,
-    selectedChatModels(),
     selectedWriteToolPolicy(),
     countSubscriptions(user.id),
+    db.scheduledPush.findMany({
+      where: { userId: user.id },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { id: true, daysMask: true, hour: true, minute: true, category: true, enabled: true },
+    }),
   ]);
 
   // 繋いでいる接続すべてを並べる（#78）。いま相談へ渡っているのは「使用中」のものだけだが、
@@ -76,7 +80,7 @@ export default async function SettingsPage({ searchParams }: Props) {
         <header>
           <h2 className="text-lg font-medium">設定</h2>
           <p className="mt-2 text-sm leading-relaxed text-muted">
-            秘書からのお知らせ、返答に使うモデル、自宅の情報、外部サービスとの接続、書き込みの道具の
+            秘書からのお知らせ、自宅の情報、外部サービスとの接続、書き込みの道具の
             扱いをここで変えられます。
           </p>
         </header>
@@ -99,6 +103,8 @@ export default async function SettingsPage({ searchParams }: Props) {
           }}
         />
 
+        <ScheduledPushSettingsCard initial={scheduledPushes} hasDevice={deviceCount > 0} />
+
         <BriefingTimePicker initial={{ hour: user.briefingHour, minute: user.briefingMinute }} />
 
         {/* 起きた合図（#233）。トークンの本体はDBに無いので、発行済みかどうかは時刻で渡す。 */}
@@ -106,8 +112,6 @@ export default async function SettingsPage({ searchParams }: Props) {
           issuedAtLabel={user.wakeTokenHash ? jstDateTimeLabel(user.wakeTokenCreatedAt) : null}
           usedAtLabel={user.wakeTokenHash ? jstDateTimeLabel(user.wakeTokenUsedAt) : null}
         />
-
-        <ModelPicker initial={models} />
 
         <HomeProfileCard
           initialProfile={user.homeProfile}

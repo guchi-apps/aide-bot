@@ -23,7 +23,7 @@ const CI_BYPASS_SUPABASE_USER_ID = "ci-screenshot-bot";
 //
 // 返答のモデルは設定の画面から切り替えられる（#71）。**切り替えた前後が混ざった記録**を
 // 入れておかないと、モデルごとに集計を引き直せているかを画面で確かめられない。
-const USAGE_MODELS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+const USAGE_MODELS = ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"];
 const USAGE_MODEL = USAGE_MODELS[0];
 
 // 従量課金の節（`/usage`）に入るダミー。**#183で朝の見通しもCodexへ移ったので、これは
@@ -636,7 +636,7 @@ async function main() {
         standalone.push({
           userId: user.id,
           feature: "notice",
-          model: "gpt-5.6-luna",
+          model: "gpt-6-luna",
           inputTokens: 3200,
           outputTokens: 40,
           cacheWriteTokens: 0,
@@ -656,7 +656,7 @@ async function main() {
         standalone.push({
           userId: user.id,
           feature: "topic",
-          model: "gpt-5.6-luna",
+          model: "gpt-6-luna",
           inputTokens: 61364,
           outputTokens: 2727,
           cacheWriteTokens: 0,
@@ -670,7 +670,7 @@ async function main() {
         standalone.push({
           userId: user.id,
           feature: "home_profile",
-          model: "gpt-5.6-terra",
+          model: "gpt-6-sol",
           inputTokens: 14200,
           outputTokens: 900,
           cacheWriteTokens: 0,
@@ -874,6 +874,15 @@ async function main() {
       create: { userId: user.id, dedupeKey, ...data },
     });
   }
+
+  // 定時のお知らせ（#344）のダミー。有効・無効の両方を入れておく（画面で状態の出し分けを確かめるため）。
+  await db.scheduledPush.deleteMany({ where: { userId: user.id } });
+  await db.scheduledPush.createMany({
+    data: [
+      { userId: user.id, daysMask: 0b0111110, hour: 7, minute: 30, category: "all", enabled: true },
+      { userId: user.id, daysMask: 0b1000001, hour: 9, minute: 0, category: "tech", enabled: false },
+    ],
+  });
 
   console.log(`[aide-bot] 継続記憶を${MEMORY_SEEDS.length}件投入しました`);
 }

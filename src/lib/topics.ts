@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { Topic } from "@prisma/client";
 
-import { TOPIC_MODEL } from "@/lib/chat-model";
+import { modelFor } from "@/lib/chat-model-server";
 import { runCodexRecorded } from "@/lib/codex-run";
 import { db } from "@/lib/db";
 import { safeNoticeUrl } from "@/lib/notice-url";
@@ -358,7 +358,7 @@ async function fetchTopics(userId: string, categories: TopicCategoryId[], now: D
     userId,
     feature: "topic",
     label: "話題の仕入れ",
-    model: TOPIC_MODEL,
+    model: await modelFor(userId, "topic"),
     prompt: buildTopicPrompt(categories, now),
     timeoutMs: CODEX_TIMEOUT_MS,
     search: true,
@@ -463,4 +463,29 @@ export function refreshTopicsIfStale(userId: string, now = new Date()): Promise<
     // 種類の読み出しなど、仕入れの前に落ちた回。次の問い合わせでやり直す。
     console.error("[aide-bot] 話題の仕入れの前処理に失敗した", error);
   });
+}
+
+/**
+ * 定時のお知らせ（#344）に載せる、まだ振っていない話題。期間内のものを新しい順に。`category` が `all` なら種類を問わない。
+ * **例外は投げる**（呼び出し側が「黙る」と「失敗」を分ける）。
+ */
+export async function topicsForScheduledPush(
+  userId: string,
+  category: string,
+  limit: number,
+  now = new Date(),
+): Promise<TopicRow[]> {
+  const topics = await db.topic.findMany({
+    where: {
+      userId,
+      fetchedAt: { gt: new Date(now.getTime() - TOPIC_LIFETIME_MS) },
+      // すでに振った（声かけ・定時のお知らせ）話題は二度は出さない（`Topic.spokenAt`）。
+      spokenAt: null,
+      ...(category === "all" ? {} : { category }),
+    },
+    orderBy: [{ fetchedAt: "desc" }, { id: "asc" }],
+    take: limit,
+  });
+
+  return topics.map(toRow);
 }

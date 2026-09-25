@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, Bell, Brain, CalendarDays, Newspaper, Settings } from "lucide-react";
+import { BarChart3, Bell, Brain, CalendarDays, Cpu, Newspaper, Settings } from "lucide-react";
 import Link from "next/link";
 
 import { AppLogo } from "@/components/brand/app-icon";
@@ -30,6 +30,7 @@ type Props = {
   isTopicsActive: boolean;
   /** 記憶の画面を開いているか（#323）。 */
   isMemoryActive: boolean;
+  isModelsActive: boolean;
   /** 溜まっている話題の件数（#144）。0のときは数字を出さない。 */
   topicCount: number;
   /** 今月の概算費用（`$1.23` の形）。集計はサーバー側で済ませて文字列で受け取る。 */
@@ -58,6 +59,7 @@ export function ConversationRail({
   pendingNoticeCount,
   isTopicsActive,
   isMemoryActive,
+  isModelsActive,
   topicCount,
   monthlyUsageLabel,
   userLabel,
@@ -188,7 +190,21 @@ export function ConversationRail({
           記憶
         </Link>
 
-        {/* 返答のモデル（#71）と外部サービスとの接続（#46）。相談ではないので、一覧ではなく下部に置く。 */}
+        {/* 用途ごとのAIモデル（#349。旧・設定の「返答のモデル」#71）。設定とは独立した画面。 */}
+        <Link
+          href="/models"
+          onClick={onNavigate}
+          aria-current={isModelsActive ? "page" : undefined}
+          className={cn(
+            "mx-2.5 mt-2 flex items-center gap-1.5 rounded-[9px] px-2.5 py-2 text-[0.8125rem] transition-colors hover:bg-rail-active focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            isModelsActive && "bg-rail-active shadow-[inset_2px_0_0_var(--accent)]",
+          )}
+        >
+          <Cpu className="size-3.5 text-muted" aria-hidden="true" />
+          モデル
+        </Link>
+
+        {/* 外部サービスとの接続（#46）ほか。相談ではないので、一覧ではなく下部に置く。 */}
         <Link
           href="/settings"
           onClick={onNavigate}

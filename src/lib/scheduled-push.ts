@@ -48,6 +48,38 @@ export async function runScheduledPushes(now = new Date()): Promise<ScheduledPus
 
   const outcomes: ScheduledPushOutcome[] = [];
 
+  // 送る前にニュースを仕入れる（#362）。**配信のループの外で、利用者ごとに1回・並行して待つ**——ループの中で
+  // 待つと、仕入れ1回（最大150秒）のあいだ後ろに並ぶ設定（ほかの利用者の分も）の配信が止まる。
+  // 仕入れは利用者単位の錠を共有するので、設定ごとに呼ぶ必要もない。対象は、いま送る時間で、今日の分を
+  // まだ送っていない設定を持つ利用者だけ（送信済みの日に仕入れを走らせない）。失敗・実行中でも止めず、
+  // 溜まっている話題で送る。時刻より前のcronで仕入れる案は、猶予（3時間）内で一番早い起動に合わせられず
+  // 仕入れの古さが読めなくなるため採らなかった（遅れは最大で仕入れ1回ぶん）。
+  const dueSchedules = schedules.filter((schedule) => isDue(schedule, now));
+  const sentKeys = new Set(
+    (
+      await db.notificationLog.findMany({
+        where: {
+          kind: SCHEDULED_PUSH_KIND,
+          dedupeKey: { in: dueSchedules.map((schedule) => scheduledDedupeKey(schedule.id, now)) },
+        },
+        select: { dedupeKey: true },
+      })
+    ).map((log) => log.dedupeKey),
+  );
+  const refreshUserIds = [
+    ...new Set(
+      dueSchedules.filter((schedule) => !sentKeys.has(scheduledDedupeKey(schedule.id, now))).map((schedule) => schedule.userId),
+    ),
+  ];
+  await Promise.all(
+    refreshUserIds.map(async (userId) => {
+      const refreshed = await refreshTopicsForSchedule(userId, now);
+      if (refreshed === "failed" || refreshed === "busy") {
+        console.warn(`[aide-bot] 定時のお知らせの前の仕入れは${refreshed}: 溜まっている話題で送る`);
+      }
+    }),
+  );
+
   for (const schedule of schedules) {
     if (!isDue(schedule, now)) continue;
 
@@ -67,13 +99,6 @@ export async function runScheduledPushes(now = new Date()): Promise<ScheduledPus
       if (existing) {
         outcomes.push({ ...base, status: "skipped", delivered: 0, detail: "送信済み" });
         continue;
-      }
-
-      // 送る前に新しいニュースを仕入れる。仕入れに失敗しても・別の仕入れが走っていても、溜まっている
-      // 話題で送れるので結果では止めない（`busy` は走っている仕入れの終わりを待たず、いまあるぶんで送る）。
-      const refreshed = await refreshTopicsForSchedule(schedule.userId, now);
-      if (refreshed === "failed" || refreshed === "busy") {
-        console.warn(`[aide-bot] 定時のお知らせの前の仕入れは${refreshed}: 溜まっている話題で送る`);
       }
 
       const topics = await topicsForScheduledPush(schedule.userId, schedule.category, SCHEDULED_PUSH_TOPIC_LIMIT, now);

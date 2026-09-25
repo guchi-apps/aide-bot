@@ -73,3 +73,12 @@ export function groupDuplicateTopics<T extends DedupeCandidate>(items: readonly 
 
   return groups.map((entry) => entry.group);
 }
+
+/**
+ * まだ振っていない（`spokenAt` が無い）グループだけを残す。**グループ内に1件でも振った記事が
+ * あれば、その出来事は振り済み**として外す（定時のお知らせ・声かけが、別の媒体の記事で同じ話を
+ * 二度振らないため。#362）。
+ */
+export function unspokenGroups<T extends { spokenAt: Date | null }>(groups: readonly TopicGroup<T>[]): TopicGroup<T>[] {
+  return groups.filter((group) => [group.primary, ...group.others].every((topic) => topic.spokenAt === null));
+}

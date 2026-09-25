@@ -7,7 +7,7 @@ import { runCodexRecorded } from "@/lib/codex-run";
 import { db } from "@/lib/db";
 import { safeNoticeUrl } from "@/lib/notice-url";
 import { SCHEDULED_PUSH_ALL } from "@/lib/scheduled-push-rule";
-import { groupDuplicateTopics, type TopicGroup } from "@/lib/topic-dedupe";
+import { groupDuplicateTopics, unspokenGroups, type TopicGroup } from "@/lib/topic-dedupe";
 import { SECRETARY_INTRO, SECRETARY_VOICE_RULES } from "@/lib/persona";
 import { listTopicCategories } from "@/lib/topic-category-store";
 import type { TopicCategory } from "@/lib/topic-categories";
@@ -20,10 +20,10 @@ import type { TopicCategory } from "@/lib/topic-categories";
  * 材料として添える。**どちらもモデルは呼ばない**——仕入れたときに一度だけ書かせた文を出す
  * だけなので、#93・#101の「黙っている間の費用は0円」はそのまま守られる。
  *
- * ## 仕入れの起点はアプリを開いたとき。cronは足さない
+ * ## 仕入れの起点はアプリを開いたときと、定時のお知らせの直前（#362）。専用のcronは足さない
  *
- * 「利用者が開いていないときに動くのは朝の見通し（#79）だけ」という前提を崩さないため、
- * 仕入れは「話す」画面の問い合わせ（`/api/notices/current`）の応答後にバックグラウンドで走る
+ * 常駐の仕入れは持たない。仕入れは「話す」画面の問い合わせ（`/api/notices/current`）の応答後に
+ * バックグラウンドで走る
  * （`refreshTopicsIfStale()`）。前回から `TOPIC_REFRESH_INTERVAL_MS` あいていなければ何もしない
  * ので、開きっぱなしでも1時間に1回まで。1時間触られなければ問い合わせ自体が止まる
  * （`IDLE_LIMIT_MS`。`use-notice.ts`）ので、放置した画面が夜通し仕入れ続けることも無い。
@@ -607,9 +607,8 @@ export async function topicsForScheduledPush(
     take: TOPIC_MERGE_FETCH,
   });
 
-  return groupDuplicateTopics(topics)
-    // すでに振った（声かけ・定時のお知らせ）話題は二度は出さない（`Topic.spokenAt`）。
-    .filter((group) => [group.primary, ...group.others].every((topic) => topic.spokenAt === null))
+  // すでに振った（声かけ・定時のお知らせ）話題は二度は出さない（`Topic.spokenAt`）。
+  return unspokenGroups(groupDuplicateTopics(topics))
     .slice(0, limit)
     .map(groupToRow);
 }

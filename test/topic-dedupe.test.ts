@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { groupDuplicateTopics, topicSimilarity } from "../src/lib/topic-dedupe.ts";
+import { groupDuplicateTopics, topicSimilarity, unspokenGroups } from "../src/lib/topic-dedupe.ts";
 
 const boj = [
   {
@@ -69,4 +69,16 @@ test("空・1件・空文字でも落ちない", () => {
   assert.equal(groupDuplicateTopics([gas]).length, 1);
   assert.equal(topicSimilarity({ title: "", summary: "" }, gas), 0);
   assert.equal(groupDuplicateTopics([{ title: "", summary: "" }, { title: "", summary: "" }]).length, 2);
+});
+
+test("グループ内に振り済みが1件でもあれば、その出来事は出さない", () => {
+  const spoken = new Date();
+  const items = [
+    { ...boj[0], spokenAt: null },
+    { ...boj[1], spokenAt: spoken },
+    { ...gas, spokenAt: null },
+  ];
+  const groups = unspokenGroups(groupDuplicateTopics(items));
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].primary.title, gas.title);
 });

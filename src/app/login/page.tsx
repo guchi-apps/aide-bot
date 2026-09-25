@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 
-import { AppIcon } from "@/components/brand/app-icon";
+import { AppLogo } from "@/components/brand/app-icon";
 import { isDevLoginEnabled } from "@/lib/ci-auth-bypass";
 import { safeInternalPath } from "@/lib/safe-path";
 
 export const metadata: Metadata = {
-  title: "ログイン | 秘書アプリ",
+  title: "ログイン | Morrow",
 };
 
 const errorMessages: Record<string, string> = {
@@ -29,9 +29,10 @@ export default async function LoginPage({
     <main className="grid h-dvh place-items-center overflow-y-auto overscroll-contain px-6 py-12">
       <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 shadow-sm">
         {/* svgは既定でinline。blockにしないと下に行の余白が入り、見出しとの間隔がずれる。 */}
-        <AppIcon className="block size-13" />
-        <h1 className="mt-4 text-xl font-semibold">秘書アプリ</h1>
-        <p className="mt-2 text-sm text-muted">
+        <h1>
+          <AppLogo className="text-3xl" iconClassName="block size-[1.6em] shrink-0" />
+        </h1>
+        <p className="mt-4 text-sm text-muted">
           NotionやAIDEを参照して、あなたのプライベートを補佐します。
         </p>
 

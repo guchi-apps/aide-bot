@@ -47,7 +47,7 @@ export async function POST(request: Request) {
       {
         ok: false,
         status: "unauthorized",
-        message: "トークンが正しくありません。秘書アプリの設定の画面で発行し直してください。",
+        message: "トークンが正しくありません。Morrowの設定の画面で発行し直してください。",
       },
       { status: 401 },
     );

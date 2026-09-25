@@ -7,6 +7,7 @@
 ## アプリ概要
 
 NotionやAIDE（`guchi-apps/aide`）などを参照し、チャットボットでプライベートを補佐するPWA。
+**利用者に見える名前は Morrow（#340。旧「秘書アプリ」）。** リポジトリ名・URL・DB名・環境変数・Cookie名・PM2名は `aide-bot` のまま変えない。秘書の呼び名（「秘書」）と会話文はこの名称変更の対象外。
 
 | 項目 | 値 |
 |---|---|
@@ -1975,21 +1976,20 @@ AIDEのREADME「認可の分離」）。#184で足したのは、その道具を
 
 ## アイコン
 
-- **アイコンの正は `public/icon.svg` の1枚だけ。** `public/icon-192.png`・`public/icon-512.png`・
-  `public/apple-icon.png`・`src/app/favicon.ico` はすべてそこからの書き出し物で、
+- **アイコンの正は `public/icon.svg`（承認済みのMorrowのMマーク。1024×1024）。** `public/icon-192.png`・
+  `public/icon-512.png`・`public/apple-icon.png`・`src/app/favicon.ico` はそこからの書き出し物で、
   `scripts/build-icons.sh`（`rsvg-convert` と ImageMagick を使う）で作り直す。
   PNGを直接編集しても、次にスクリプトを流した時点で戻る
-- **`public/icon.svg` の絵は `<g transform="translate(38.4 24) scale(0.85)">` の中に置く。**
-  `manifest.ts` は512pxを `purpose: "maskable"` としても宣言しており、Androidのアダプティブ
-  アイコンは中心から半径204.8pxの円の外を切り落とす。素の512px座標のままだと、頭の
-  アンテナと下端の足が欠ける
+- **maskable（`purpose: "maskable"`）だけは別SVG（`public/icon-maskable.svg`）から `icon-maskable-512.png`
+  を書き出す。** Androidのアダプティブアイコンは中心から半径約410px（1024基準）の円の外を切り落とすが、
+  承認図の線端の円は約440pxまで出るため、maskable用は中心から0.8倍にしてある。
+  **絵を変えるときは `icon.svg` と `icon-maskable.svg` を揃える**
 - 画面の中で使うアイコンは `src/components/brand/app-icon.tsx`（インラインSVG）。26px前後で置く
   場所が多いため、ファイルを `<img>` で読ませない。**絵を変えるときはSVGファイルと
-  このコンポーネントの両方を揃えて直す**（グラデーション・編み目の模様・maskableの余白は、
-  この大きさでは効かないのでコンポーネント側には持たせていない）
+  このコンポーネントの両方を揃えて直す**（角丸と薄い縁取りはコンポーネント側だけが持つ）。
+  横長ロゴは同じファイルの `AppLogo`（Mマーク＋HTMLの「Morrow」。暗い背景では文字がアイボリー）
 - **`app-icon.tsx` では `id` を使わない**（#49）。「書く」画面は返答1件ごとにこのアイコンを
-  描くため、グラデーションを `url(#…)` で参照する書き方にすると、同じidが1ページに何個も出る。
-  ベタ塗りで足りる大きさなので、グラデーションはSVGファイル側にだけ持たせている
+  描くため、`url(#…)` で参照する書き方にすると、同じidが1ページに何個も出る
 
 ## バージョン表示
 

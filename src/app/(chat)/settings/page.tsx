@@ -6,6 +6,7 @@ import { HomeProfileCard } from "@/components/settings/home-profile-card";
 import { ModelPicker } from "@/components/settings/model-picker";
 import { ProactiveSettingsCard } from "@/components/settings/proactive-settings";
 import { NotificationSettings } from "@/components/settings/notification-settings";
+import { ScheduledPushSettingsCard } from "@/components/settings/scheduled-push-settings";
 import { WakeTriggerCard } from "@/components/settings/wake-trigger-card";
 import { WriteToolPicker } from "@/components/settings/write-tool-picker";
 import { getCurrentUser } from "@/lib/auth-user";
@@ -17,6 +18,7 @@ import { hasNotionConnection } from "@/lib/home-profile";
 import { pushPublicKey } from "@/lib/push/config";
 import { normalizeFrequency } from "@/lib/proactive-labels";
 import { countSubscriptions } from "@/lib/push/subscriptions";
+import { db } from "@/lib/db";
 
 export const metadata = { title: "設定" };
 
@@ -50,12 +52,17 @@ export default async function SettingsPage({ searchParams }: Props) {
     redirect("/login");
   }
 
-  const [connections, query, models, writeToolPolicy, deviceCount] = await Promise.all([
+  const [connections, query, models, writeToolPolicy, deviceCount, scheduledPushes] = await Promise.all([
     listConnections(user.id),
     searchParams,
     selectedChatModels(),
     selectedWriteToolPolicy(),
     countSubscriptions(user.id),
+    db.scheduledPush.findMany({
+      where: { userId: user.id },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { id: true, daysMask: true, hour: true, minute: true, category: true, enabled: true },
+    }),
   ]);
 
   // 繋いでいる接続すべてを並べる（#78）。いま相談へ渡っているのは「使用中」のものだけだが、
@@ -98,6 +105,8 @@ export default async function SettingsPage({ searchParams }: Props) {
             frequency: normalizeFrequency(user.proactiveFrequency),
           }}
         />
+
+        <ScheduledPushSettingsCard initial={scheduledPushes} hasDevice={deviceCount > 0} />
 
         <BriefingTimePicker initial={{ hour: user.briefingHour, minute: user.briefingMinute }} />
 

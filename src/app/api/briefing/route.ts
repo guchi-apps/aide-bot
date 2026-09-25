@@ -5,6 +5,7 @@ import { NextResponse, after } from "next/server";
 import { runMorningBriefing } from "@/lib/briefing";
 import { refreshHomeProfiles } from "@/lib/home-profile";
 import { runProactiveSuggestions } from "@/lib/proactive";
+import { runScheduledPushes } from "@/lib/scheduled-push";
 
 /**
  * 朝の見通しを起動する（#79）。**cronから叩かれる、利用者のいない経路。**
@@ -76,6 +77,18 @@ export async function POST(request: Request) {
       }
     } catch (error) {
       console.error("[aide-bot] 先回りの提案に失敗した", error);
+    }
+  });
+
+  // 定時のお知らせ（#344）。モデルを呼ばずDBを引くだけなので、応答の後（`after()`）で走らせる。
+  after(async () => {
+    try {
+      const results = await runScheduledPushes();
+      for (const { scheduleId, status, delivered, detail } of results) {
+        console.info(`[aide-bot] 定時のお知らせ: ${scheduleId} ${status}（${delivered}台）${detail ? ` ${detail}` : ""}`);
+      }
+    } catch (error) {
+      console.error("[aide-bot] 定時のお知らせに失敗した", error);
     }
   });
 

@@ -71,6 +71,7 @@ model User {
   mcpConnections    McpConnection[]
   pushSubscriptions PushSubscription[]
   notificationLogs  NotificationLog[]
+  scheduledPushes   ScheduledPush[]
   notices           Notice[]
   topics            Topic[]
   memories          Memory[]
@@ -560,4 +561,27 @@ model Memory {
 
   @@unique([userId, dedupeKey])
   @@index([userId, status, updatedAt])
+}
+
+// --- 定時のお知らせ（#344） ---
+// 曜日・時刻・話題の種類を指定して、溜めてある話題（`Topic`）を定時にWeb Pushで届ける。
+// **モデルは呼ばない**（仕入れたときに書かせた見出しをそのまま使う）。起点は朝の見通しと同じcron。
+model ScheduledPush {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// 曜日のビット列（日曜=bit0 … 土曜=bit6）。正は `src/lib/scheduled-push-rule.ts`。
+  daysMask Int
+  /// 届ける時刻（日本時間）。30分刻み（cronの起動頻度と揃える）。
+  hour     Int
+  minute   Int
+  /// `general` / `life` / `tech` / `all`。
+  category String  @db.VarChar(20)
+  enabled  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
 }

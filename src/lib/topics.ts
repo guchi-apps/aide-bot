@@ -464,3 +464,26 @@ export function refreshTopicsIfStale(userId: string, now = new Date()): Promise<
     console.error("[aide-bot] 話題の仕入れの前処理に失敗した", error);
   });
 }
+
+/**
+ * 定時のお知らせ（#344）に載せる話題。期間内のものを新しい順に。`category` が `all` なら種類を問わない。
+ * **例外は投げる**（呼び出し側が「黙る」と「失敗」を分ける）。
+ */
+export async function topicsForScheduledPush(
+  userId: string,
+  category: string,
+  limit: number,
+  now = new Date(),
+): Promise<TopicRow[]> {
+  const topics = await db.topic.findMany({
+    where: {
+      userId,
+      fetchedAt: { gt: new Date(now.getTime() - TOPIC_LIFETIME_MS) },
+      ...(category === "all" ? {} : { category }),
+    },
+    orderBy: [{ fetchedAt: "desc" }, { id: "asc" }],
+    take: limit,
+  });
+
+  return topics.map(toRow);
+}

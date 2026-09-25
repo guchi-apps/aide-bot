@@ -1075,7 +1075,7 @@ ops-dashboardの「アプリ別のAI利用」（ops-dashboard#325）が、`GET /
   （クライアントからもimportするのでPrismaを持ち込まない）、DBは `topic-category-store.ts`
 - **説明文の「試しに検索」**（`POST /api/settings/topics/preview`）は、その1種類だけを仕入れと同じ
   プロンプトで検索して記事を返す。**何も保存しない**。サブスク枠を1回ぶん使い20〜30秒かかるので、
-  利用者ごとに1分に1回まで（プロセス内の記録。失敗した回は戻す）
+  利用者ごとに同時実行は1つ・終わってから1分あける（プロセス内の記録。`maxDuration` は180秒）。未保存の種類には `key` が無いので仮のid（`preview`）でプロンプトと `parseTopics()` を通す
 - 開発DBのシード（`scripts/seed-ci-db.mjs` の `TOPIC_SEEDS`）は実際の検索を走らせない。
   **期間（24時間）を過ぎた行を1件入れてある**——一覧にも吹き出しにも出ないことを確かめるため。
   実際の仕入れを手元で通すには、`Topic.fetchedAt` を2時間ほど戻してから `/api/notices/current` を

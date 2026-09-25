@@ -462,7 +462,9 @@ export function refreshTopicsIfStale(userId: string, now = new Date()): Promise<
 
 /** 試し検索の間隔（利用者ごと）。1回が約1種類ぶんの検索で、押されるたびに走らせない。 */
 const PREVIEW_INTERVAL_MS = 60 * 1000;
+/** 終わった時刻（間隔は終わってから数える）。走っている間は `previewRunning` が断る。 */
 const previewAttempts = new Map<string, number>();
+const previewRunning = new Set<string>();
 
 export type TopicPreview =
   | { ok: true; articles: { title: string; summary: string; url: string; sourceName: string; publishedOn: string }[] }
@@ -478,12 +480,16 @@ export async function previewTopics(
   draft: { label: string; scope: string },
   now = new Date(),
 ): Promise<TopicPreview> {
+  if (previewRunning.has(userId)) {
+    return { ok: false, status: 429, error: "試し検索を実行中です。終わるまでお待ちください。" };
+  }
   const last = previewAttempts.get(userId);
   if (last !== undefined && now.getTime() - last < PREVIEW_INTERVAL_MS) {
     return { ok: false, status: 429, error: "試し検索は1分に1回までです。少し待ってからもう一度お試しください。" };
   }
-  previewAttempts.set(userId, now.getTime());
+  previewRunning.add(userId);
 
+  // 未保存の種類には `key` が無いので仮のidで組む。プロンプトの形の指示と `parseTopics()` の両方へ同じ値を渡す。
   const category: TopicCategory = { id: "preview", label: draft.label, short: draft.label, scope: draft.scope, enabled: true };
   try {
     const result = await runCodexRecorded({
@@ -506,9 +512,10 @@ export async function previewTopics(
     return { ok: true, articles };
   } catch (error) {
     console.error("[aide-bot] 話題の試し検索に失敗した", error);
-    // 失敗した回は間隔を戻す（すぐやり直せるように）。
-    previewAttempts.delete(userId);
     return { ok: false, status: 502, error: "検索に失敗しました。時間をおいてもう一度お試しください。" };
+  } finally {
+    previewRunning.delete(userId);
+    previewAttempts.set(userId, Date.now());
   }
 }
 

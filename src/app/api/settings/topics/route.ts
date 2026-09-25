@@ -1,43 +1,39 @@
 import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth-user";
-import { db } from "@/lib/db";
 import { readJsonObject } from "@/lib/json-body";
-import { parseTopicCategories, serializeTopicCategories } from "@/lib/topic-categories";
+import { validateTopicCategoryInput } from "@/lib/topic-categories";
+import { addTopicCategory, listTopicCategories } from "@/lib/topic-category-store";
 
 /**
- * 話題（#144）として仕入れるニュースの種類を変更する。
+ * 話題（#144）として仕入れるニュースの種類の一覧と追加（#345）。
  *
- * `briefing-time` と同じくDBに保存する。読むのが応答後のバックグラウンド（`refreshTopicsIfStale()`）
- * で、Cookieを当てにできないため。**すべて外した状態（空）も受け付ける**——それが「仕入れない」。
- *
- * 保存しただけでは仕入れ直さない。次に「話す」画面の問い合わせが来て、前回から間隔があいて
- * いれば新しい種類で仕入れる。チェックを触るたびに27秒の検索を走らせない。
+ * DBに保存する。読むのが応答後のバックグラウンド（`refreshTopicsIfStale()`）で、Cookieを当てに
+ * できないため。保存しただけでは仕入れ直さない——次に「話す」画面の問い合わせが来て、前回から
+ * 間隔があいていれば新しい種類で仕入れる（触るたびに27秒の検索を走らせない）。
  */
 
 export const dynamic = "force-dynamic";
 
-type Body = { categories?: unknown };
-
-export async function PATCH(request: Request) {
+export async function GET() {
   const user = await getCurrentUser();
-  if (!user) {
-    return NextResponse.json({ error: "ログインが必要です。" }, { status: 401 });
-  }
+  if (!user) return NextResponse.json({ error: "ログインが必要です。" }, { status: 401 });
 
-  const body: Body | null = await readJsonObject(request);
-  if (!body) {
-    return NextResponse.json({ error: "リクエストの形式が正しくありません。" }, { status: 400 });
-  }
+  return NextResponse.json({ categories: await listTopicCategories(user.id) });
+}
 
-  if (!Array.isArray(body.categories)) {
-    return NextResponse.json({ error: "種類は配列で指定してください。" }, { status: 400 });
-  }
+export async function POST(request: Request) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "ログインが必要です。" }, { status: 401 });
 
-  // 知らない値は落として保存する（利用者が書き換えられる値なので、そのまま入れない）。
-  const value = serializeTopicCategories(body.categories);
+  const body = await readJsonObject(request);
+  if (!body) return NextResponse.json({ error: "リクエストの形式が正しくありません。" }, { status: 400 });
 
-  await db.user.update({ where: { id: user.id }, data: { topicCategories: value } });
+  const input = validateTopicCategoryInput(body);
+  if (!input.ok) return NextResponse.json({ error: input.error }, { status: 400 });
 
-  return NextResponse.json({ categories: parseTopicCategories(value) });
+  const result = await addTopicCategory(user.id, input.value);
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
+
+  return NextResponse.json({ category: result.category }, { status: 201 });
 }

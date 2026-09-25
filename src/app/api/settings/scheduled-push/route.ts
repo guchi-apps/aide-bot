@@ -3,10 +3,11 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth-user";
 import { db } from "@/lib/db";
 import { readJsonObject } from "@/lib/json-body";
+import { listTopicCategories } from "@/lib/topic-category-store";
 import {
   SCHEDULED_PUSH_LIMIT,
   daysToMask,
-  isScheduledPushCategory,
+  SCHEDULED_PUSH_ALL,
 } from "@/lib/scheduled-push-rule";
 
 /**
@@ -27,7 +28,7 @@ function badRequest(message: string) {
 }
 
 /** 本文から `daysMask` / `hour` / `minute` / `category` を検証して取り出す。渡した項目だけ。 */
-function parseFields(body: Record<string, unknown>) {
+async function parseFields(userId: string, body: Record<string, unknown>) {
   const data: { daysMask?: number; hour?: number; minute?: number; category?: string; enabled?: boolean } = {};
 
   if ("days" in body) {
@@ -47,8 +48,12 @@ function parseFields(body: Record<string, unknown>) {
     data.minute = body.minute;
   }
   if ("category" in body) {
-    if (!isScheduledPushCategory(body.category)) return { error: "話題の種類の指定が正しくありません。" };
-    data.category = body.category;
+    // 種類は利用者ごとに追加・削除できる（#345）ので、いま持っている種類と突き合わせる。
+    const known = body.category === SCHEDULED_PUSH_ALL ||
+      (typeof body.category === "string" &&
+        (await listTopicCategories(userId)).some((category) => category.id === body.category));
+    if (!known) return { error: "話題の種類の指定が正しくありません。" };
+    data.category = body.category as string;
   }
   if ("enabled" in body) {
     if (typeof body.enabled !== "boolean") return { error: "enabled は真偽値で指定してください。" };
@@ -65,7 +70,7 @@ export async function POST(request: Request) {
   const body = await readJsonObject(request);
   if (!body) return badRequest("リクエストの形式が正しくありません。");
 
-  const parsed = parseFields(body);
+  const parsed = await parseFields(user.id, body);
   if ("error" in parsed) return badRequest(parsed.error as string);
   const { data } = parsed;
   if (data.daysMask === undefined || data.hour === undefined || data.minute === undefined || data.category === undefined) {
@@ -100,7 +105,7 @@ export async function PATCH(request: Request) {
   if (!body) return badRequest("リクエストの形式が正しくありません。");
   if (typeof body.id !== "string") return badRequest("id を指定してください。");
 
-  const parsed = parseFields(body);
+  const parsed = await parseFields(user.id, body);
   if ("error" in parsed) return badRequest(parsed.error as string);
   if (Object.keys(parsed.data).length === 0) return badRequest("変更する項目がありません。");
 

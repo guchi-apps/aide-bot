@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import {
+  SCHEDULED_PUSH_ALL,
   SCHEDULED_PUSH_KIND,
   SCHEDULED_PUSH_TOPIC_LIMIT,
   composeScheduledBody,
@@ -8,6 +9,7 @@ import {
 } from "@/lib/scheduled-push-rule";
 import { sendPushToUser, usersWithSubscriptions } from "@/lib/push/subscriptions";
 import { topicCategoryShort } from "@/lib/topic-categories";
+import { listTopicCategories } from "@/lib/topic-category-store";
 import { topicsForScheduledPush } from "@/lib/topics";
 
 /**
@@ -70,7 +72,11 @@ export async function runScheduledPushes(now = new Date()): Promise<ScheduledPus
         continue;
       }
 
-      const title = `定時のお知らせ（${schedule.category === "all" ? "話題" : topicCategoryShort(schedule.category)}）`;
+      const label =
+        schedule.category === SCHEDULED_PUSH_ALL
+          ? "話題"
+          : topicCategoryShort(await listTopicCategories(schedule.userId), schedule.category);
+      const title = `定時のお知らせ（${label}）`;
       const body = composeScheduledBody(topics.map((topic) => topic.title));
 
       const delivered = await sendPushToUser(schedule.userId, {

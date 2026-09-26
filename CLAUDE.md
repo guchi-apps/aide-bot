@@ -1803,6 +1803,32 @@ pnpm dev:https    # tailnetへHTTPSで公開し、iPhoneで開くURLを出す
   吹き出し・返答・操作ボタンが押し出されないかを見る**（中央列は `overflow-y-auto` で逃がしているが、
   立ち絵で埋まるとスクロールしないと返答が読めない）
 
+## タスク管理API・MCP（#373）
+
+**Notionの「Task」DB（`collection://c8e9001c-d2a1-44c9-8ad7-cbe965fcc6d0`）を、専用の口で追加・編集・削除する。**
+汎用のNotion MCP（モデルが `notion-update-page` 等を組み立てる）だと、プロパティ名・選択肢・日付形式の
+取り違えが実行時まで分からないため、項目を検証してから固定のプロパティ名で書く。
+
+- **口は2つ。** `GET/POST /api/tasks`・`PATCH/DELETE /api/tasks/[id]`（ログイン済み利用者。`getCurrentUser()`）と、
+  `/api/mcp` の `aide_task_list` / `aide_task_create` / `aide_task_update` / `aide_task_delete`
+  （`NOTICE_INGEST_TOKEN` のBearer。宛先の `email` は無い——Task DBは1つで利用者ごとに分かれていない）
+- **Notion REST APIを `fetch` で直接叩く**（`src/lib/notion-tasks.ts`。依存は増やしていない）。`Notion-Version` は
+  `2025-09-03`（データソースを親にする版）。**`NOTION_API_TOKEN`（インテグレーション）が要り、Task DBを
+  そのインテグレーションへ共有しておく。** 未設定なら経路ごと503で閉じる。1Passwordの
+  `apps/aide-bot/notion-api-token`（値の登録は人の手作業）。共有し忘れると404が返る
+- **項目の検証と変換は `src/lib/task-input.ts`（純粋。`test/task-input.test.ts`）。** 項目は `title`（必須）・`memo`・
+  `tags`（仕事/祭り/趣味/生活）・`priority`（高/中/低）・`plannedDate`・`dueDate`・`repeat`・`done`・`status`（対応しない）。
+  **Notion側で選択肢を足したらここも足す**（足すまで知らない値として弾く。黙って新しい選択肢を作らせない）。
+  日付は `YYYY-MM-DD` かタイムゾーン付きISO 8601。**存在しない日付（`2026-13-99`）は `toISOString()` がRangeErrorを
+  投げるので、`isCalendarDate()` が先にInvalid Dateを見る**。編集は渡した項目だけを書き換え、`null` は「空にする」
+- **更新・削除の前に、`GET /pages/{id}` で親がTask DBのデータソースかを確かめる。** `PATCH /pages/{id}` は
+  任意のページを触れるので、idだけを信じると他のNotionページを消せる。`test/notion-tasks.test.ts`（`fetch` を差し替える）が固定
+- **削除はゴミ箱へ移す（`in_trash`）だけで、Notion上から戻せる。** ただしAPIは確認なしで実行するので、
+  ツール説明に「呼ぶ前に利用者へ確かめる」と書いてある
+- **秘書の相談から使う配線（`MCP_PRESETS` への登録・`writeTools`）はまだ無い。** 足すなら書き込みの道具として
+  #78の絞り込みに載せること。実物のNotionでの書き込みは、トークンが無いと手元で確かめられない
+  （単体テストは `fetch` のスタブまで）
+
 ## 外部サービスとの接続（MCP）
 
 秘書が相談の中でAIDEやNotionのデータを引けるようにする仕組み（#46）。**MCPクライアントは

@@ -114,6 +114,7 @@ jobs:
       BRIEFING_TRIGGER_TOKEN: ${{ secrets.BRIEFING_TRIGGER_TOKEN }}
       NOTICE_INGEST_TOKEN: ${{ secrets.NOTICE_INGEST_TOKEN }}
       OPS_API_TOKEN: ${{ secrets.OPS_API_TOKEN }}
+      NOTION_API_TOKEN: ${{ secrets.NOTION_API_TOKEN }}
 
     steps:
       - name: Checkout code
@@ -195,6 +196,7 @@ jobs:
       BRIEFING_TRIGGER_TOKEN: ${{ secrets.BRIEFING_TRIGGER_TOKEN }}
       NOTICE_INGEST_TOKEN: ${{ secrets.NOTICE_INGEST_TOKEN }}
       OPS_API_TOKEN: ${{ secrets.OPS_API_TOKEN }}
+      NOTION_API_TOKEN: ${{ secrets.NOTION_API_TOKEN }}
 
     steps:
       - name: Checkout code
@@ -290,6 +292,8 @@ jobs:
             # ops-dashboardのアプリ別のAI利用（#297）。空だと GET /api/ai-usage が401で閉じた
             # ままになり、ops-dashboardの画面はこのアプリを「取得不可」と出す。
             update_env OPS_API_TOKEN "$OPS_API_TOKEN"
+            # Notionのタスク管理API・MCP（#373）。空だと /api/tasks とタスクのMCPツールが503で閉じたままになる。
+            update_env NOTION_API_TOKEN "$NOTION_API_TOKEN"
 
             echo "Installing production dependencies..."
             corepack enable pnpm >/dev/null 2>&1 || true

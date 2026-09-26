@@ -121,7 +121,11 @@ async function generateBriefing(userId: string): Promise<string> {
 
   // **書き込みの道具は設定によらず常に止める**（#78・#79）。相談側は設定で渡せるが、
   // ここは利用者のいないところで動いており、登録の前に復唱して確かめる相手がいない。
-  const { mcpServers } = toCodexMcpServers(servers, false);
+  // 渡すのは材料の道具だけ（#367。`briefingTools`）。Notionなど材料に使わない接続は載せない。
+  const { mcpServers } = toCodexMcpServers(servers, false, "briefing");
+  if (mcpServers.length === 0) {
+    throw new Error("朝の見通しの材料になる接続（AIDE）が無いため、今日の材料を取れませんでした。");
+  }
 
   // 相談はまだ作っていないので conversationId は付けない（#51は「1呼び出し＝1行」で、
   // 相談への紐付けは任意）。**打ち切られた回は `usage` がnullで行が作られない**——

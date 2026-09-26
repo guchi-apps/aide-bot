@@ -12,7 +12,7 @@ import {
   refreshTokens,
   registerClient,
 } from "@/lib/mcp/oauth";
-import { findPreset, writeToolsFor } from "@/lib/mcp/presets";
+import { findPreset, readToolsFor, writeToolsFor } from "@/lib/mcp/presets";
 
 /**
  * 外部サービスとの接続の出し入れ（#46）。
@@ -314,12 +314,15 @@ export function toCodexMcpServers(
   const mcpServers = servers.map((server) => {
     const withheld = allowWriteTools ? [] : writeToolsFor(server.url);
     withheldTools.push(...withheld);
+    // 許可リストのある接続先は、書き込みを渡さない回に読み取りの道具だけを見せる（#366）。
+    const enabledTools = allowWriteTools ? undefined : readToolsFor(server.url);
 
     return {
       name: server.slug,
       url: server.url,
       accessToken: server.accessToken,
       disabledTools: withheld,
+      ...(enabledTools ? { enabledTools } : {}),
     };
   });
 

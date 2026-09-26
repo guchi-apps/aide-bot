@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { APP_VERSION } from "@/lib/app-version";
+import { hasValidBearer } from "@/lib/bearer-auth";
 import { db } from "@/lib/db";
 import { isJsonObject } from "@/lib/json-body";
 import { isNoticeIngestAuthorized, NOTICE_BODY_MAX, NOTICE_TITLE_MAX, parseNoticeInput } from "@/lib/notice-ingest";
@@ -74,7 +75,7 @@ const TASK_ID = {
   description: "NotionのタスクのページID（aide_task_list の id）。Task DB以外のページは受け付けない",
 } as const;
 
-/** Notionの「Task」DBを直接管理するツール（#373）。宛先の利用者は無く、Bearerで認証した呼び出し元がそのまま操作する。 */
+/** Notionの「Task」DBを直接管理するツール（#373）。宛先の利用者は無く、`TASK_API_TOKEN` のBearerで認証した呼び出し元がそのまま操作する。 */
 const TASK_TOOLS = [
   {
     name: "aide_task_list",
@@ -255,7 +256,12 @@ async function callTool(name: string, rawArgs: unknown) {
 }
 
 export async function POST(request: Request) {
-  if (!isNoticeIngestAuthorized(request)) return NextResponse.json({ error: "認証が必要です。" }, { status: 401 });
+  // トークンは用途で分ける。`NOTICE_INGEST_TOKEN` は外部の呼び出し元へ配ってある値で、これでNotionのタスクの
+  // 更新・削除まで通すと、1か所から漏れただけでタスクを消せる（#373の計画レビュー）。タスクのツールは
+  // `TASK_API_TOKEN` だけで通し、お知らせのツールは `NOTICE_INGEST_TOKEN` だけで通す。**2つを同じ値にしない**。
+  const noticeAllowed = isNoticeIngestAuthorized(request);
+  const taskAllowed = hasValidBearer(request.headers.get("authorization"), process.env.TASK_API_TOKEN);
+  if (!noticeAllowed && !taskAllowed) return NextResponse.json({ error: "認証が必要です。" }, { status: 401 });
 
   let raw: unknown;
   try {
@@ -282,11 +288,15 @@ export async function POST(request: Request) {
       serverInfo: { name: "aide-bot", version: APP_VERSION },
     });
   }
-  if (body.method === "tools/list") return response(body.id, { tools: [...TOOLS, ...TASK_TOOLS] });
+  if (body.method === "tools/list") {
+    return response(body.id, { tools: [...(noticeAllowed ? TOOLS : []), ...(taskAllowed ? TASK_TOOLS : [])] });
+  }
   if (body.method === "tools/call") {
     if (typeof body.params !== "object" || body.params === null) return errorResponse(body.id, -32602, "params が要ります。");
     const params = body.params as Record<string, unknown>;
     if (typeof params.name !== "string") return errorResponse(body.id, -32602, "ツール名が要ります。");
+    const isTaskTool = TASK_TOOLS.some((tool) => tool.name === params.name);
+    if (isTaskTool ? !taskAllowed : !noticeAllowed) return errorResponse(body.id, -32001, "このツールを呼ぶ権限がありません。");
     return response(body.id, await callTool(params.name, params.arguments));
   }
 

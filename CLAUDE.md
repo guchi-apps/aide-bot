@@ -1811,11 +1811,15 @@ pnpm dev:https    # tailnetへHTTPSで公開し、iPhoneで開くURLを出す
 
 - **口は2つ。** `GET/POST /api/tasks`・`PATCH/DELETE /api/tasks/[id]`（ログイン済み利用者。`getCurrentUser()`）と、
   `/api/mcp` の `aide_task_list` / `aide_task_create` / `aide_task_update` / `aide_task_delete`
-  （`NOTICE_INGEST_TOKEN` のBearer。宛先の `email` は無い——Task DBは1つで利用者ごとに分かれていない）
+  （**`TASK_API_TOKEN` のBearer。`NOTICE_INGEST_TOKEN` では通らない**。宛先の `email` は無い——Task DBは1つで
+  利用者ごとに分かれていない）。**トークンを用途で分けた理由**: `NOTICE_INGEST_TOKEN` は外部の呼び出し元へ配って
+  ある値で、これでタスクの更新・削除まで通すと1か所から漏れただけでNotionのタスクを消せる。`/api/mcp` は
+  ツール単位で判定し、`tools/list` も通ったトークンのぶんだけ返す。**2つを同じ値にしない**（分ける意味が無くなる）。
+  **呼び出し元は外部（Claude Codeのコネクタ・ChatGPTなど）を想定**。秘書から呼ぶ配線は含めていない
 - **Notion REST APIを `fetch` で直接叩く**（`src/lib/notion-tasks.ts`。依存は増やしていない）。`Notion-Version` は
   `2025-09-03`（データソースを親にする版）。**`NOTION_API_TOKEN`（インテグレーション）が要り、Task DBを
   そのインテグレーションへ共有しておく。** 未設定なら経路ごと503で閉じる。1Passwordの
-  `apps/aide-bot/notion-api-token`（値の登録は人の手作業）。共有し忘れると404が返る
+  `apps/aide-bot/notion-api-token` と `apps/aide-bot/task-api-token`（値の登録は人の手作業）。共有し忘れると404が返る
 - **項目の検証と変換は `src/lib/task-input.ts`（純粋。`test/task-input.test.ts`）。** 項目は `title`（必須）・`memo`・
   `tags`（仕事/祭り/趣味/生活）・`priority`（高/中/低）・`plannedDate`・`dueDate`・`repeat`・`done`・`status`（対応しない）。
   **Notion側で選択肢を足したらここも足す**（足すまで知らない値として弾く。黙って新しい選択肢を作らせない）。

@@ -68,6 +68,14 @@ export type McpPreset = {
    * 未設定（undefined）の接続先は従来どおり名指しだけで止める。
    */
   readTools?: string[];
+  /**
+   * 朝の見通し（#79・#183）が材料として呼ぶ道具の許可リスト（#367）。設定すると、朝の見通しには
+   * **この接続先のここに挙げた道具だけ**を渡し、設定していない接続先はそもそも渡さない。
+   * 朝の見通しは利用者のいないところで動き、呼ぶ道具は `BRIEFING_MATERIAL_RULES` で決まっているので、
+   * 相談用の道具の定義まで毎回Codexへ載せる理由が無い。**材料の道具を足すときはここも足す**
+   * （足し忘れると、その道具は見通しから見えず、黙って材料が減る）。
+   */
+  briefingTools?: string[];
 };
 
 export const MCP_PRESETS: McpPreset[] = [
@@ -161,6 +169,19 @@ export const MCP_PRESETS: McpPreset[] = [
       "aide_garbage_collection",
       "aide_printer_status",
     ],
+    // #367。`BRIEFING_MATERIAL_RULES`（`src/lib/anthropic.ts`）が毎朝呼ばせる10本。
+    briefingTools: [
+      "aide_schedule",
+      "aide_weather",
+      "aide_room_sensors",
+      "aide_aircon_status",
+      "aide_host_status",
+      "aide_uptime_monitors",
+      "aide_service_quotas",
+      "aide_fixed_costs",
+      "aide_claude_sessions",
+      "aide_dev_status",
+    ],
   },
   {
     id: "notion",
@@ -186,6 +207,11 @@ export const MCP_PRESETS: McpPreset[] = [
 /** 書き込みを渡さない回に許す読み取りの道具（#366）。許可リストを持たない接続先はundefined。 */
 export function readToolsFor(url: string): string[] | undefined {
   return findPreset(url)?.readTools;
+}
+
+/** 朝の見通しに渡す道具の許可リスト（#367）。持たない接続先はundefined。 */
+export function briefingToolsFor(url: string): string[] | undefined {
+  return findPreset(url)?.briefingTools;
 }
 
 export function findPreset(url: string): McpPreset | undefined {

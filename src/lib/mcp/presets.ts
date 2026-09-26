@@ -58,6 +58,16 @@ export type McpPreset = {
    * こちらを直すまでその道具が使えなくなるため。**取りこぼしても壊れない側**へ倒してある。
    */
   writeTools: string[];
+  /**
+   * この接続先の**読み取り専用の道具**の許可リスト（#366）。設定すると、書き込みを渡さない回は
+   * `writeTools` の名指しではなく**ここに挙げた道具だけ**を渡す（Codexの `enabled_tools`）。
+   *
+   * 名指しで止める形（`writeTools`）は、接続先が状態を変える道具を足したとき、こちらへ足し忘れる
+   * とそのまま渡ってしまう。許可リストなら**未分類の道具は既定で見えない**。代わりに、接続先が
+   * 読み取りの道具を足しても、ここへ足すまでは使えない（取りこぼしても壊れない側）。
+   * 未設定（undefined）の接続先は従来どおり名指しだけで止める。
+   */
+  readTools?: string[];
 };
 
 export const MCP_PRESETS: McpPreset[] = [
@@ -118,6 +128,38 @@ export const MCP_PRESETS: McpPreset[] = [
       "aide_save_daily_brief",
       "asset_manager_import_payment",
       "aide_create_event",
+      // #366。AIDEの登録簿（catalog.ts）にあるのに挙がっていなかった状態変更の道具。
+      // dryRunできるものも、書き込みの道具として同じに扱う。
+      "aide_room_press",
+      "aide_aircon_control",
+      "issue_deck_upload_image",
+      "asset_manager_create_subscription",
+      "asset_manager_add_subscription_price",
+      "aide_research_desk_import_weekly_report",
+    ],
+    // #366。読み取り・疎通確認だけの道具。AIDEが道具を足しても、ここへ足すまでは
+    // 書き込みを渡さない回に見えない。足すときは道具の説明文が「読み取りだけ」と言えるか確かめる。
+    readTools: [
+      "aide_ping",
+      "aide_room_sensors",
+      "aide_room_buttons",
+      "aide_aircon_status",
+      "aide_weather",
+      "aide_schedule",
+      "aide_balances",
+      "aide_fixed_costs",
+      "aide_utility_bills",
+      "aide_zaim_master",
+      "asset_manager_subscriptions",
+      "aide_host_status",
+      "aide_uptime_monitors",
+      "aide_service_quotas",
+      "aide_dev_status",
+      "aide_repo_status",
+      "aide_repo_labels",
+      "aide_claude_sessions",
+      "aide_garbage_collection",
+      "aide_printer_status",
     ],
   },
   {
@@ -140,6 +182,11 @@ export const MCP_PRESETS: McpPreset[] = [
     writeTools: [],
   },
 ];
+
+/** 書き込みを渡さない回に許す読み取りの道具（#366）。許可リストを持たない接続先はundefined。 */
+export function readToolsFor(url: string): string[] | undefined {
+  return findPreset(url)?.readTools;
+}
 
 export function findPreset(url: string): McpPreset | undefined {
   return MCP_PRESETS.find((preset) => preset.url === url);

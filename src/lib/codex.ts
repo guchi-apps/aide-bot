@@ -67,6 +67,8 @@ export type CodexMcpServer = {
   accessToken: string;
   /** モデルに見せない道具の名前（#78の書き込みの道具）。 */
   disabledTools: string[];
+  /** 設定すると、ここに挙げた道具だけをモデルに見せる許可リスト（#366）。 */
+  enabledTools?: string[];
 };
 
 /** 道具の呼び出し1回ぶんの出来事（#131）。`onToolCall` で呼び出し側へ渡す。 */
@@ -207,6 +209,10 @@ function mcpOverrides(servers: CodexMcpServer[]): { args: string[]; env: Record<
       "-c", `${key}.startup_timeout_sec=${MCP_STARTUP_TIMEOUT_SEC}`,
       "-c", `${key}.tool_timeout_sec=${MCP_TOOL_TIMEOUT_SEC}`,
     );
+
+    if (server.enabledTools) {
+      args.push("-c", `${key}.enabled_tools=${JSON.stringify(server.enabledTools)}`);
+    }
 
     if (server.disabledTools.length > 0) {
       args.push("-c", `${key}.disabled_tools=${JSON.stringify(server.disabledTools)}`);

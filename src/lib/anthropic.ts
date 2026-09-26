@@ -315,7 +315,7 @@ const BRIEFING_FORMAT_RULES = [
  * 道具そのものは条件を満たすかどうかに関わらず毎日呼ぶ（呼ばないと条件を満たすかどうか
  * 判断できない）。触れるかどうかだけが条件で変わる。
  */
-const BRIEFING_MATERIAL_RULES = [
+export const BRIEFING_MATERIAL_RULES = [
   "予定（aide_schedule。date を省くと今日）、天気（aide_weather）、" +
     "部屋（aide_room_sensors・aide_aircon_status）、" +
     "システム（aide_host_status・aide_uptime_monitors・aide_service_quotas）、" +

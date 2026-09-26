@@ -12,7 +12,7 @@ import {
   refreshTokens,
   registerClient,
 } from "@/lib/mcp/oauth";
-import { findPreset, writeToolsFor } from "@/lib/mcp/presets";
+import { briefingToolsFor, findPreset, readToolsFor, writeToolsFor } from "@/lib/mcp/presets";
 
 /**
  * 外部サービスとの接続の出し入れ（#46）。
@@ -308,18 +308,31 @@ export async function listConnectedServers(userId: string): Promise<ConnectedSer
 export function toCodexMcpServers(
   servers: ConnectedServer[],
   allowWriteTools: boolean,
+  purpose: "default" | "briefing" = "default",
 ): { mcpServers: CodexMcpServer[]; withheldTools: string[] } {
   const withheldTools: string[] = [];
 
-  const mcpServers = servers.map((server) => {
+  // 朝の見通しは、材料の許可リスト（`briefingTools`）を持つ接続先だけを渡す（#367）。
+  const targets =
+    purpose === "briefing" ? servers.filter((server) => briefingToolsFor(server.url)) : servers;
+
+  const mcpServers = targets.map((server) => {
     const withheld = allowWriteTools ? [] : writeToolsFor(server.url);
     withheldTools.push(...withheld);
+    // 許可リストのある接続先は、書き込みを渡さない回に読み取りの道具だけを見せる（#366）。
+    const enabledTools =
+      purpose === "briefing"
+        ? briefingToolsFor(server.url)
+        : allowWriteTools
+          ? undefined
+          : readToolsFor(server.url);
 
     return {
       name: server.slug,
       url: server.url,
       accessToken: server.accessToken,
       disabledTools: withheld,
+      ...(enabledTools ? { enabledTools } : {}),
     };
   });
 

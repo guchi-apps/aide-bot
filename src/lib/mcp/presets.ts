@@ -97,12 +97,14 @@ export const MCP_PRESETS: McpPreset[] = [
       "放置しているClaudeのセッション（aide_claude_sessions）",
       // DaySpan（dayspan#550）→ AIDE（aide#243）の順に口が作られ、#185でaide-bot側も配線した。
       "予定の登録（aide_create_event）。GoogleカレンダーへDaySpan経由で1件作成する",
+      // aide#493・dayspan#805。対象は aide_schedule が返す id・calendarId で名指しする（#372）。
+      "予定の変更（aide_update_event）と取り消し（aide_delete_event）。1回分の予定だけ。取り消しは現在のタイトルの一致が要る",
     ],
     missing: [
       "電車の遅延・乗換（交通のコネクタが未実装。guchi-apps/aide#33）",
       "今日・明日より先の天気、自宅以外の地域の天気",
-      // guchi-apps/aide#243の時点では新規作成のみ。既存予定の更新・削除に当たる道具は無い。
-      "予定の変更・取り消し（登録は aide_create_event でできる。入れ直しは DaySpan から）",
+      // 変更・取り消しは#372で追加。繰り返しの元の予定（シリーズ全体）・日をまたぐ予定は対象外。
+      "繰り返し予定のシリーズ全体・日をまたぐ予定の変更・取り消し（DaySpan から直す）",
     ],
     hints: [
       // `aide_daily_briefing` は無くなった（aide#373）。今日の見通しのように予定と天気の両方が
@@ -113,7 +115,7 @@ export const MCP_PRESETS: McpPreset[] = [
       // hints は書き込みの許可状態に関わらず常にプロンプトへ入る（既定は書き込みoff）ので、
       // aide_create_event が渡っていない回でも矛盾しない書き方にする。「渡っていません」の
       // 一般則自体は connectedServiceRules() の writeToolsWithheld 分岐が別に伝える。
-      "予定の登録を頼まれたら aide_create_event を呼ぶ（道具の一覧に無ければ書き込みが許可されていないので、設定の画面で許可すれば使えると伝える）。作成できたら返る url を「入れました」の案内に添える。予定の変更・取り消しはできない（新規作成専用）ので、頼まれたら DaySpan で直接直してほしいと伝える",
+      "予定の登録を頼まれたら aide_create_event を呼ぶ（道具の一覧に無ければ書き込みが許可されていないので、設定の画面で許可すれば使えると伝える）。作成できたら返る url を「入れました」の案内に添える。予定の変更・取り消しを頼まれたら、まず aide_schedule で対象を引いて events[].id・calendarId・title を確かめ（推測しない）、「どの予定（日時・タイトル）を、どう変えるか／消すか」を復唱して確認を取ってから aide_update_event（変えない項目は省く）・aide_delete_event（title に現在のタイトルを渡す）を呼ぶ。どれも道具の一覧に無ければ書き込みが許可されていないので、設定の画面で許可すれば使えると伝える。取り消しは元に戻せないので、候補が複数あるときは絞ってから確認する。結果が kind: conflict なら何も消えていない（currentTitle を伝えて確かめ直す）。繰り返しの元の予定・日をまたぐ予定は変更・取り消しできないので DaySpan で直してほしいと伝える。「中止になった」だけの記録は削除ではなく DaySpan の画面で中止にする",
       // #214。「取れなかった」と「異常あり」「古い値」の区別が付かず、値が返っている回まで
       // 「取得できませんでした」と答えていた。読み方をここに置く（道具の説明文にも書いて
       // あるが、音声モードでは説明文まで読み切らずに済ませる回がある）。
@@ -136,6 +138,9 @@ export const MCP_PRESETS: McpPreset[] = [
       "aide_save_daily_brief",
       "asset_manager_import_payment",
       "aide_create_event",
+      // #372。aide#493。取り消しは元に戻せない。
+      "aide_update_event",
+      "aide_delete_event",
       // #366。AIDEの登録簿（catalog.ts）にあるのに挙がっていなかった状態変更の道具。
       // dryRunできるものも、書き込みの道具として同じに扱う。
       "aide_room_press",

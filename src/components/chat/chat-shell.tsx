@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { ConversationRail } from "./conversation-rail";
 import { useTalkMode } from "./talk-mode-context";
 import type { DayRow } from "./types";
+import { useVisualViewportFit } from "./use-visual-viewport";
 
 type Props = {
   /** 発言のある日を新しい順に並べたもの（#157）。 */
@@ -40,6 +41,10 @@ type Props = {
  * iOSのタッチのラバーバンド（弾性スクロール）まではデスクトップの検証では再現できず、
  * `html`/`body` 側で塞ぐ必要があった。各画面の内部スクロール（一覧・記録欄・設定パネル等）は
  * `overflow-y-auto` の入れ物ごとに閉じているので、ここを固定しても壊れない。
+ *
+ * 高さの元は `--app-height`（ふだんは100dvh）と `--app-bottom-inset`（`globals.css`）。
+ * 画面キーボードが出ている間は `useVisualViewportFit()` がキーボードの上に残る高さへ縮める
+ * （#379。iOSでキーボードを閉じた後にページが持ち上がったまま残るのを防ぐ）。
  */
 export function ChatShell({
   days,
@@ -54,6 +59,7 @@ export function ChatShell({
 }: Props) {
   const pathname = usePathname();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  useVisualViewportFit();
 
   const isUsage = pathname === "/usage";
   // 過去の日（`/d/<date>`。#157）。今日の記録は `/` で、この形のURLを持たない。
@@ -101,7 +107,7 @@ export function ChatShell({
   }, [drawerOpen]);
 
   return (
-    <div className="flex h-[calc(100dvh_-_env(safe-area-inset-bottom))] w-full overflow-hidden">
+    <div className="flex h-[calc(var(--app-height)_-_var(--app-bottom-inset))] w-full overflow-hidden">
       <aside className="hidden w-[276px] shrink-0 border-r border-border md:block">
         <ConversationRail
           days={days}

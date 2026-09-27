@@ -176,7 +176,7 @@ export function ChatShell({
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-2.5 border-b border-border bg-surface px-3 py-2.5 md:bg-transparent md:px-7 md:py-3.5">
+        <header className="flex items-center gap-2.5 border-b border-border bg-surface px-3 pb-2.5 pt-[calc(env(safe-area-inset-top)+0.625rem)] md:bg-transparent md:px-7 md:py-3.5">
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}

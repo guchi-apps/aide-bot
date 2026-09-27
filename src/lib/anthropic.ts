@@ -262,6 +262,15 @@ export const MORNING_BRIEFING_REQUEST =
   `${AUTO_REQUEST_PREFIX}おはよう。今日の予定・移動・天気と、部屋やシステム・支払い予定・放置しているセッション・確認待ちに気になることがないかを確かめて、今日の見通しを短くまとめて。`;
 
 /**
+ * 朝の見通しに続けて積む、今日のニュースの依頼文（#399）。
+ *
+ * 話題は仕入れたときに一度だけ生成済みなので、ここでモデルは呼ばない。続けて話しかけたときに
+ * 秘書がニュースを届けた文脈を読めるよう、USERの1通目として残す。記録の画面には出さないため、
+ * `AUTO_REQUEST_PREFIX` から組み立てる。
+ */
+export const MORNING_TOPICS_REQUEST = `${AUTO_REQUEST_PREFIX}今日のニュースを教えて。`;
+
+/**
  * 通知を押して開いた相談の1通目（USER）に置く固定の文言。
  *
  * `POST /api/chat` の `buildConversationText()`（#79）は履歴の先頭がUSERであることを前提にしており、

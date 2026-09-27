@@ -8,18 +8,20 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { MORNING_BRIEFING_REQUEST, URGENT_NOTICE_REQUEST } from "@/lib/anthropic";
+import { MORNING_BRIEFING_REQUEST, MORNING_TOPICS_REQUEST, URGENT_NOTICE_REQUEST } from "@/lib/anthropic";
 import { AUTO_REQUEST_PREFIX, isAutoRequest } from "@/lib/auto-request";
 import { jstTimeLabel } from "@/lib/day-key";
 
 describe("isAutoRequest", () => {
-  it("朝の見通しと急ぎのお知らせの依頼文（USER）を隠す", () => {
+  it("朝の見通し・ニュース・急ぎのお知らせの依頼文（USER）を隠す", () => {
     assert.equal(isAutoRequest("USER", MORNING_BRIEFING_REQUEST), true);
+    assert.equal(isAutoRequest("USER", MORNING_TOPICS_REQUEST), true);
     assert.equal(isAutoRequest("USER", URGENT_NOTICE_REQUEST), true);
   });
 
-  it("2つの依頼文は前置きから始まる（組み立てが外れていない）", () => {
+  it("自動の依頼文は前置きから始まる（組み立てが外れていない）", () => {
     assert.ok(MORNING_BRIEFING_REQUEST.startsWith(AUTO_REQUEST_PREFIX));
+    assert.ok(MORNING_TOPICS_REQUEST.startsWith(AUTO_REQUEST_PREFIX));
     assert.ok(URGENT_NOTICE_REQUEST.startsWith(AUTO_REQUEST_PREFIX));
   });
 

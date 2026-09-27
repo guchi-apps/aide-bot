@@ -1,6 +1,7 @@
 import {
   BRIEFING_SKIP_TOKEN,
   MORNING_BRIEFING_REQUEST,
+  MORNING_TOPICS_REQUEST,
   briefingSystemPrompt,
 } from "@/lib/anthropic";
 import { modelFor } from "@/lib/chat-model-server";
@@ -11,6 +12,8 @@ import { db } from "@/lib/db";
 import { listConnectedServers, toCodexMcpServers } from "@/lib/mcp/connections";
 import { ingestNotice } from "@/lib/notices";
 import { countSubscriptions, sendPushToUser, usersWithSubscriptions } from "@/lib/push/subscriptions";
+import { SCHEDULED_PUSH_TOPIC_LIMIT, composeScheduledBody } from "@/lib/scheduled-push-rule";
+import { refreshTopicsForSchedule, topicsForMorningBriefing } from "@/lib/topics";
 
 /**
  * 秘書の方から知らせる「朝の見通し」（#79）。**サーバー専用。**
@@ -38,8 +41,14 @@ import { countSubscriptions, sendPushToUser, usersWithSubscriptions } from "@/li
 /** 通知の種類。`NotificationLog.kind` に入る。 */
 export const MORNING_BRIEFING_KIND = "morning-briefing";
 
+/** 朝の見通しに続けて届けるニュースの通知種別。 */
+export const MORNING_TOPICS_KIND = "morning-topics";
+
 /** 通知の見出し。端末側で同じ理由の通知を上書きするための `tag` も兼ねる。 */
 const BRIEFING_TITLE = "今日の見通し";
+
+/** 朝の見通しに続けて送るニュース通知の見出し。 */
+const MORNING_TOPICS_TITLE = "今日のニュース";
 
 /**
  * `codex exec` を待つ上限（#183）。
@@ -216,6 +225,12 @@ async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
     return { userId, status: "skipped", delivered: 0, detail: `${dedupeKey} は送信済み` };
   }
 
+  // 話題の仕入れは見通しの生成と並行させる。順に待つと最大330秒となり、このRoute Handlerの
+  // 300秒上限を超える。見通しが黙る回でも仕入れだけは残るが、次に画面や定時のお知らせから使える。
+  const topicRefresh = refreshTopicsForSchedule(userId, now).catch((error) => {
+    console.error("[aide-bot] 朝のニュースの仕入れに失敗した", error);
+  });
+
   let text: string;
   try {
     text = await generateBriefing(userId);
@@ -303,6 +318,47 @@ async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
       deliveredCount: delivered,
     },
   });
+
+  // ニュースは見通しとは別の会話・別の通知で届ける。失敗しても、すでに届いた見通しの記録を
+  // 巻き戻さず、同じ日に見通しだけを再送しない。仕入れが失敗しても、残っている話題は試す。
+  await topicRefresh;
+  try {
+    const topics = await topicsForMorningBriefing(userId, SCHEDULED_PUSH_TOPIC_LIMIT, now);
+    if (topics.length > 0) {
+      const body = composeScheduledBody(topics.map((topic) => topic.title));
+      const topicsSavedAt = new Date();
+
+      await appendSecretaryExchange(conversation.id, MORNING_TOPICS_REQUEST, body, topicsSavedAt);
+
+      const topicsDelivered = await sendPushToUser(userId, {
+        title: MORNING_TOPICS_TITLE,
+        body,
+        url: "/",
+        tag: MORNING_TOPICS_KIND,
+      });
+
+      await db.notificationLog.create({
+        data: {
+          userId,
+          kind: MORNING_TOPICS_KIND,
+          dedupeKey,
+          title: MORNING_TOPICS_TITLE,
+          body,
+          conversationId: conversation.id,
+          deliveredCount: topicsDelivered,
+        },
+      });
+
+      // まとめた記事も同じ出来事なので、グループ全体へ印を付ける。以降の声かけ・定時の
+      // お知らせではこの話題を選ばない。
+      await db.topic.updateMany({
+        where: { id: { in: topics.flatMap((topic) => topic.mergedIds) } },
+        data: { spokenAt: topicsSavedAt },
+      });
+    }
+  } catch (error) {
+    console.error("[aide-bot] 朝のニュース通知に失敗した", error);
+  }
 
   return { userId, status: "sent", delivered };
 }

@@ -612,3 +612,13 @@ export async function topicsForScheduledPush(
     .slice(0, limit)
     .map(groupToRow);
 }
+
+/**
+ * 朝の見通しに続けて届ける、まだ振っていない話題。種類は問わない。
+ *
+ * 定時のお知らせと同じ選び方にすることで、同じ記事を朝のニュース・声かけ・定時のお知らせで
+ * 繰り返さない。件数の上限は呼び出し元が通知の読みやすさに合わせて決める。
+ */
+export function topicsForMorningBriefing(userId: string, limit: number, now = new Date()): Promise<TopicRow[]> {
+  return topicsForScheduledPush(userId, SCHEDULED_PUSH_ALL, limit, now);
+}

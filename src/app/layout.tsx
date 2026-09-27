@@ -9,7 +9,8 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     title: "Morrow",
-    statusBarStyle: "default",
+    // PWAでは上端までアプリ側で描画し、安全領域をヘッダー色で明示的に覆う。
+    statusBarStyle: "black-translucent",
   },
   icons: {
     icon: [

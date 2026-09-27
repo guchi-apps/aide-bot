@@ -1,6 +1,7 @@
 "use client";
 
 import { stripProposal } from "@/lib/settings-proposal";
+import { stripWriteConfirm } from "@/lib/write-confirm";
 import { ArrowUp, Mic, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -63,6 +64,9 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSin
   // 走っている往復。返答の途中で送られたときに、そこまでの返答を並べ終えるのを待つ（#48）。
   // 待たずに次の発言を足すと、遮られた返答が自分の次の発言より下に出る。
   const turnRef = useRef<Promise<void> | null>(null);
+  // 確認カードのボタン（#380）から呼ぶ送信。`EntryList` は `memo` なので渡す関数の参照を保つ（#228）。
+  const sendTextRef = useRef<(text: string) => void>(() => {});
+  const onAnswer = useCallback((text: string) => sendTextRef.current(text), []);
   // 何回目の送信か。待っているあいだにさらに割り込まれたかを見るために持つ。
   const turnSeqRef = useRef(0);
 
@@ -202,6 +206,11 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSin
     if (text === "" || text.length > MAX_MESSAGE_LENGTH) return;
 
     setInput("");
+    sendText(text);
+  }
+
+  /** 本文を送る。入力欄からの送信と、確認カードのボタン（#380）が共有する。 */
+  function sendText(text: string) {
 
     const seq = turnSeqRef.current + 1;
     turnSeqRef.current = seq;
@@ -276,6 +285,10 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSin
     voice.stop();
   }
 
+  useEffect(() => {
+    sendTextRef.current = sendText;
+  });
+
   const overLimit = input.length > MAX_MESSAGE_LENGTH;
   /*
    * 生成中の表示は、文字の往復と声の往復で同じ1か所に出す（#279）。声の往復は返答が確定した
@@ -308,7 +321,7 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSin
 
           {compactedCount > 0 && !brokeHere && !isEmpty && <CompactedNote count={compactedCount} />}
 
-          <EntryList entries={entries} todayKey={todayKey} />
+          <EntryList entries={entries} todayKey={todayKey} onAnswer={onAnswer} />
 
           {busy && (
             <div className="flex gap-3">
@@ -330,7 +343,7 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSin
                   </p>
                 ) : (
                   <>
-                    <Markdown>{stripProposal(answer)}</Markdown>
+                    <Markdown>{stripWriteConfirm(stripProposal(answer))}</Markdown>
                     <span className="sr-only">返答を受け取っています</span>
                   </>
                 )}

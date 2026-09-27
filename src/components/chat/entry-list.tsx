@@ -9,6 +9,8 @@ import { dayHeading } from "@/lib/day-key";
 import { Markdown } from "./markdown";
 import { SettingsProposalCard } from "./settings-proposal-card";
 import { extractProposal } from "@/lib/settings-proposal";
+import { extractWriteConfirm, writeConfirmStatus, type WriteConfirmStatus } from "@/lib/write-confirm";
+import { WriteConfirmCard } from "./write-confirm-card";
 import { ToolCallNote } from "./tool-call-note";
 import type { ChatEntry } from "./types";
 
@@ -31,10 +33,16 @@ import type { ChatEntry } from "./types";
 function EntryListView({
   entries: allEntries,
   todayKey,
+  onAnswer,
 }: {
   entries: ChatEntry[];
   /** サーバー側で確定させた今日の日付（`2026-09-03`）。 */
   todayKey: string;
+  /**
+   * 書き込みの確認カード（#380）のボタンが押されたときに、答えを発言として送る。**参照を保つこと**
+   * （`memo` が外れる。#228）。渡さない画面（過去の日）ではボタンを出さない。
+   */
+  onAnswer?: (text: string) => void;
 }) {
   const entries = allEntries.filter((entry) => entry.kind !== "message" || !isAutoRequest(entry.role, entry.content));
 
@@ -49,7 +57,7 @@ function EntryListView({
         return (
           <div key={entry.id} className="flex flex-col gap-6">
             {day !== previousDay && <DaySeparator heading={dayHeading(day, todayKey)} />}
-            <Entry entry={entry} />
+            <Entry entry={entry} status={writeConfirmStatus(entries, index, todayKey)} onAnswer={onAnswer} />
           </div>
         );
       })}
@@ -82,7 +90,15 @@ export function DaySeparator({ heading }: { heading: string }) {
   );
 }
 
-function Entry({ entry }: { entry: ChatEntry }) {
+function Entry({
+  entry,
+  status,
+  onAnswer,
+}: {
+  entry: ChatEntry;
+  status: WriteConfirmStatus;
+  onAnswer?: (text: string) => void;
+}) {
   if (entry.kind === "tool") return <ToolCallNote call={entry} />;
   if (entry.kind === "break") return <ContextBreakLine breakKind={entry.breakKind} time={entry.time} />;
 
@@ -96,7 +112,8 @@ function Entry({ entry }: { entry: ChatEntry }) {
     );
   }
 
-  const proposal = extractProposal(entry.content);
+  const confirm = extractWriteConfirm(entry.content);
+  const proposal = extractProposal(confirm.text);
 
   return (
     <div className="flex gap-3">
@@ -105,6 +122,7 @@ function Entry({ entry }: { entry: ChatEntry }) {
         <SecretaryLabel time={entry.time} proactive={entry.proactive} />
         <Markdown>{proposal.text}</Markdown>
         {proposal.changes.length > 0 && <SettingsProposalCard changes={proposal.changes} />}
+        {confirm.confirm && <WriteConfirmCard confirm={confirm.confirm} status={status} onAnswer={onAnswer} />}
         {entry.interrupted && <InterruptedNote />}
       </div>
     </div>

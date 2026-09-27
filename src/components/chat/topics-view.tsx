@@ -14,7 +14,7 @@ type Props = {
  * 仕入れた話題の一覧（#144）。
  *
  * `/notices` と同じくサーバーコンポーネントのまま置き、種類を選ぶ部品だけをクライアントにする。
- * 並べる順は新しい順。上段に「仕入れる種類」を置くのは、変えた効果がすぐ下の一覧で見えるため。
+ * 並べる順は新しい順。まずニュースをまとめて読めるようにし、仕入れる種類の管理は必要なときだけ開く。
  */
 export function TopicsView({ board, now }: Props) {
   const { categories: allCategories, lastFetchedAt, topics, mergedCount, bubbleLimit, lifetimeHours } = board;
@@ -24,13 +24,10 @@ export function TopicsView({ board, now }: Props) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[900px] flex-col gap-4 px-3.5 py-4 md:gap-5 md:px-7 md:py-6">
-        <section className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
-          <div className="flex items-baseline justify-between gap-3">
-            <h2 className="text-[0.8125rem] font-bold">仕入れる種類</h2>
-            <span className="text-[0.6875rem] text-muted">チェックした種類だけを、アプリを開いたときにウェブで調べます</span>
-          </div>
-          <TopicCategoryPicker initial={allCategories} />
-        </section>
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="text-base font-bold tracking-tight">いまの話題</h2>
+          <span className="text-[0.6875rem] text-muted">新しい順にまとめています</span>
+        </div>
 
         <div className="grid grid-cols-3 gap-2.5 md:gap-3">
           <Stat label="溜まっている" value={`${topics.length}`} unit="件" note={
@@ -61,7 +58,7 @@ export function TopicsView({ board, now }: Props) {
         ) : (
           <section className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
             <div className="flex items-baseline justify-between gap-3">
-              <h2 className="text-[0.8125rem] font-bold">いまの話題（{topics.length}件）</h2>
+              <h2 className="text-[0.8125rem] font-bold">ニュースをまとめて見る（{topics.length}件）</h2>
               <span className="text-[0.6875rem] text-muted">新しい順・同じ出来事はまとめて表示</span>
             </div>
             <div className="flex flex-col">
@@ -71,6 +68,33 @@ export function TopicsView({ board, now }: Props) {
             </div>
           </section>
         )}
+
+        <details className="group rounded-xl border border-border bg-surface">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3.5 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
+            <svg
+              viewBox="0 0 24 24"
+              className="size-4 shrink-0 text-accent transition-transform group-open:rotate-90"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m9 18 6-6-6-6" />
+            </svg>
+            <span className="text-[0.8125rem] font-bold">仕入れる種類</span>
+            <span className="ml-auto text-right text-[0.6875rem] text-muted">
+              {categories.length > 0 ? `${categories.length}種類を仕入れ中・管理する` : "仕入れを止めています・管理する"}
+            </span>
+          </summary>
+          <div className="border-t border-border px-4 py-3.5">
+            <p className="mb-3 text-[0.6875rem] leading-relaxed text-muted">
+              チェックした種類だけを、アプリを開いたときにウェブで調べます。
+            </p>
+            <TopicCategoryPicker initial={allCategories} />
+          </div>
+        </details>
 
         <p className="text-[0.6875rem] leading-relaxed text-muted">
           <b className="font-medium text-foreground">

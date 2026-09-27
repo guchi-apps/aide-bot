@@ -30,7 +30,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ja" className="overflow-hidden overscroll-none">
-      <body className="h-[var(--app-height)] overflow-hidden overscroll-none antialiased">{children}</body>
+      <body className="h-[var(--app-height)] overflow-hidden overscroll-none antialiased">
+        <div aria-hidden="true" className="ios-status-bar-blur-fix" />
+        {children}
+      </body>
     </html>
   );
 }

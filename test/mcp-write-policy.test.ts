@@ -20,6 +20,8 @@ test("#366で漏れていた状態変更の道具が書き込みに入ってい�
     "asset_manager_create_subscription",
     "asset_manager_add_subscription_price",
     "aide_research_desk_import_weekly_report",
+    "aide_update_event",
+    "aide_delete_event",
   ]) {
     assert.ok(aide.writeTools.includes(tool), tool);
   }

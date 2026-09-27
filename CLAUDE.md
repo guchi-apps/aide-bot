@@ -1492,6 +1492,14 @@ ops-dashboardの「アプリ別のAI利用」（ops-dashboard#325）が、`GET /
   端末（スマホ・iPad）にかぎり `font-size: 16px` を当てて塞いである。**viewportに
   `maximum-scale=1` / `user-scalable=no` を足して塞がないこと**——指での拡大そのものができなくなり、
   小さい文字を読む手段を奪う。PC側の見た目は変えていない
+- **画面の高さは `100dvh` を直書きせず `--app-height` / `--app-bottom-inset`（`globals.css`）を使う**（#379）。
+  iOSは入力欄へフォーカスすると `overflow-hidden` でもページを持ち上げ、キーボードを閉じても
+  `window.scrollY` を0へ戻さないことがあり、見出しが画面外・入力欄の下にキーボードぶんの空白が残る。
+  `100dvh` はキーボードで縮まないので、`useVisualViewportFit()`（`src/components/chat/use-visual-viewport.ts`。
+  `ChatShell` が呼ぶ）が、キーボード表示中だけ `visualViewport.height` を `--app-height` へ書き、ずれた
+  スクロールを0へ戻す。**指で拡大している間（`scale` ≠ 1）は触らない**（拡大でも高さが縮む）。
+  手元ではCDPの `Page.addScriptToEvaluateOnNewDocument` で偽の `visualViewport`（`EventTarget` に
+  `height`・`scale`）を差し込み、`resize` を投げれば配線までは確かめられる。効いたかは実機（`pnpm dev:https`）で見る
 - **localStorageの値をuseStateの初期値やuseEffectで入れない。** ESLintの
   `react-hooks/set-state-in-effect` に掛かり、ハイドレーションもずれる。
   `useSyncExternalStore`（`src/lib/speech/voice-settings.ts`）で外部ストアとして扱う

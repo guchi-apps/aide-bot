@@ -80,6 +80,21 @@ body {
   padding-bottom: var(--app-bottom-inset);
 }
 
+/* iOSのPWAが画面上端に固定ヘッダーを検出できないときの自動ぼかしを抑える（#395）。
+   透明化や非表示では判定対象から外れるため、文字のない要素の背景だけをクリップする。 */
+.ios-status-bar-blur-fix {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 11px;
+  z-index: 2147483647;
+  pointer-events: none;
+  background-color: var(--surface);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
 /*
  * 秘書の返答（Markdown）の表示。react-markdown は素のHTMLしか吐かないため、
  * Tailwindのユーティリティではなくここでまとめて当てる。生成物1つ1つにclassNameを

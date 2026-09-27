@@ -1492,6 +1492,14 @@ ops-dashboardの「アプリ別のAI利用」（ops-dashboard#325）が、`GET /
   端末（スマホ・iPad）にかぎり `font-size: 16px` を当てて塞いである。**viewportに
   `maximum-scale=1` / `user-scalable=no` を足して塞がないこと**——指での拡大そのものができなくなり、
   小さい文字を読む手段を奪う。PC側の見た目は変えていない
+- **画面の高さは `100dvh` を直書きせず `--app-height` / `--app-bottom-inset`（`globals.css`）を使う**（#379）。
+  iOSは入力欄へフォーカスすると `overflow-hidden` でもページを持ち上げ、キーボードを閉じても
+  `window.scrollY` を0へ戻さないことがあり、見出しが画面外・入力欄の下にキーボードぶんの空白が残る。
+  `100dvh` はキーボードで縮まないので、`useVisualViewportFit()`（`src/components/chat/use-visual-viewport.ts`。
+  `ChatShell` が呼ぶ）が、キーボード表示中だけ `visualViewport.height` を `--app-height` へ書き、ずれた
+  スクロールを0へ戻す。**指で拡大している間（`scale` ≠ 1）は触らない**（拡大でも高さが縮む）。
+  手元ではCDPの `Page.addScriptToEvaluateOnNewDocument` で偽の `visualViewport`（`EventTarget` に
+  `height`・`scale`）を差し込み、`resize` を投げれば配線までは確かめられる。効いたかは実機（`pnpm dev:https`）で見る
 - **localStorageの値をuseStateの初期値やuseEffectで入れない。** ESLintの
   `react-hooks/set-state-in-effect` に掛かり、ハイドレーションもずれる。
   `useSyncExternalStore`（`src/lib/speech/voice-settings.ts`）で外部ストアとして扱う
@@ -2024,6 +2032,20 @@ AIDEのREADME「認可の分離」）。#184で足したのは、その道具を
   「登録しておきました」と答えてしまう
 - **設定を変えるとプロンプトキャッシュ（#56）が切れる。** `tools` も `system` も変わるため。
   日常的に切り替えるものではないのでそのまま受け入れている
+
+### 書き込み前の確認カード（#380）
+
+**書き込み（予定・記録の追加・変更・取り消し）の前に、「許可する／拒否する」のボタンのカードを出す。**
+形は設定の変更案（#346）と同じで、返答の末尾に ```` ```write-confirm ```` の囲み（`{"title","rows":[{label,value}]}`）を
+添えさせる（`src/lib/write-confirm.ts`。プロンプトは `WRITE_CONFIRM_RULES`。**書く画面だけ**で、声は従来どおり復唱）。
+
+- **ボタンは書き込みを実行しない。** 押すと「許可します。その内容で実行してください。」／「拒否します。実行しないでください。」が
+  発言として送られるだけで、道具を呼ぶのは秘書。止める錠は#78の書き込み許可設定のまま増えていない
+- **押せるのは今日の画面で、後ろに何も続いていないカードだけ**（`writeConfirmStatus()`。純粋関数）。後ろに利用者の発言・
+  会話の区切り（#322）がある、または今日以外の日（引き継ぎ・過去の日）のカードは押せない（秘書がその内容を覚えていない）
+- 囲みを本文から除く箇所は3つ（`EntryList`・生成中の表示・「話す」の記録欄）。**新しい表示先を足したら `stripWriteConfirm()` を通す**
+- `EntryList` へ渡す `onAnswer` は参照を保つ（`sendTextRef`＋`useCallback`。#228）
+- カードを出し忘れる回は従来の文字での確認になる（モデル任せ）。実物のCodexでの出し分けは未確認
 
 ### 書き込みの記録（#81）
 

@@ -1,5 +1,6 @@
 import { AUTO_REQUEST_PREFIX } from "@/lib/auto-request";
 import { SETTINGS_PROPOSAL_RULES } from "@/lib/settings-proposal";
+import { WRITE_CONFIRM_RULES } from "@/lib/write-confirm";
 import type { ReplyStyle } from "@/lib/chat-model";
 import { jstTimeLabel, jstTodayLabel } from "@/lib/day-key";
 import { PROACTIVE_KIND_LABELS, type ProactiveKind } from "@/lib/proactive-labels";
@@ -224,6 +225,8 @@ export function secretarySystemPrompt(
     ...COMMON_RULES,
     ...SECRETARY_VOICE_RULES,
     ...connectedServiceRules(connectedLabels, connectedHints, writeToolsWithheld),
+    // 書き込みの確認（#380）。書く画面だけ、上の「復唱して確認」をカードのボタンで行わせる。声では出さない。
+    ...(style !== "voice" && connectedLabels.length > 0 && !writeToolsWithheld ? WRITE_CONFIRM_RULES : []),
     ...suggestionRules(suggestion),
     // 設定の変更案（#346）。聞き間違いがそのまま設定になりうる音声では出さない（書く画面へ案内させる）。
     ...(style === "voice" ? VOICE_SETTINGS_RULES : SETTINGS_PROPOSAL_RULES),

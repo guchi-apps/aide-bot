@@ -58,12 +58,26 @@
   --color-topic-surface: var(--topic-surface);
 }
 
+/*
+ * 画面の高さ（#379）。ふだんは100dvhで、画面キーボードが出ている間だけ
+ * `useVisualViewportFit()` が `html` のstyleへキーボードの上に残る高さを書く。
+ * キーボードがホームインジケータを覆うので、その間は下端の余白も外す。
+ */
+:root {
+  --app-height: 100dvh;
+  --app-bottom-inset: env(safe-area-inset-bottom);
+}
+
+:root[data-keyboard="open"] {
+  --app-bottom-inset: 0px;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: system-ui, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
   /* iOSでホーム画面から起動したときに、下端のホームインジケータへ内容が潜り込まないようにする。 */
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: var(--app-bottom-inset);
 }
 
 /*

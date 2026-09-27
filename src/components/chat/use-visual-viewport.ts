@@ -2,6 +2,9 @@
 
 import { useEffect } from "react";
 
+/** キーボードで表示領域が変わったことを、会話欄へ伝えるイベント名。 */
+export const KEYBOARD_VIEWPORT_CHANGE_EVENT = "morrow:keyboard-viewport-change";
+
 /**
  * 画面キーボードが出ている間だけ、画面の高さをキーボードの上に残る範囲へ縮める（#379）。
  *
@@ -29,12 +32,17 @@ export function useVisualViewportFit() {
 
     const apply = () => {
       frame = 0;
-      if (Math.abs(viewport.scale - 1) > 0.01) return;
+      if (!shouldApplyVisualViewport(viewport.scale)) return;
 
-      const keyboardOpen = window.innerHeight - viewport.height > KEYBOARD_MIN_HEIGHT;
+      const keyboardOpen = isKeyboardOpen(window.innerHeight, viewport.height);
       if (keyboardOpen) {
-        root.style.setProperty("--app-height", `${Math.round(viewport.height)}px`);
+        const height = `${Math.round(viewport.height)}px`;
+        const changed = root.style.getPropertyValue("--app-height") !== height;
+        root.style.setProperty("--app-height", height);
         root.dataset.keyboard = "open";
+        // 高さだけを変えても会話欄のスクロール位置はそのまま残る。キーボードによる変化の回だけ
+        // 末尾へ寄せ、最新の対話が押し出されないようにする（#385）。
+        if (changed) window.dispatchEvent(new Event(KEYBOARD_VIEWPORT_CHANGE_EVENT));
       } else {
         root.style.removeProperty("--app-height");
         delete root.dataset.keyboard;
@@ -68,3 +76,13 @@ export function useVisualViewportFit() {
  * キーボードと取り違えないため。
  */
 const KEYBOARD_MIN_HEIGHT = 120;
+
+/** Safariのツールバー程度の縮みは、キーボードとして扱わない。 */
+export function isKeyboardOpen(layoutHeight: number, visualHeight: number) {
+  return layoutHeight - visualHeight > KEYBOARD_MIN_HEIGHT;
+}
+
+/** 指で拡大している間は、キーボード表示と取り違えない。 */
+export function shouldApplyVisualViewport(scale: number) {
+  return Math.abs(scale - 1) <= 0.01;
+}

@@ -26,6 +26,7 @@ import { useChatStream } from "./use-chat-stream";
 import { useLocalEntries } from "./use-local-entries";
 import { useNudges, type NudgeMessage } from "./use-nudge";
 import { useThrottledText } from "./use-throttled-text";
+import { KEYBOARD_VIEWPORT_CHANGE_EVENT } from "./use-visual-viewport";
 import { VoiceBar } from "./voice-bar";
 
 type Props = {
@@ -111,6 +112,23 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSin
     firstScrollRef.current = false;
     bottomRef.current?.scrollIntoView({ behavior, block: "end" });
   }, [entries, answer, status, voice.status]);
+
+  useEffect(() => {
+    let frame = 0;
+    const keepLatestVisible = () => {
+      // CSS変数による高さ変更が反映された後に動かす。先に動かすと、縮む前の会話欄の末尾で止まる。
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        bottomRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+      });
+    };
+
+    window.addEventListener(KEYBOARD_VIEWPORT_CHANGE_EVENT, keepLatestVisible);
+    return () => {
+      window.removeEventListener(KEYBOARD_VIEWPORT_CHANGE_EVENT, keepLatestVisible);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, []);
 
   /**
    * 秘書から話しかけてきた発言を流れの末尾へ足す（#278）。
@@ -488,4 +506,3 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSin
     </div>
   );
 }
-

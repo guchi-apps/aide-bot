@@ -1,8 +1,8 @@
-import { topicCategoryShort, type TopicCategory } from "@/lib/topic-categories";
-import type { TopicBoard, TopicRow } from "@/lib/topics";
-import { cn } from "@/lib/utils";
+import { jstTimeLabel } from "@/lib/day-key";
+import type { TopicBoard } from "@/lib/topics";
 
 import { TopicCategoryPicker } from "./topic-category-picker";
+import { TopicTabs } from "./topic-tabs";
 
 type Props = {
   board: TopicBoard;
@@ -13,60 +13,37 @@ type Props = {
 /**
  * 仕入れた話題の一覧（#144）。
  *
- * `/notices` と同じくサーバーコンポーネントのまま置き、種類を選ぶ部品だけをクライアントにする。
- * 並べる順は新しい順。まずニュースをまとめて読めるようにし、仕入れる種類の管理は必要なときだけ開く。
+ * `/notices` と同じくサーバーコンポーネントのまま置き、テーマ別タブ・種類を選ぶ部品だけを
+ * クライアントにする（#404）。並べる順は新しい順。まずニュースをまとめて読めるようにし、
+ * 仕入れる種類の管理は必要なときだけ開く。
  */
 export function TopicsView({ board, now }: Props) {
-  const { categories: allCategories, lastFetchedAt, topics, mergedCount, bubbleLimit, lifetimeHours } = board;
+  const { categories, lastFetchedAt, topics, byCategory, mergedCount, bubbleLimit, lifetimeHours } = board;
 
-  const categories = allCategories.filter((category) => category.enabled);
+  const enabledCategories = categories.filter((category) => category.enabled);
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[900px] flex-col gap-4 px-3.5 py-4 md:gap-5 md:px-7 md:py-6">
         <div className="flex items-baseline justify-between gap-3">
           <h2 className="text-base font-bold tracking-tight">いまの話題</h2>
-          <span className="text-[0.6875rem] text-muted">新しい順にまとめています</span>
-        </div>
-
-        <div className="grid grid-cols-3 gap-2.5 md:gap-3">
-          <Stat label="溜まっている" value={`${topics.length}`} unit="件" note={
-              mergedCount > 0
-                ? `同じ出来事${mergedCount}件を1件にまとめて表示`
-                : `仕入れてから${lifetimeHours}時間で入れ替わる`
-            } highlighted />
-          <Stat
-            label="最後に仕入れた"
-            value={lastFetchedAt ? timeLabel(lastFetchedAt) : "—"}
-            note={
-              lastFetchedAt
-                ? `${elapsedLabel(lastFetchedAt, now)}。次は1時間あけて、画面を開いたとき`
-                : categories.length === 0
-                  ? "仕入れを止めています"
-                  : "「話す」画面を開くと仕入れます"
-            }
-          />
-          <Stat label="吹き出しに出す" value={`${Math.min(bubbleLimit, topics.length)}`} unit="件" note={`新しい順に、輪へ最大${bubbleLimit}枠`} />
+          <span className="text-[0.6875rem] text-muted">
+            {lastFetchedAt
+              ? `最終取得 ${jstTimeLabel(lastFetchedAt)}（${elapsedLabel(lastFetchedAt, now)}）`
+              : enabledCategories.length === 0
+                ? "仕入れを止めています"
+                : "「話す」画面を開くと仕入れます"}
+          </span>
         </div>
 
         {topics.length === 0 ? (
           <p className="rounded-xl border border-border bg-surface px-4 py-3 text-xs leading-relaxed text-muted">
-            {categories.length === 0
-              ? "仕入れを止めています。上の種類を1つ以上チェックすると、次に「話す」画面を開いたときに仕入れます。"
+            {enabledCategories.length === 0
+              ? "仕入れを止めています。下の種類を1つ以上チェックすると、次に「話す」画面を開いたときに仕入れます。"
               : "まだ話題がありません。「話す」画面を開くと仕入れが始まり、30秒ほどで並びます（画面は読み込み直してください）。"}
           </p>
         ) : (
-          <section className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
-            <div className="flex items-baseline justify-between gap-3">
-              <h2 className="text-[0.8125rem] font-bold">ニュースをまとめて見る（{topics.length}件）</h2>
-              <span className="text-[0.6875rem] text-muted">新しい順・同じ出来事はまとめて表示</span>
-            </div>
-            <div className="flex flex-col">
-              {topics.map((topic) => (
-                <TopicArticle key={topic.id} topic={topic} categories={allCategories} />
-              ))}
-            </div>
-          </section>
+          <TopicTabs categories={categories} allTopics={topics} byCategory={byCategory} mergedCount={mergedCount} />
         )}
 
         <details className="group rounded-xl border border-border bg-surface">
@@ -85,14 +62,14 @@ export function TopicsView({ board, now }: Props) {
             </svg>
             <span className="text-[0.8125rem] font-bold">仕入れる種類</span>
             <span className="ml-auto text-right text-[0.6875rem] text-muted">
-              {categories.length > 0 ? `${categories.length}種類を仕入れ中・管理する` : "仕入れを止めています・管理する"}
+              {enabledCategories.length > 0 ? `${enabledCategories.length}種類を仕入れ中・管理する` : "仕入れを止めています・管理する"}
             </span>
           </summary>
           <div className="border-t border-border px-4 py-3.5">
             <p className="mb-3 text-[0.6875rem] leading-relaxed text-muted">
               チェックした種類だけを、アプリを開いたときにウェブで調べます。
             </p>
-            <TopicCategoryPicker initial={allCategories} />
+            <TopicCategoryPicker initial={categories} />
           </div>
         </details>
 
@@ -107,142 +84,6 @@ export function TopicsView({ board, now }: Props) {
       </div>
     </div>
   );
-}
-
-/** 上段の数え札。`/notices` の `Stat` と同じ形。 */
-function Stat({
-  label,
-  value,
-  unit,
-  note,
-  highlighted = false,
-}: {
-  label: string;
-  value: string;
-  unit?: string;
-  note: string;
-  highlighted?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        "flex flex-col gap-0.5 rounded-xl border border-border bg-surface px-2.5 py-3 md:px-4 md:py-3.5",
-        highlighted && "border-accent/45 bg-accent-surface",
-      )}
-    >
-      <div className="text-[0.6875rem] font-bold tracking-[0.1em] text-muted">{label}</div>
-      <div className="flex items-baseline gap-1 tabular-nums">
-        <b className="text-[1.375rem] font-bold leading-tight tracking-tight md:text-[1.625rem]">{value}</b>
-        {unit && <span className="text-[0.8125rem] text-muted">{unit}</span>}
-      </div>
-      <div className="text-[0.6875rem] leading-relaxed text-muted">{note}</div>
-    </div>
-  );
-}
-
-/**
- * 1件ぶん。見出し（出典へのリンク）・要点・秘書の一言・媒体の4段。
- *
- * 見出しと「開く」を1つのリンクにまとめる（`/notices` の `Title` と同じ理由）。出典は外部の
- * 記事なので常に新しいタブで開く。
- */
-function TopicArticle({ topic, categories }: { topic: TopicRow; categories: TopicCategory[] }) {
-  const meta = [topic.sourceName, topic.publishedOn].filter((part) => part !== "");
-
-  return (
-    <article className="flex flex-col gap-1 border-b border-border py-2.5 first:pt-0 last:border-b-0 last:pb-0">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="shrink-0 rounded-full bg-topic-surface px-2 py-0.5 text-[0.625rem] font-bold tracking-wider text-topic">
-          {topicCategoryShort(categories, topic.category)}
-        </span>
-        {topic.url ? (
-          <a
-            href={topic.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={`${topic.title}の記事を開く`}
-            className="inline-flex flex-wrap items-center gap-1.5 no-underline"
-          >
-            <span className="text-sm font-semibold underline decoration-accent/55 underline-offset-4">{topic.title}</span>
-            <span className="inline-flex shrink-0 items-center gap-1 text-[0.6875rem] font-bold text-accent">
-              開く
-              <svg
-                viewBox="0 0 24 24"
-                className="size-2.5"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M7 17 17 7" />
-                <path d="M9 7h8v8" />
-              </svg>
-            </span>
-          </a>
-        ) : (
-          <span className="text-sm font-semibold">{topic.title}</span>
-        )}
-        {/* PCでは右端へ寄せ、スマホでは折り返して次の行の先頭へ落とす。 */}
-        <span className="w-full shrink-0 text-[0.6875rem] tabular-nums text-muted md:ml-auto md:w-auto">
-          {timeLabel(topic.fetchedAt)}に仕入れました
-        </span>
-      </div>
-      <p className="m-0 text-[0.8125rem] leading-relaxed">{topic.summary}</p>
-      {/* 吹き出しに出る一言。要約と見分けるため、引用の形にする。 */}
-      <p className="m-0 border-l-2 border-topic/60 pl-2.5 text-[0.8125rem] leading-relaxed">
-        <span className="mr-1.5 text-[0.625rem] tracking-wider text-muted">秘書の一言</span>
-        {topic.lead}
-      </p>
-      {(meta.length > 0 || topic.alsoReported.length > 0) && (
-        <div className="flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-muted">
-          {topic.alsoReported.length > 0 && (
-            <span className="rounded-md bg-accent-surface px-2 py-0.5 font-bold text-accent">
-              {topic.alsoReported.length + 1}社が報道
-            </span>
-          )}
-          {meta.map((part, index) => (
-            <span key={part + index}>
-              {index > 0 && <span className="mr-1.5 opacity-50">・</span>}
-              {part}
-            </span>
-          ))}
-        </div>
-      )}
-      {topic.alsoReported.length > 0 && (
-        <div className="mt-0.5 flex flex-col gap-1 rounded-lg border border-dashed border-border px-2.5 py-2 text-xs">
-          <span className="text-[0.6875rem] text-muted">同じ出来事の他の記事</span>
-          {topic.alsoReported.map((other, index) => (
-            <div key={(other.url ?? other.title) + index} className="flex flex-col gap-0.5">
-              {other.url ? (
-                <a
-                  href={other.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline decoration-muted underline-offset-[3px]"
-                >
-                  {other.title}
-                </a>
-              ) : (
-                <span>{other.title}</span>
-              )}
-              {other.sourceName !== "" && <span className="text-[0.6875rem] text-muted">{other.sourceName}</span>}
-            </div>
-          ))}
-        </div>
-      )}
-    </article>
-  );
-}
-
-/** 日本時間の時刻（`12:40`）。 */
-function timeLabel(date: Date): string {
-  return new Intl.DateTimeFormat("ja-JP", {
-    timeZone: "Asia/Tokyo",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
 }
 
 /** 「3分前」「2時間前」。 */

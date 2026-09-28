@@ -455,6 +455,22 @@ body {
   }
 }
 
+/* 話題のテーマ別タブ（#404）。切り替えたときの短いフェード。 */
+.topic-tab-fade {
+  animation: topic-tab-fade 0.18s ease-out both;
+}
+
+@keyframes topic-tab-fade {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /*
  * 動きを減らす設定の端末では、立ち絵の揺れとフェードを止める（絵の差し替えだけにする）。
  * 状態は文言（「はい、聞いていますよ」等）でも出しているため、止めても何が起きているかは分かる。
@@ -476,7 +492,8 @@ body {
   .ind-pulse,
   .ind-spin,
   .ind-dots > span,
-  .ind-bars > span {
+  .ind-bars > span,
+  .topic-tab-fade {
     animation: none !important;
   }
 }

@@ -27,6 +27,15 @@ export type TopicCategory = {
 /** 種類の数の上限。1種類ごとに仕入れる記事が増え、1回の検索が重くなる（`topics.ts`）。 */
 export const MAX_TOPIC_CATEGORIES = 8;
 
+/**
+ * 削除済み（利用者の種類一覧に無い）テーマの話題を束ねる`TopicBoard.byCategory`のキー（#404）。
+ *
+ * `topics.ts` はサーバー専用（Prisma・Codexの起動に触れる）なので値をそちらへは置けない
+ * ——テーマ別タブ（クライアント部品）がこの値を読むため、ここ（クライアントからもimportする
+ * モジュール）に置く。
+ */
+export const OTHER_CATEGORY_ID = "other";
+
 export const TOPIC_LABEL_MAX = 30;
 export const TOPIC_SHORT_MAX = 12;
 export const TOPIC_SCOPE_MAX = 200;

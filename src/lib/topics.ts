@@ -10,7 +10,7 @@ import { SCHEDULED_PUSH_ALL } from "@/lib/scheduled-push-rule";
 import { groupDuplicateTopics, unspokenGroups, type TopicGroup } from "@/lib/topic-dedupe";
 import { SECRETARY_INTRO, SECRETARY_VOICE_RULES } from "@/lib/persona";
 import { listTopicCategories } from "@/lib/topic-category-store";
-import type { TopicCategory } from "@/lib/topic-categories";
+import { OTHER_CATEGORY_ID, type TopicCategory } from "@/lib/topic-categories";
 
 /**
  * 話題（#144）。**サーバー専用。**
@@ -122,9 +122,23 @@ export type TopicBoard = {
   categories: TopicCategory[];
   /** 最後に仕入れた時刻。まだ一度も無ければnull。 */
   lastFetchedAt: Date | null;
-  /** 期間内の話題（新しい順）。同じ出来事の記事は1件にまとめてある（#362）。 */
+  /** 期間内の話題（新しい順）。同じ出来事の記事は1件にまとめてある（#362）。「すべて」タブ用。 */
   topics: TopicRow[];
-  /** 重複としてまとめた記事の数（画面の注記に使う）。 */
+  /**
+   * テーマ別タブ用（#404）。キーは種類の`id`（削除済みの種類は`OTHER_CATEGORY_ID`）。
+   *
+   * **`topics`から`row.category`で絞り込まない。** 重複統合（`groupDuplicateTopics()`）は
+   * 見出し・要点の類似度だけで判定しテーマを見ないため、`topics`はテーマをまたいで統合済み——
+   * 代表記事（`primary`）が選ばれたテーマ以外は`alsoReported`側に埋もれ、`row.category`だけで
+   * 絞るとそのテーマのタブから記事ごと消える。ここではテーマごとに生の`Topic[]`を絞り込んでから
+   * 個別に`groupDuplicateTopics()`を通し直すので、同じ出来事が複数のテーマで報じられていれば
+   * それぞれのタブに独立して現れる（「すべて」では二重に見せない）。
+   *
+   * 無効化した種類でも、その種類の話題が現存すればキーを持つ（無効かつ話題も無い種類は持たない）。
+   * 削除済み（`categories`に無い）テーマの話題は、該当があるときだけ`OTHER_CATEGORY_ID`へ入る。
+   */
+  byCategory: Record<string, TopicRow[]>;
+  /** 重複としてまとめた記事の数（画面の注記に使う。「すべて」タブの分だけ）。 */
   mergedCount: number;
   /** 吹き出しへ回している件数の上限。画面の注記に使う。 */
   bubbleLimit: number;
@@ -249,10 +263,21 @@ export async function topicBoard(userId: string, now = new Date()): Promise<Topi
 
   const groups = groupDuplicateTopics(topics);
 
+  const knownIds = new Set(categories.map((category) => category.id));
+  const byCategory: Record<string, TopicRow[]> = {};
+  for (const category of categories) {
+    const inCategory = topics.filter((topic) => topic.category === category.id);
+    if (!category.enabled && inCategory.length === 0) continue; // 空の無効テーマにタブは作らない。
+    byCategory[category.id] = groupDuplicateTopics(inCategory).map(groupToRow);
+  }
+  const other = topics.filter((topic) => !knownIds.has(topic.category));
+  if (other.length > 0) byCategory[OTHER_CATEGORY_ID] = groupDuplicateTopics(other).map(groupToRow);
+
   return {
     categories,
     lastFetchedAt: latest?.fetchedAt ?? null,
     topics: groups.map(groupToRow),
+    byCategory,
     mergedCount: topics.length - groups.length,
     bubbleLimit: TOPIC_BUBBLE_LIMIT,
     lifetimeHours: TOPIC_LIFETIME_MS / (60 * 60 * 1000),

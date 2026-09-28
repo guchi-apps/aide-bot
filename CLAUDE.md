@@ -670,6 +670,20 @@ Claudeを呼ぶ場所は1つも無い**。移せるようになったのは#131�
 - **`wakeTokenUsedAt` は受け付けなかった回も進める。** 画面から読みたいのは「ショートカットが届いて
   いるか」で、下限より前・送信済みで断った回もそこには含まれる
 
+## 共有トークンから認証値を取る（#403）
+
+**`NOTICE_INGEST_TOKEN`（受ける側。aide・research-deskから届く）と `OPS_API_TOKEN`（ops-dashboardから届く）は、
+issue-deckの共有トークンAPIから実行時に取る**（`src/lib/shared-token.ts`。共有トークン名は
+`AIDE_BOT_NOTICE_INGEST_TOKEN` / `OPS_API_TOKEN`）。1Passwordからの複製をやめる「方式A」。
+
+- **取れなければ従来の環境変数へフォールバックする**（`sharedTokenOrEnv()`）。キャッシュ10分・タイムアウト5秒・
+  失敗時は古くても直前の値。`SHARED_TOKEN_API_SECRET` と `ISSUE_DECK_URL`（deploy.ymlでorganization変数
+  `APP_BASE_URL` から渡す）の両方があるときだけ取りに行く
+- **フォールバックは画面から見えない。** 本番のデプロイ後は、issue-deckの設定画面で各共有トークンの利用元に
+  `aide-bot` が出ることを必ず確かめる（出なければsecret・変数が未登録のままフォールバックしている）。
+  取れなかった回は `console.warn` にも残る
+- 値・Bearerはログに出さない。`isNoticeIngestAuthorized()` は非同期になった（呼ぶ側は `await`）
+
 ## お知らせの受け皿と、秘書の吹き出し（#93）
 
 **各アプリが「利用者に知らせたいこと」を `Notice` へ積み、秘書が「話す」画面で待っている間に

@@ -32,7 +32,7 @@ export function TopicsView({ board, now }: Props) {
               ? `最終取得 ${jstTimeLabel(lastFetchedAt)}（${elapsedLabel(lastFetchedAt, now)}）`
               : enabledCategories.length === 0
                 ? "仕入れを止めています"
-                : "まだ仕入れていません"}
+                : "「話す」画面を開くと仕入れます"}
           </span>
         </div>
 

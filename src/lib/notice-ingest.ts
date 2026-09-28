@@ -1,21 +1,17 @@
-import { timingSafeEqual } from "node:crypto";
-
 import { NoticePriority } from "@prisma/client";
 
+import { hasValidBearer } from "@/lib/bearer-auth";
 import { safeNoticeUrl } from "@/lib/notice-url";
 import type { NoticeInput } from "@/lib/notices";
+import { sharedTokenOrEnv } from "@/lib/shared-token";
 
-/** 外部の無人実行経路からお知らせを受け取るための共有認証。 */
-export function isNoticeIngestAuthorized(request: Request): boolean {
-  const expected = process.env.NOTICE_INGEST_TOKEN ?? "";
-  if (expected === "") return false;
-
-  const header = request.headers.get("authorization") ?? "";
-  if (!header.startsWith("Bearer ")) return false;
-
-  const actual = Buffer.from(header.slice("Bearer ".length));
-  const expectedBuffer = Buffer.from(expected);
-  return actual.length === expectedBuffer.length && timingSafeEqual(actual, expectedBuffer);
+/**
+ * 外部の無人実行経路からお知らせを受け取るための共有認証。
+ * 値は共有トークン `AIDE_BOT_NOTICE_INGEST_TOKEN` を正とし、取れなければ `NOTICE_INGEST_TOKEN`（#403）。
+ */
+export async function isNoticeIngestAuthorized(request: Request): Promise<boolean> {
+  const expected = await sharedTokenOrEnv("AIDE_BOT_NOTICE_INGEST_TOKEN", process.env.NOTICE_INGEST_TOKEN);
+  return hasValidBearer(request.headers.get("authorization"), expected);
 }
 
 const LIMITS = { source: 40, kind: 40, dedupeKey: 120, url: 500 } as const;

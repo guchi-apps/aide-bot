@@ -114,6 +114,8 @@ jobs:
       BRIEFING_TRIGGER_TOKEN: ${{ secrets.BRIEFING_TRIGGER_TOKEN }}
       NOTICE_INGEST_TOKEN: ${{ secrets.NOTICE_INGEST_TOKEN }}
       OPS_API_TOKEN: ${{ secrets.OPS_API_TOKEN }}
+      SHARED_TOKEN_API_SECRET: ${{ secrets.SHARED_TOKEN_API_SECRET }}
+      ISSUE_DECK_URL: ${{ vars.APP_BASE_URL }}
       NOTION_API_TOKEN: ${{ secrets.NOTION_API_TOKEN }}
       TASK_API_TOKEN: ${{ secrets.TASK_API_TOKEN }}
 
@@ -197,6 +199,8 @@ jobs:
       BRIEFING_TRIGGER_TOKEN: ${{ secrets.BRIEFING_TRIGGER_TOKEN }}
       NOTICE_INGEST_TOKEN: ${{ secrets.NOTICE_INGEST_TOKEN }}
       OPS_API_TOKEN: ${{ secrets.OPS_API_TOKEN }}
+      SHARED_TOKEN_API_SECRET: ${{ secrets.SHARED_TOKEN_API_SECRET }}
+      ISSUE_DECK_URL: ${{ vars.APP_BASE_URL }}
       NOTION_API_TOKEN: ${{ secrets.NOTION_API_TOKEN }}
       TASK_API_TOKEN: ${{ secrets.TASK_API_TOKEN }}
 
@@ -247,6 +251,8 @@ jobs:
           BRIEFING_TRIGGER_TOKEN: ${{ env.BRIEFING_TRIGGER_TOKEN }}
           NOTICE_INGEST_TOKEN: ${{ env.NOTICE_INGEST_TOKEN }}
           OPS_API_TOKEN: ${{ env.OPS_API_TOKEN }}
+          SHARED_TOKEN_API_SECRET: ${{ env.SHARED_TOKEN_API_SECRET }}
+          ISSUE_DECK_URL: ${{ env.ISSUE_DECK_URL }}
           NOTION_API_TOKEN: ${{ env.NOTION_API_TOKEN }}
           TASK_API_TOKEN: ${{ env.TASK_API_TOKEN }}
           TARGET_DIR: ${{ env.TARGET_DIR }}
@@ -256,7 +262,7 @@ jobs:
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: ${{ env.SSH_PORT }}
           # ここに無い変数はSSH先に存在しない。env: と同じ名前を必ず並べる。
-          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,ALLOWED_GOOGLE_EMAILS,VAPID_PUBLIC_KEY,VAPID_PRIVATE_KEY,BRIEFING_TRIGGER_TOKEN,NOTICE_INGEST_TOKEN,OPS_API_TOKEN,NOTION_API_TOKEN,TASK_API_TOKEN,TARGET_DIR
+          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,ALLOWED_GOOGLE_EMAILS,VAPID_PUBLIC_KEY,VAPID_PRIVATE_KEY,BRIEFING_TRIGGER_TOKEN,NOTICE_INGEST_TOKEN,OPS_API_TOKEN,SHARED_TOKEN_API_SECRET,ISSUE_DECK_URL,NOTION_API_TOKEN,TASK_API_TOKEN,TARGET_DIR
           script: |
             set -euo pipefail
             cd "${TARGET_DIR}"
@@ -296,6 +302,9 @@ jobs:
             # ops-dashboardのアプリ別のAI利用（#297）。空だと GET /api/ai-usage が401で閉じた
             # ままになり、ops-dashboardの画面はこのアプリを「取得不可」と出す。
             update_env OPS_API_TOKEN "$OPS_API_TOKEN"
+            # 共有トークンAPI（#403）。空だと共有トークンを取れず、上の2つの環境変数へのフォールバックで動く。
+            update_env SHARED_TOKEN_API_SECRET "$SHARED_TOKEN_API_SECRET"
+            update_env ISSUE_DECK_URL "$ISSUE_DECK_URL"
             # Notionのタスク管理API・MCP（#373）。空だと /api/tasks とタスクのMCPツールが503で閉じたままになる。
             update_env NOTION_API_TOKEN "$NOTION_API_TOKEN"
             update_env TASK_API_TOKEN "$TASK_API_TOKEN"

@@ -7,7 +7,7 @@
 ## アプリ概要
 
 NotionやAIDE（`guchi-apps/aide`）などを参照し、チャットボットでプライベートを補佐するPWA。
-**利用者に見える名前は Morrow（#340。旧「秘書アプリ」）。** リポジトリ名・URL・DB名・環境変数・Cookie名・PM2名は `aide-bot` のまま変えない。秘書の呼び名（「秘書」）と会話文はこの名称変更の対象外。
+**利用者に見える名前は Morrow（#340。旧「秘書アプリ」）。** URL・DB名・環境変数・Cookie名・PM2名は `aide-bot` のまま変えない（リポジトリ名は #414 で `guchi-apps/morrow` へ変更した）。秘書の呼び名（「秘書」）と会話文はこの名称変更の対象外。
 
 | 項目 | 値 |
 |---|---|
@@ -2387,7 +2387,7 @@ aide-botでは build ジョブの「Construct DATABASE_URL」が
    （`target-dir` は `/home/github-user/apps/aide-bot`、`db-name` は `app_aide_bot`）
 3. `eval $(op signin)` の後に `scripts/sync-github-secrets.sh --dry-run` → 本実行。
    **個人アカウントで実行する**（サービスアカウントは日次1,000リクエストの共有枠を消費する）
-4. `gh api repos/guchi-apps/aide-bot/actions/secrets --jq .total_count` で登録件数を確かめてから
+4. `gh api repos/guchi-apps/morrow/actions/secrets --jq .total_count` で登録件数を確かめてから
    Deploy to Production を再実行する
 
 **secretを埋めてもまだ公開はされない。** `deploy.yml` のヘルスチェックはVPS内の
@@ -2613,9 +2613,9 @@ runそのものは `completed` / `failure` になるのに、`lint-and-build` �
 - **見分け方は「runは終わっているのにジョブが0件」**。ログが無いので `--log-failed` では何も出ない
 
   ```bash
-  gh api repos/guchi-apps/aide-bot/actions/runs/<runID> --jq '{status, conclusion}'   # completed / failure
-  gh api repos/guchi-apps/aide-bot/actions/runs/<runID>/jobs --jq .total_count        # 0
-  gh api repos/guchi-apps/aide-bot/commits/<PRのheadSHA>/check-runs \
+  gh api repos/guchi-apps/morrow/actions/runs/<runID> --jq '{status, conclusion}'   # completed / failure
+  gh api repos/guchi-apps/morrow/actions/runs/<runID>/jobs --jq .total_count        # 0
+  gh api repos/guchi-apps/morrow/commits/<PRのheadSHA>/check-runs \
     --jq '.check_runs[] | select(.status != "completed") | .name'                     # lint-and-build
   ```
 
@@ -2630,7 +2630,7 @@ runそのものは `completed` / `failure` になるのに、`lint-and-build` �
   まずこれを使う。check runはブランチ先端のSHA（＝PRのhead）に付くため、必須チェックも満たせる
 
   ```bash
-  gh workflow run ci.yml --repo guchi-apps/aide-bot --ref issue-<番号>
+  gh workflow run ci.yml --repo guchi-apps/morrow --ref issue-<番号>
   ```
 
 - それでも駄目なら**PRをclose → reopen**する（`pull_request: reopened` でCIが走る）。

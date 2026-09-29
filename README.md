@@ -1,7 +1,7 @@
-# aide-bot
+# Morrow（aide-bot）
 
 **Morrow（モロー）** — NotionやAIDEなどを参照し、チャットボットでプライベートを補佐するPWA。
-利用者に見える名前は Morrow で、リポジトリ名・URL・DB名・環境変数などの内部識別子は `aide-bot` のまま。
+利用者に見える名前は Morrow で、リポジトリ名は `guchi-apps/morrow`（#414）、URL・DB名・環境変数などの内部識別子は `aide-bot` のまま。
 
 | 項目 | 値 |
 |---|---|

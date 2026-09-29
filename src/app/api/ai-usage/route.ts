@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { buildAiUsageReport } from "@/lib/ai-usage-report";
 import { hasValidBearer } from "@/lib/bearer-auth";
+import { sharedTokenOrEnv } from "@/lib/shared-token";
 import { aiUsageGroups } from "@/lib/usage";
 
 /**
@@ -9,7 +10,7 @@ import { aiUsageGroups } from "@/lib/usage";
  *
  * **ops-dashboardのサーバーが読みにくる口。** ログイン判定は挟まない（呼び出し元にCookieも
  * Supabaseのセッションも無い）。代わりに `Authorization: Bearer <OPS_API_TOKEN>` で守る。
- * 値の正はops-dashboard側の `OPS_API_TOKEN` で、ほかのアプリの読み取り口と同じ検証。
+ * 値は共有トークン `OPS_API_TOKEN`（issue-deck）を正とし、取れなければ環境変数 `OPS_API_TOKEN`（#403）。
  *
  * **`OPS_API_TOKEN` が未設定なら、この経路ごと401で閉じる。** 未設定と値の違いは区別して
  * 返さない（`/api/briefing` と同じ。外から設定状況を探れないようにする）。
@@ -23,7 +24,8 @@ export const dynamic = "force-dynamic";
 const NO_STORE = { "Cache-Control": "no-store" };
 
 export async function GET(request: Request) {
-  if (!hasValidBearer(request.headers.get("authorization"), process.env.OPS_API_TOKEN)) {
+  const expected = await sharedTokenOrEnv("OPS_API_TOKEN", process.env.OPS_API_TOKEN);
+  if (!hasValidBearer(request.headers.get("authorization"), expected)) {
     return NextResponse.json({ error: "認証が必要です。" }, { status: 401, headers: NO_STORE });
   }
 

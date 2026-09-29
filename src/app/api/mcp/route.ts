@@ -259,7 +259,7 @@ export async function POST(request: Request) {
   // トークンは用途で分ける。`NOTICE_INGEST_TOKEN` は外部の呼び出し元へ配ってある値で、これでNotionのタスクの
   // 更新・削除まで通すと、1か所から漏れただけでタスクを消せる（#373の計画レビュー）。タスクのツールは
   // `TASK_API_TOKEN` だけで通し、お知らせのツールは `NOTICE_INGEST_TOKEN` だけで通す。**2つを同じ値にしない**。
-  const noticeAllowed = isNoticeIngestAuthorized(request);
+  const noticeAllowed = await isNoticeIngestAuthorized(request);
   const taskAllowed = hasValidBearer(request.headers.get("authorization"), process.env.TASK_API_TOKEN);
   if (!noticeAllowed && !taskAllowed) return NextResponse.json({ error: "認証が必要です。" }, { status: 401 });
 

@@ -35,7 +35,7 @@ import { isNoticeIngestAuthorized, parseNoticeInput } from "@/lib/notice-ingest"
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  if (!isNoticeIngestAuthorized(request)) {
+  if (!(await isNoticeIngestAuthorized(request))) {
     // 未設定なのか値が違うのかを区別して返さない。外から設定状況を探れないようにする。
     return NextResponse.json({ error: "認証が必要です。" }, { status: 401 });
   }

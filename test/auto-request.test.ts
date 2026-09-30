@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { MORNING_BRIEFING_REQUEST, MORNING_TOPICS_REQUEST, URGENT_NOTICE_REQUEST } from "@/lib/anthropic";
-import { AUTO_REQUEST_PREFIX, isAutoRequest } from "@/lib/auto-request";
+import { AUTO_REQUEST_PREFIX, isAutoRequest, markAutoReplies } from "@/lib/auto-request";
 import { jstTimeLabel } from "@/lib/day-key";
 
 describe("isAutoRequest", () => {
@@ -58,5 +58,38 @@ describe("jstTimeLabel", () => {
   it("UTCの日付をまたいでも日本時間で作る", () => {
     // UTCではまだ前日の23:59。日本時間では翌日の08:59。
     assert.equal(jstTimeLabel(new Date("2026-09-19T23:59:00Z")), "08:59");
+  });
+});
+
+describe("markAutoReplies（#422）", () => {
+  const user = (content: string) => ({ role: "USER" as const, content, proactive: false });
+  const reply = (content: string, proactive = false) => ({ role: "ASSISTANT" as const, content, proactive });
+  const flags = (list: { proactive: boolean }[]) => list.map((m) => m.proactive);
+
+  it("自動の依頼文の直後の返答にだけ印を立てる", () => {
+    const list = [user(MORNING_BRIEFING_REQUEST), reply("見通し"), user("ありがとう"), reply("どういたしまして")];
+    assert.deepEqual(flags(markAutoReplies(list)), [false, true, false, false]);
+  });
+
+  it("依頼文と返答のあいだに別の発言があれば付けない", () => {
+    const list = [user(MORNING_TOPICS_REQUEST), user("割り込み"), reply("返答")];
+    assert.deepEqual(flags(markAutoReplies(list)), [false, false, false]);
+  });
+
+  it("範囲の直前の1件が依頼文なら、先頭の返答に付ける（引き継ぎ・日付の境目）", () => {
+    assert.deepEqual(flags(markAutoReplies([reply("見通し")], user(URGENT_NOTICE_REQUEST))), [true]);
+    assert.deepEqual(flags(markAutoReplies([reply("返答")], user("ふつうの発言"))), [false]);
+    assert.deepEqual(flags(markAutoReplies([reply("返答")], null)), [false]);
+  });
+
+  it("すでに立っている印（声かけ #278）は保ち、元の配列は書き換えない", () => {
+    const list = [reply("声かけ", true), user("前置き無し"), reply("返答")];
+    const marked = markAutoReplies(list);
+    assert.deepEqual(flags(marked), [true, false, false]);
+    assert.equal(marked[0], list[0]);
+
+    const auto = [user(MORNING_BRIEFING_REQUEST), reply("見通し")];
+    markAutoReplies(auto);
+    assert.equal(auto[1].proactive, false);
   });
 });

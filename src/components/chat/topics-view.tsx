@@ -1,13 +1,21 @@
 import { jstTimeLabel } from "@/lib/day-key";
 import type { TopicBoard } from "@/lib/topics";
 
+import { ScheduledPushSettingsCard, type ScheduleRow } from "@/components/settings/scheduled-push-settings";
+
 import { TopicCategoryPicker } from "./topic-category-picker";
+import { TopicSeenMarker } from "./topic-seen-marker";
 import { TopicTabs } from "./topic-tabs";
 
 type Props = {
   board: TopicBoard;
   /** 描画の基準になる時刻。「◯時間前」の計算に使う（サーバー側で決めて渡す）。 */
   now: Date;
+  /** 前回この画面を開いた時刻（#418）。nullは初回で、全件を既読として出す。 */
+  seenAt: Date | null;
+  /** 通知する時間（定時のお知らせ。#344）。設定画面から話題画面へ移した（#418）。 */
+  schedules: ScheduleRow[];
+  hasDevice: boolean;
 };
 
 /**
@@ -17,7 +25,7 @@ type Props = {
  * クライアントにする（#404）。並べる順は新しい順。まずニュースをまとめて読めるようにし、
  * 仕入れる種類の管理は必要なときだけ開く。
  */
-export function TopicsView({ board, now }: Props) {
+export function TopicsView({ board, now, seenAt, schedules, hasDevice }: Props) {
   const { categories, lastFetchedAt, topics, byCategory, mergedCount, bubbleLimit, lifetimeHours } = board;
 
   const enabledCategories = categories.filter((category) => category.enabled);
@@ -25,6 +33,7 @@ export function TopicsView({ board, now }: Props) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[900px] flex-col gap-4 px-3.5 py-4 md:gap-5 md:px-7 md:py-6">
+        <TopicSeenMarker renderedAt={now.toISOString()} />
         <div className="flex items-baseline justify-between gap-3">
           <h2 className="text-base font-bold tracking-tight">いまの話題</h2>
           <span className="text-[0.6875rem] text-muted">
@@ -36,6 +45,30 @@ export function TopicsView({ board, now }: Props) {
           </span>
         </div>
 
+        <details open className="group rounded-xl border border-border bg-surface">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3.5 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
+            <svg
+              viewBox="0 0 24 24"
+              className="size-4 shrink-0 text-accent transition-transform group-open:rotate-90"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m9 18 6-6-6-6" />
+            </svg>
+            <span className="text-[0.8125rem] font-bold">通知する時間</span>
+            <span className="ml-auto text-right text-[0.6875rem] text-muted">
+              {schedules.length > 0 ? `${schedules.length}件登録中・変更する` : "未登録・追加する"}
+            </span>
+          </summary>
+          <div className="border-t border-border px-4 py-3.5">
+            <ScheduledPushSettingsCard initial={schedules} hasDevice={hasDevice} categories={categories} />
+          </div>
+        </details>
+
         {topics.length === 0 ? (
           <p className="rounded-xl border border-border bg-surface px-4 py-3 text-xs leading-relaxed text-muted">
             {enabledCategories.length === 0
@@ -43,7 +76,7 @@ export function TopicsView({ board, now }: Props) {
               : "まだ話題がありません。「話す」画面を開くと仕入れが始まり、30秒ほどで並びます（画面は読み込み直してください）。"}
           </p>
         ) : (
-          <TopicTabs categories={categories} allTopics={topics} byCategory={byCategory} mergedCount={mergedCount} />
+          <TopicTabs categories={categories} allTopics={topics} byCategory={byCategory} mergedCount={mergedCount} seenAt={seenAt} now={now} />
         )}
 
         <details className="group rounded-xl border border-border bg-surface">
@@ -75,7 +108,7 @@ export function TopicsView({ board, now }: Props) {
 
         <p className="text-[0.6875rem] leading-relaxed text-muted">
           <b className="font-medium text-foreground">
-            話題はお知らせとは別の場所に溜まり、通知（Push）にはなりません。
+            話題はお知らせとは別の場所に溜まり、通知（Push）は上の「通知する時間」に設定した時刻にだけ届きます。
           </b>
           吹き出しに出るのは新しい{bubbleLimit}件だけで、{lifetimeHours}時間経つと入れ替わります。相談のときも、直近の話題を秘書が
           材料として持っています（頼まれていないのに持ち出すことはありません）。要点と一言はモデルが

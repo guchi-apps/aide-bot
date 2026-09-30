@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { BriefingTimePicker } from "@/components/settings/briefing-time-picker";
@@ -5,8 +6,6 @@ import { ConnectionList } from "@/components/settings/connection-list";
 import { HomeProfileCard } from "@/components/settings/home-profile-card";
 import { ProactiveSettingsCard } from "@/components/settings/proactive-settings";
 import { NotificationSettings } from "@/components/settings/notification-settings";
-import { listTopicCategories } from "@/lib/topic-category-store";
-import { ScheduledPushSettingsCard } from "@/components/settings/scheduled-push-settings";
 import { WakeTriggerCard } from "@/components/settings/wake-trigger-card";
 import { WriteToolPicker } from "@/components/settings/write-tool-picker";
 import { getCurrentUser } from "@/lib/auth-user";
@@ -17,7 +16,6 @@ import { hasNotionConnection } from "@/lib/home-profile";
 import { pushPublicKey } from "@/lib/push/config";
 import { normalizeFrequency } from "@/lib/proactive-labels";
 import { countSubscriptions } from "@/lib/push/subscriptions";
-import { db } from "@/lib/db";
 
 export const metadata = { title: "設定" };
 
@@ -51,17 +49,11 @@ export default async function SettingsPage({ searchParams }: Props) {
     redirect("/login");
   }
 
-  const [connections, query, writeToolPolicy, deviceCount, scheduledPushes, topicCategories] = await Promise.all([
+  const [connections, query, writeToolPolicy, deviceCount] = await Promise.all([
     listConnections(user.id),
     searchParams,
     selectedWriteToolPolicy(),
     countSubscriptions(user.id),
-    db.scheduledPush.findMany({
-      where: { userId: user.id },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      select: { id: true, daysMask: true, hour: true, minute: true, category: true, enabled: true },
-    }),
-    listTopicCategories(user.id),
   ]);
 
   // 繋いでいる接続すべてを並べる（#78）。いま相談へ渡っているのは「使用中」のものだけだが、
@@ -105,7 +97,14 @@ export default async function SettingsPage({ searchParams }: Props) {
           }}
         />
 
-        <ScheduledPushSettingsCard initial={scheduledPushes} hasDevice={deviceCount > 0} categories={topicCategories} />
+        {/* 定時のお知らせの時刻は話題の画面へ移した（#418）。読む場所のそばで決められるように。 */}
+        <p className="text-[0.8125rem] leading-relaxed text-muted">
+          話題（ニュース）を届ける曜日・時刻は、
+          <Link href="/topics" className="font-medium text-accent underline underline-offset-4">
+            話題の画面の「通知する時間」
+          </Link>
+          で決められます。
+        </p>
 
         <BriefingTimePicker initial={{ hour: user.briefingHour, minute: user.briefingMinute }} />
 

@@ -2,7 +2,8 @@
 
 import { useMemo, useRef, useState } from "react";
 
-import { jstTimeLabel } from "@/lib/day-key";
+import { jstDayKey, jstTimeLabel } from "@/lib/day-key";
+import { buildTimeline, unreadCount } from "@/lib/topic-timeline";
 import { OTHER_CATEGORY_ID, topicCategoryShort, type TopicCategory } from "@/lib/topic-categories";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +27,13 @@ type Props = {
   byCategory: Record<string, TopicRow[]>;
   /** 「すべて」タブの見出しに出す、重複としてまとめた記事の数。 */
   mergedCount: number;
+  /**
+   * 前回この画面を開いた時刻（#418）。**初回のpropsを `useState` に固定して使う**——`router.refresh()` で
+   * 描き直されて新しい値が届いても、開いたばかりの「NEW」と境目の線をその場で消さないため。
+   */
+  seenAt: Date | null;
+  /** 取り込み回の見出しに日付を添えるか（今日以外）の判定に使う。 */
+  now: Date;
 };
 
 /**
@@ -36,7 +44,9 @@ type Props = {
  * スクロールを妨げない。タブバー自体の横スクロール（タブ数が多いとき）は、そのすぐ下の
  * カードにだけスワイプ判定を置くことで両立させている。
  */
-export function TopicTabs({ categories, allTopics, byCategory, mergedCount }: Props) {
+export function TopicTabs({ categories, allTopics, byCategory, mergedCount, seenAt: initialSeenAt, now }: Props) {
+  const [seenAt] = useState(initialSeenAt);
+  const [todayKey] = useState(() => jstDayKey(now));
   const tabs = useMemo<Tab[]>(() => {
     const list: Tab[] = [{ id: ALL_TAB_ID, label: "すべて", rows: allTopics }];
     for (const category of categories) {
@@ -131,20 +141,62 @@ export function TopicTabs({ categories, allTopics, byCategory, mergedCount }: Pr
                 {active.label}のニュース（{active.rows.length}件）
               </h2>
               <span className="text-[0.6875rem] text-muted">
-                新しい順
+                {unreadCount(active.rows, seenAt) > 0 ? `新着${unreadCount(active.rows, seenAt)}件・` : ""}取り込んだ順
                 {active.id === ALL_TAB_ID && mergedCount > 0
                   ? `・同じ出来事${mergedCount}件を1件にまとめて表示`
                   : "・同じ出来事はまとめて表示"}
               </span>
             </div>
-            <div className="flex flex-col">
-              {active.rows.map((topic) => (
-                <TopicArticle key={topic.id} topic={topic} categories={categories} />
-              ))}
-            </div>
+            <Timeline rows={active.rows} categories={categories} seenAt={seenAt} todayKey={todayKey} />
           </section>
         )}
       </div>
+    </div>
+  );
+}
+
+/** 取り込み回の見出しと、未読の境目の線を差し込んだ一覧（#418）。 */
+function Timeline({
+  rows,
+  categories,
+  seenAt,
+  todayKey,
+}: {
+  rows: TopicRow[];
+  categories: TopicCategory[];
+  seenAt: Date | null;
+  todayKey: string;
+}) {
+  const entries = useMemo(() => buildTimeline(rows, seenAt), [rows, seenAt]);
+  return (
+    <div className="flex flex-col">
+      {entries.map((entry) => {
+        if (entry.kind === "batch") {
+          const dayKey = jstDayKey(entry.startedAt);
+          const date = dayKey === todayKey ? "" : `${Number(dayKey.slice(5, 7))}/${Number(dayKey.slice(8, 10))} `;
+          return (
+            <div key={entry.key} className="flex items-center gap-2 pb-1.5 pt-3 text-[0.6875rem] text-muted first:pt-0">
+              <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-topic" />
+              <b className="text-xs tabular-nums text-foreground">
+                {date}
+                {jstTimeLabel(entry.startedAt)}
+              </b>
+              <span>に取り込み・{entry.count}件</span>
+              <span aria-hidden="true" className="h-px flex-1 bg-border" />
+            </div>
+          );
+        }
+        if (entry.kind === "seen") {
+          return (
+            <div key={entry.key} role="separator" className="flex items-center gap-2 py-1.5 text-[0.6875rem] font-bold text-accent">
+              <span aria-hidden="true" className="h-0.5 flex-1 bg-accent/55" />
+              <span className="whitespace-nowrap">ここまで未読（前回の続き）</span>
+              <span aria-hidden="true" className="h-0.5 flex-1 bg-accent/55" />
+            </div>
+          );
+        }
+        return <TopicArticle key={entry.key} topic={entry.row} categories={categories} unread={entry.unread} />;
+      })}
     </div>
   );
 }
@@ -155,12 +207,18 @@ export function TopicTabs({ categories, allTopics, byCategory, mergedCount }: Pr
  * 見出しと「開く」を1つのリンクにまとめる（`/notices` の `Title` と同じ理由）。出典は外部の
  * 記事なので常に新しいタブで開く。
  */
-function TopicArticle({ topic, categories }: { topic: TopicRow; categories: TopicCategory[] }) {
+function TopicArticle({ topic, categories, unread }: { topic: TopicRow; categories: TopicCategory[]; unread: boolean }) {
   const meta = [topic.sourceName, topic.publishedOn].filter((part) => part !== "");
 
   return (
-    <article className="flex flex-col gap-1 border-b border-border py-2.5 first:pt-0 last:border-b-0 last:pb-0">
+    <article
+      className={cn(
+        "flex flex-col gap-1 border-b border-border py-2.5 last:border-b-0 last:pb-0",
+        unread && "-mx-2 rounded-md bg-accent-surface/60 px-2 shadow-[inset_3px_0_0_var(--accent)]",
+      )}
+    >
       <div className="flex flex-wrap items-center gap-2">
+        {unread && <span className="shrink-0 text-[0.625rem] font-bold tracking-wider text-accent">NEW</span>}
         <span className="shrink-0 rounded-full bg-topic-surface px-2 py-0.5 text-[0.625rem] font-bold tracking-wider text-topic">
           {topicCategoryShort(categories, topic.category)}
         </span>

@@ -111,6 +111,11 @@ export type TopicRow = {
   sourceName: string;
   publishedOn: string;
   fetchedAt: Date;
+  /**
+   * 初めて取り込んだ時刻（#418）。**仕入れ直しでは進まない**（`fetchedAt` は進む）。話題の画面の
+   * 「新着」「取り込み回」はこちらで見る。まとめた記事は、その中で最も新しいもの。
+   */
+  createdAt: Date;
   /** 同じ出来事を報じている他の記事（#362。まとめた記事）。無ければ空。 */
   alsoReported: { title: string; url: string | null; sourceName: string }[];
   /** まとめた記事すべて（代表を含む）の `Topic.id`。定時のお知らせが `spokenAt` を付けるのに使う。 */
@@ -175,6 +180,7 @@ function toRow(topic: Topic, others: Topic[] = []): TopicRow {
     sourceName: topic.sourceName,
     publishedOn: topic.publishedOn,
     fetchedAt: topic.fetchedAt,
+    createdAt: new Date(Math.max(topic.createdAt.getTime(), ...others.map((other) => other.createdAt.getTime()))),
     alsoReported: others.map((other) => ({
       title: other.title,
       url: safeNoticeUrl(other.url),

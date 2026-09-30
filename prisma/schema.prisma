@@ -40,6 +40,9 @@ model User {
   /// `TopicCategory` へ初期データを入れたか（#345）。立てるのは `updateMany` のCASで、二重に入れない。
   topicCategoriesReady Boolean @default(false)
   topicCategoryList    TopicCategory[]
+  /// 話題の画面を最後に開いた時刻（#418）。これより後に初めて取り込んだ記事（`Topic.createdAt`）を「NEW」にする。
+  /// nullは一度も開いていない（全件を既読として出す）。書くのは `POST /api/topics/seen` だけ。
+  topicsSeenAt         DateTime?
 
   /// 用途ごとに選んだモデル（#349）。キーは `src/lib/chat-model.ts` の `ModelUse`、値はモデルID。
   /// 既定と同じ用途は持たない（既定を後から変えても追従できる）。nullなら全用途が既定。

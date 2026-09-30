@@ -381,6 +381,7 @@ const TOPIC_SEEDS = [
     url: "https://example.com/news/dev-tsugaru-rain-2",
     sourceName: "NHK",
     fetchedMinutesAgo: 25,
+    createdMinutesAgo: 25,
   },
   {
     category: "tech",
@@ -390,6 +391,8 @@ const TOPIC_SEEDS = [
     url: "https://example.com/news/dev-node-lts",
     sourceName: "Node.js",
     fetchedMinutesAgo: 20,
+    // 前の回に取り込んだ記事が仕入れ直されて `fetchedAt` だけ進んだもの（#418）。既読の回に並び、NEWにならない。
+    createdMinutesAgo: 302,
   },
   {
     category: "general",
@@ -399,6 +402,7 @@ const TOPIC_SEEDS = [
     url: "https://example.com/news/dev-nepal",
     sourceName: "NHK",
     fetchedMinutesAgo: 300,
+    createdMinutesAgo: 300,
     // すでに秘書から振ったぶん（#278）。**これが無いと「二度は振らない」を画面から確かめられない**
     // ——全部が未振りだと、声かけが1件出たのが最新の1件なのか手当たり次第なのか分からない。
     spokenMinutesAgo: 240,
@@ -845,13 +849,18 @@ async function main() {
 
   // 話題（#144）。同じURLは畳まれる。日付は投入日（日本時間）にしておく。
   const publishedOn = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo" }).format(now);
+  // 前回この画面を開いた時刻（#418）。2時間前にしておくと、20分前の回がNEW・5時間前の回が既読になり、
+  // 境目の線が出る。
+  await db.user.update({ where: { id: user.id }, data: { topicsSeenAt: new Date(now.getTime() - 120 * 60 * 1000) } });
   for (const seed of TOPIC_SEEDS) {
-    const { fetchedMinutesAgo, spokenMinutesAgo, ...rest } = seed;
+    const { fetchedMinutesAgo, createdMinutesAgo, spokenMinutesAgo, ...rest } = seed;
     const urlHash = createHash("sha256").update(seed.url).digest("hex");
     const data = {
       ...rest,
       publishedOn,
       fetchedAt: new Date(now.getTime() - fetchedMinutesAgo * 60 * 1000),
+      // 初めて取り込んだ時刻（#418）。省略した記事は仕入れた時刻と同じ（最新の回。NEWになる）。
+      createdAt: new Date(now.getTime() - (createdMinutesAgo ?? fetchedMinutesAgo) * 60 * 1000),
       // すでに秘書から振った話題（#278）。一覧にも吹き出しにも出るが、声かけには二度選ばれない。
       spokenAt: spokenMinutesAgo ? new Date(now.getTime() - spokenMinutesAgo * 60 * 1000) : null,
     };

@@ -4,10 +4,8 @@ import { Menu, X } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { cn } from "@/lib/utils";
 
 import { ConversationRail } from "./conversation-rail";
-import { useTalkMode } from "./talk-mode-context";
 import type { DayRow } from "./types";
 import { useVisualViewportFit } from "./use-visual-viewport";
 
@@ -190,48 +188,10 @@ export function ChatShell({
             {heading}
           </h1>
 
-          {/* 過去の日（#157）は読むだけなので、話す／書くの切り替えも出さない。 */}
-          {isToday && <TalkModeSwitch />}
         </header>
 
         {children}
       </div>
-    </div>
-  );
-}
-
-/**
- * 「話す / 書く」の切り替え。既定は「話す」で、選んだ方はCookieに残る（#27）。
- *
- * スマホでは左の一覧を開くボタンと並べて置いている。**出るのは今日の記録の画面だけ**
- * （#157）——過去の日も、使用量・設定・お知らせ・話題も読むだけの画面で、切り替えても
- * 何も変わらない。
- */
-function TalkModeSwitch() {
-  const { mode, setMode } = useTalkMode();
-
-  return (
-    <div
-      role="group"
-      aria-label="話しかけかた"
-      className="flex shrink-0 items-center gap-0.5 rounded-full bg-rail-active p-0.5"
-    >
-      {(["voice", "write"] as const).map((candidate) => (
-        <button
-          key={candidate}
-          type="button"
-          onClick={() => setMode(candidate)}
-          aria-pressed={mode === candidate}
-          className={cn(
-            "rounded-full px-3.5 py-1.5 text-xs transition-colors",
-            mode === candidate
-              ? "bg-surface font-bold text-foreground shadow-sm"
-              : "text-muted hover:text-foreground",
-          )}
-        >
-          {candidate === "voice" ? "話す" : "書く"}
-        </button>
-      ))}
     </div>
   );
 }

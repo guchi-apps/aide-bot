@@ -128,8 +128,8 @@ export const MODEL_USE_GROUP_LABELS: Record<ModelUseGroup, string> = {
 };
 
 export const MODEL_USE_META: Record<ModelUse, { group: ModelUseGroup; label: string; hint: string }> = {
-  chat_voice: { group: "chat", label: "話す", hint: "音声の短い返事" },
-  chat_text: { group: "chat", label: "書く", hint: "見出しや表を使う長い返事" },
+  chat_voice: { group: "chat", label: "声での返事", hint: "音声の短い返事" },
+  chat_text: { group: "chat", label: "文字での返事", hint: "見出しや表を使う長い返事" },
   briefing: { group: "scheduled", label: "朝の見通し", hint: "毎朝1回・10本の道具を集約" },
   proactive: { group: "scheduled", label: "先回りの提案", hint: "空き時間と希望から判断" },
   notice: { group: "scheduled", label: "お知らせの選定", hint: "吹き出しに出す1件を選ぶ" },

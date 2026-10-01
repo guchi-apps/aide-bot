@@ -1,40 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { memo } from "react";
 
 import { isExternalNoticeUrl } from "@/lib/notice-url";
-import { cn } from "@/lib/utils";
-
-import type { SecretaryState } from "./secretary";
-import type { BubbleLine } from "./use-notice";
 
 /**
- * 秘書の頭上に出る吹き出し（#93）。
+ * 声の往復の状態。聞き取り・考え中・声の用意（VOICEVOXの合成待ち）・読み上げのあいだを動く。
  *
- * 2つの役目を1つの吹き出しで担う。
- *
- * - **待っている間**は、`line`——お知らせ（#93）・ひとりごと（#101）・呼びかけを順に回したもの
- * - **往復の最中**は、いまの状態（聞いています・考えています…）
- *
- * 分けずに1つにしてあるのは、置ける場所が絵の真上の1か所しかないため。2つ並べると
- * スマホ（393×852）で絵か字幕のどちらかが押し出される。往復に入れば状況の報せは
- * 待てるので、そのあいだは状態に譲る。
- *
- * 動きは `globals.css` の `.bubble-*` / `.ind-*` に置く——状態ごとのキーフレームを
- * Tailwindのユーティリティでは書けないため（`.bot` と同じ理由）。
- *
- * `key` に出す文字列そのものを渡しているので、**中身が変わるたびReactが作り直し、
- * 出てくる動きがもう一度再生される。**
+ * **`preparing` は「考えています」とは別に持つ。** VOICEVOX（キー無し）は依頼から最初の音まで
+ * 6〜8秒かかり、その間も「考えています」のままだと、7秒前後の無音が「返事が来ないだけ」に見えて、
+ * 利用者はマイクを押して割り込む。
  */
-
-type Props = {
-  state: SecretaryState;
-  /** 待機中に出す1枠（`use-notice.ts` が一定の間隔で送ってくる）。無ければ既定の呼びかけ。 */
-  line: BubbleLine | null;
-  /** 外部サービスを見に行っている間の表示（#46）。 */
-  activity: { server: string; tool: string } | null;
-};
+export type SecretaryState = "idle" | "listening" | "thinking" | "preparing" | "speaking";
 
 /**
  * 状態の文言。**吹き出しは秘書が喋っている形なので、状態の説明ではなく話し言葉にする。**
@@ -119,160 +96,3 @@ export function OpenLink({ url }: { url: string }) {
   );
 }
 
-/** 文字を読まなくても状態が分かる小さなしるし。状態ごとに動きを変える。 */
-function Indicator({ state }: { state: SecretaryState }) {
-  if (state === "thinking") {
-    return (
-      <span className="ind-dots flex shrink-0 items-center gap-[3px]" aria-hidden="true">
-        <span className="size-[5px] rounded-full bg-current" />
-        <span className="size-[5px] rounded-full bg-current" />
-        <span className="size-[5px] rounded-full bg-current" />
-      </span>
-    );
-  }
-
-  if (state === "preparing") {
-    return (
-      <span
-        className="ind-spin size-[13px] shrink-0 rounded-full border-[2.5px] border-current border-r-transparent"
-        aria-hidden="true"
-      />
-    );
-  }
-
-  if (state === "listening" || state === "speaking") {
-    return (
-      <span
-        className={cn(
-          "ind-bars flex h-3.5 shrink-0 items-center gap-[3px]",
-          // 話しているときは速く振る。聞いているときとの区別を動きだけで付ける。
-          state === "speaking" && "ind-bars-fast",
-        )}
-        aria-hidden="true"
-      >
-        <span className="h-3.5 w-[3px] rounded-sm bg-current" />
-        <span className="h-3.5 w-[3px] rounded-sm bg-current" />
-        <span className="h-3.5 w-[3px] rounded-sm bg-current" />
-      </span>
-    );
-  }
-
-  return <span className="ind-pulse size-[7px] shrink-0 rounded-full bg-current" aria-hidden="true" />;
-}
-
-function SpeechBubbleView({ state, line, activity }: Props) {
-  // 待っている間だけ輪の中身を出す。往復中は状態に譲る。
-  const showing = state === "idle" ? line : null;
-  const notice = showing?.kind === "notice" ? showing.notice : null;
-  // 仕入れた話題（#144）。吹き出しに出るのは仕入れたときに書かせた「秘書の一言」。
-  const topic = showing?.kind === "topic" ? showing.topic : null;
-
-  const text =
-    showing?.kind === "notice"
-      ? showing.notice.text
-      : showing?.kind === "chatter"
-        ? showing.text
-        : showing?.kind === "topic"
-          ? showing.topic.lead
-          : state === "thinking" && activity
-            ? // 外部サービスを見に行っている間は、待たせている理由を出す（#46）。
-              `${activity.server}を調べています`
-            : STATUS_LABEL[state];
-
-  const urgent = notice?.urgent ?? false;
-  // 時刻はお知らせにだけ出す。話題に「いつ時点か」の印を付けると用件に見える。
-  const stamp = notice ? noticeStamp(notice.shownAt) : "";
-
-  /**
-   * 読み上げソフトへ知らせるかどうか（#101）。
-   *
-   * **ひとりごと・話題が替わっただけの回は知らせない。** 25秒ごとに読み上げが割り込むと、
-   * 画面のほかの操作が追えなくなる。お知らせと状態の変化は今までどおり知らせる。
-   */
-  const announce = showing?.kind !== "chatter" && showing?.kind !== "topic";
-
-  const motion = urgent
-    ? "bubble-alert"
-    : state === "idle"
-      ? "bubble-float"
-      : state === "speaking"
-        ? "bubble-beat"
-        : "bubble-pop";
-
-  return (
-    // 高さを先に取っておく。文言の長さで背が変わっても、下の絵と字幕が上下しない。
-    //
-    // **`aria-live` は外側の、作り直されない要素に置く。** 中の吹き出しは `key` を変えて
-    // わざと作り直しているが、読み上げ領域そのものを作り直すと、支援技術からは「中身が
-    // 変わった」ではなく「新しい領域が現れた」に見え、読み上げられないことがある。
-    <div
-      className="flex min-h-[74px] w-full items-end justify-center"
-      aria-live={announce ? "polite" : "off"}
-    >
-      <span
-        key={text}
-        className={cn(
-          "relative inline-flex max-w-[min(23rem,100%)] items-center gap-[9px] rounded-[20px] border px-[17px] py-2.5 text-left text-[0.90625rem] leading-relaxed shadow-[0_12px_26px_-16px_rgba(15,23,42,0.35)]",
-          motion,
-          urgent
-            ? "border-accent/40 bg-accent-surface font-bold text-accent"
-            : // 呼びかけと状態の文言だけ太字にする。ひとりごと・お知らせ・話題は地の文として置く。
-              showing?.kind === "notice" || showing?.kind === "chatter" || showing?.kind === "topic"
-              ? "border-border bg-surface font-medium text-foreground"
-              : "border-border bg-surface font-bold text-foreground",
-        )}
-      >
-        <span className={cn("flex shrink-0 items-center", urgent ? "text-current" : "text-accent")}>
-          <Indicator state={state} />
-        </span>
-
-        {urgent && (
-          <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-[0.625rem] font-bold tracking-wider text-accent-foreground">
-            急ぎ
-          </span>
-        )}
-
-        {/* 話題（#144）の印。用件（accent）とは別の落ち着いた色にして、ニュースが用件に見えないようにする。 */}
-        {topic && (
-          <span className="shrink-0 rounded-full bg-topic-surface px-2 py-0.5 text-[0.625rem] font-bold tracking-wider text-topic">
-            話題
-          </span>
-        )}
-
-        <span className="text-pretty">{text}</span>
-
-        {notice?.url && <OpenLink url={notice.url} />}
-        {topic?.url && <OpenLink url={topic.url} />}
-
-        {stamp !== "" && (
-          <span
-            className={cn(
-              "shrink-0 text-[0.6875rem] font-medium tabular-nums",
-              urgent ? "text-current opacity-70" : "text-muted",
-            )}
-          >
-            {stamp}
-          </span>
-        )}
-
-        {/* しっぽ。真下の絵を指す。枠線が続いて見えるよう、正方形を45度回して2辺だけ描く。 */}
-        <span
-          aria-hidden="true"
-          className={cn(
-            "absolute -bottom-[7px] left-1/2 -ml-[6.5px] size-[13px] rotate-45 rounded-br-[3px] border-b border-r",
-            urgent ? "border-accent/40 bg-accent-surface" : "border-border bg-surface",
-          )}
-        />
-      </span>
-    </div>
-  );
-}
-
-/**
- * `memo` で包んで、状態・出す1枠・調べている道具が変わったときだけ描く（#228）。
- *
- * `line` は `useBubbleRing()` が `useMemo` で保っている参照なので、25秒ごとの入れ替えのときしか
- * 変わらない。**描くたびに作り直した値を渡さないこと**——渡すと、聞き取りの途中経過のたびに
- * 吹き出しが作り直されて、出てくる動き（`bubble-pop`）が頭から再生される。
- */
-export const SpeechBubble = memo(SpeechBubbleView);

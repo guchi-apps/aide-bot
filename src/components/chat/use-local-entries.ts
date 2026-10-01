@@ -10,7 +10,7 @@ import type { ChatEntry, ChatToolCall } from "./types";
  * 画面の中だけで足す記録の並び（#228）。
  *
  * 送ったばかりの発言と返答は、サーバーが保存したものを取り直す（`router.refresh()`）まで
- * 画面の中でだけ並べる。「書く」（`ChatPanel`）と「話す」（`VoicePanel`）が同じ形で
+ * 画面の中でだけ並べる。「書く」（`ChatPanel`）の文字の往復と音声バーの往復が同じ形で
  * 別々に組み立てていたので、idの決め方・時刻の付け方・割り込みの印をここへ寄せた。
  *
  * - **idは `local-user-<件数>` / `local-assistant-<件数>`。** サーバーの行のidとは重ならない

@@ -1,14 +1,11 @@
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { ChatShell } from "@/components/chat/chat-shell";
-import { TalkModeProvider } from "@/components/chat/talk-mode-context";
 import { APP_VERSION } from "@/lib/app-version";
 import { getCurrentUser } from "@/lib/auth-user";
 import { jstDayKey } from "@/lib/day-key";
 import { listDays, primaryConversation } from "@/lib/day-log";
 import { pendingNoticeCount } from "@/lib/notice-list";
-import { TALK_MODE_COOKIE, normalizeTalkMode } from "@/lib/talk-mode";
 import { recentTopicCount } from "@/lib/topics";
 import { formatUsd, startOfMonth, usageBreakdown, type UsageBreakdown } from "@/lib/usage";
 
@@ -39,9 +36,6 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
   const conversation = await primaryConversation(user.id);
   const days = await listDays(conversation.id, now);
 
-  // 最初の描画からモードを確定させたいのでCookieから読む。クライアント側で決めると、
-  // 「書く」を選んでいる人にも一瞬だけ音声画面が出る。
-  const mode = normalizeTalkMode((await cookies()).get(TALK_MODE_COOKIE)?.value);
   const [monthlyUsage, pendingNotices, topicCount] = await Promise.all([
     monthlyUsagePromise,
     pendingNoticesPromise,
@@ -49,20 +43,18 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
   ]);
 
   return (
-    <TalkModeProvider initialMode={mode}>
-      <ChatShell
-        days={days}
-        todayKey={jstDayKey(now)}
-        monthlyUsageLabel={monthlyUsageLabel(monthlyUsage)}
-        pendingNoticeCount={pendingNotices}
-        topicCount={topicCount}
-        userLabel={user.name ?? user.email ?? "ログイン中"}
-        userEmail={user.email}
-        appVersion={APP_VERSION}
-      >
-        {children}
-      </ChatShell>
-    </TalkModeProvider>
+    <ChatShell
+      days={days}
+      todayKey={jstDayKey(now)}
+      monthlyUsageLabel={monthlyUsageLabel(monthlyUsage)}
+      pendingNoticeCount={pendingNotices}
+      topicCount={topicCount}
+      userLabel={user.name ?? user.email ?? "ログイン中"}
+      userEmail={user.email}
+      appVersion={APP_VERSION}
+    >
+      {children}
+    </ChatShell>
   );
 }
 

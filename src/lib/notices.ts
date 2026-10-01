@@ -14,7 +14,7 @@ import { sendPushToUser } from "@/lib/push/subscriptions";
 /**
  * お知らせの受け皿と、そこから1件を選んで吹き出しへ出す仕組み（#93）。**サーバー専用。**
  *
- * 各アプリが `POST /api/notices` で「利用者に知らせたいこと」を積み、「話す」画面で待って
+ * 各アプリが `POST /api/notices` で「利用者に知らせたいこと」を積み、今日の記録の画面で待って
  * いる間、秘書がここから1件を選んで自分の言葉に直す。#79の朝の見通しと違い、材料を外部
  * サービスから取りに行かない——材料はもう積まれている。
  *
@@ -130,7 +130,7 @@ export async function ingestNotice(userId: string, input: NoticeInput): Promise<
     update: data,
   });
 
-  // 急ぎ（#115）。「話す」画面を開いている端末にしか届かない吹き出しとは別に、その場でPushを
+  // 急ぎ（#115）。今日の記録の画面を開いている端末にしか届かない吹き出しとは別に、その場でPushを
   // 送る。失敗しても積んだこと自体は成立させたいので、独立したtry/catchに包む
   // （#51・#79と同じ「記録・通知の失敗で本筋を止めない」方針）。
   if (notice.priority === NoticePriority.URGENT) {
@@ -148,7 +148,7 @@ export async function ingestNotice(userId: string, input: NoticeInput): Promise<
  * 急ぎ（`URGENT`）のお知らせをその場でPushする（#115）。
  *
  * `URGENT` が効くのはこれまで「選び直しの間隔を10分から1分へ詰める」ところまでで、
- * `/api/notices/current` を叩くのは「話す」画面を開いている端末だけだった。画面を閉じていれば
+ * `/api/notices/current` を叩くのは今日の記録の画面を開いている端末だけだった。画面を閉じていれば
  * 届かないまま `expiresAt` を過ぎるため、ここでは経路を分けてWeb Pushを直接送る。
  *
  * - **文面はモデルに書かせない。** 積む側の `body` をそのまま出す。生成を挟むと#93の
@@ -263,7 +263,7 @@ function candidateList(pending: Notice[], now: Date): string {
  * `codex exec` を待つ上限（#132）。
  *
  * 実測（サブPC・`gpt-5.6-luna`）では3.5〜5.3秒で返る。上限を置くのは、返らなくなったときに
- * `/api/notices/current` の応答がそのまま止まるため——この経路は「話す」画面から3分ごとに
+ * `/api/notices/current` の応答がそのまま止まるため——この経路は今日の記録の画面から3分ごとに
  * 叩かれるので、詰まったリクエストが積み上がる。実測の10倍以上を取って、遅いだけの回を
  * 切らない値にしてある。
  */
@@ -311,7 +311,7 @@ async function chooseNotice(userId: string, pending: Notice[], now: Date): Promi
 }
 
 /**
- * いま吹き出しに出すものを返す。「話す」画面から定期的に呼ばれる。
+ * いま吹き出しに出すものを返す。今日の記録の画面から定期的に呼ばれる。
  *
  * 生成が要らない回（間隔の中・未読が0件）はDBを引くだけで戻る。**生成に失敗した回は
  * 何も消費しない**——`lastRuns` にも残さないので、次の問い合わせでやり直せる

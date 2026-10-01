@@ -1,7 +1,7 @@
 /**
  * Server-Sent Events の読み取り。`/api/chat` の返答を受ける側が共通で使う。
  *
- * 「書く」（`chat-panel.tsx`）と「話す」（`voice-panel.tsx`）で同じ経路を読むため、
+ * 「書く」（`chat-panel.tsx`）と音声バー（`use-voice-conversation.ts`）で同じ経路を読むため、
  * 解釈はここ1か所に置く。どちらかだけ直して片方が取り残されるのを防ぐ。
  */
 

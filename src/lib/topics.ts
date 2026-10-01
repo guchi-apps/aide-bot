@@ -22,7 +22,7 @@ import { OTHER_CATEGORY_ID, type TopicCategory } from "@/lib/topic-categories";
  *
  * ## 仕入れの起点はアプリを開いたときと、定時のお知らせの直前（#362）。専用のcronは足さない
  *
- * 常駐の仕入れは持たない。仕入れは「話す」画面の問い合わせ（`/api/notices/current`）の応答後に
+ * 常駐の仕入れは持たない。仕入れは今日の記録の画面の問い合わせ（`/api/notices/current`）の応答後に
  * バックグラウンドで走る
  * （`refreshTopicsIfStale()`）。前回から `TOPIC_REFRESH_INTERVAL_MS` あいていなければ何もしない
  * ので、開きっぱなしでも1時間に1回まで。1時間触られなければ問い合わせ自体が止まる

@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 /**
- * 吹き出しに出すものを取り続け、待っている間は一定の間隔で入れ替える（#93・#101）。
+ * 秘書の一言に出すものを、待っている間は一定の間隔で入れ替える（#93・#101）。
  *
- * サーバー側（`resolveNotice()`）が「10分に1回まで」「未読が0件なら叩かない」を守るので、
- * ここは短い間隔で問い合わせてよい。**問い合わせの多くはDBを引くだけで戻る。**
- * 短い間隔にしてあるのは、急ぎが積まれた回にその場で選び直しが走るようにするため。
+ * 問い合わせ自体は「書く」画面の声かけ（`@/components/chat/use-nudge`。3分ごと）が持ち、ここは
+ * 届いた中身を輪にして送るだけ。サーバー側（`resolveNotice()`）が「10分に1回まで」
+ * 「未読が0件なら叩かない」を守る。
  *
  * 同じ応答に、待機中に回す「ひとりごと」（`resolveChatter()`）も乗ってくる。**取得口を
  * 分けないのは、問い合わせ1回ごとにmiddlewareの `auth.getUser()` がもう1往復増えるため。**
@@ -52,20 +52,6 @@ export type BubbleLine =
   | { kind: "call" };
 
 /**
- * 問い合わせの間隔。生成の間隔（10分）ではなく、急ぎに気付くまでの上限。
- *
- * **モデルを叩かない問い合わせでも、ただではない。** `/api/*` はRoute Handlerが自分で認証
- * するが、middlewareは素通しの判定より前に必ず `auth.getUser()` を通す
- * （`src/lib/supabase/middleware.ts`）ため、**1回ごとにSupabaseへ1往復増える。**
- * Supabaseは他アプリと共有のプロジェクトで、レート制限もそちらに効く。
- *
- * 1分だと開いている間ずっと60回/時・タブごとになるので、急ぎが出るまでの遅れを3分まで
- * 許して往復を1/3に落としてある。急ぎ側の床（`NOTICE_URGENT_INTERVAL_MS`）は1分のままなので、
- * 実際に待つのは「次の問い合わせまで」だけ。
- */
-const POLL_INTERVAL_MS = 3 * 60 * 1000;
-
-/**
  * ひとりごとを次の1件へ送るまでの時間（#101）。
  *
  * **入れ替わりは問い合わせと関係なく画面の中だけで進む。** 手元にある数件を順に回すだけなので、
@@ -95,20 +81,11 @@ const TOPIC_RING_START = 3;
 const TOPIC_RING_STEP = 2;
 
 /**
- * 触られないまま問い合わせ続ける上限。
- *
- * **開きっぱなしのタブを1日中叩かせないための錠。** 見えている間だけ動かすだけでは、
- * サブディスプレイに置きっぱなしの画面が丸一日ぶんの生成を回してしまう。
- * 画面を触る・キーを押す・タブへ戻る、のいずれかで数え直す。
- */
-const IDLE_LIMIT_MS = 60 * 60 * 1000;
-
-/**
  * `/api/notices/current` の応答のうち、吹き出しの輪に使うぶん。
  *
- * 「書く」画面（`@/components/chat/secretary-line`。#279）も同じ形で受け取る。**あちらは問い合わせを
- * 自分では持たず**、声かけ（#278）の問い合わせ（`@/components/chat/use-nudge`）の応答を使い回す
- * ——同じ口を2本で叩くと、問い合わせ1回ごとに `auth.getUser()` の往復が増える。
+ * 「書く」画面（`@/components/chat/secretary-line`）が、声かけ（#278）の問い合わせ
+ * （`@/components/chat/use-nudge`）の応答をそのまま受け取る。口を2本にすると、問い合わせ1回ごとに
+ * `auth.getUser()` の往復が増える。
  */
 export type BubblePayload = { notice: NoticeBubble | null; chatter: string[]; topics: TopicBubble[] };
 
@@ -137,93 +114,10 @@ export function samePayload(a: Payload, b: Payload): boolean {
 }
 
 /**
- * 「話す」画面の吹き出しに出す1枠。**問い合わせもここで持つ。**
- *
- * 「書く」画面は問い合わせを別に持っている（声かけ。#278）ので、こちらは使わず、その応答を
- * `useBubbleRing()` へ渡す（#279）。
- */
-export function useBubbleLine(): BubbleLine | null {
-  const [payload, setPayload] = useState<Payload>(EMPTY_BUBBLE_PAYLOAD);
-  // 描画のたびに読むと値が揺れる（`react-hooks/purity`）。最後に触られた時刻は
-  // 効果の中で入れ、それまでは0＝「まだ触られていない」として扱う。
-  const lastActivityRef = useRef(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-
-    // 画面が現れた時点を最初の「触られた」とみなす。0のままだと、開いた直後に
-    // 休止の条件（最後に触ってから1時間）を満たしてしまい、一度も問い合わせない。
-    lastActivityRef.current = Date.now();
-
-    const schedule = (delay: number) => {
-      if (cancelled) return;
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => void poll(), delay);
-    };
-
-    const poll = async () => {
-      if (cancelled) return;
-
-      const visible = document.visibilityState === "visible";
-      const idle = Date.now() - lastActivityRef.current > IDLE_LIMIT_MS;
-
-      if (visible && !idle) {
-        try {
-          const response = await fetch("/api/notices/current", { cache: "no-store" });
-          if (response.ok) {
-            const data = (await response.json()) as Partial<Payload>;
-            if (!cancelled) {
-              const next: Payload = {
-                notice: data.notice ?? null,
-                chatter: data.chatter ?? [],
-                topics: data.topics ?? [],
-              };
-              setPayload((prev) => (samePayload(prev, next) ? prev : next));
-            }
-          }
-        } catch {
-          // 取れなかった回は黙って見送る。吹き出しは状況を知らせる場所で、
-          // ここへ通信の失敗を出しても利用者にできることが無い。
-        }
-      }
-
-      schedule(POLL_INTERVAL_MS);
-    };
-
-    const markActive = () => {
-      lastActivityRef.current = Date.now();
-    };
-
-    /** タブへ戻った直後は、次の周期を待たずに取り直す（休んでいた間の分が出ていない）。 */
-    const onVisibility = () => {
-      markActive();
-      if (document.visibilityState === "visible") schedule(0);
-    };
-
-    window.addEventListener("pointerdown", markActive);
-    window.addEventListener("keydown", markActive);
-    document.addEventListener("visibilitychange", onVisibility);
-
-    void poll();
-
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-      window.removeEventListener("pointerdown", markActive);
-      window.removeEventListener("keydown", markActive);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, []);
-
-  return useBubbleRing(payload);
-}
-
-/**
  * 届いた中身を輪にして、一定の間隔で1枠ずつ送る（#279で問い合わせから切り出した）。
  *
- * 「話す」画面（`useBubbleLine()`）と「書く」画面の秘書の一言が同じ輪を使う。**送る間隔・
- * 差し込む位置・急ぎのときに止めることは、どちらの画面でも同じ**になるよう1か所に置く。
+ * 「書く」画面の秘書の一言（`SecretaryLine`）が使う輪。送る間隔・差し込む位置・急ぎのときに止める
+ * ことをここに置く。
  */
 export function useBubbleRing(payload: BubblePayload): BubbleLine | null {
   const [step, setStep] = useState(0);

@@ -46,8 +46,8 @@ export default async function UsagePage() {
       tableDays={TABLE_DAYS}
       monthLabel={`${now.getMonth() + 1}月`}
       chatModels={[
-        { label: "話す", model: models.chat_voice },
-        { label: "書く", model: models.chat_text },
+        { label: "声での返事", model: models.chat_voice },
+        { label: "文字での返事", model: models.chat_text },
       ]}
     />
   );

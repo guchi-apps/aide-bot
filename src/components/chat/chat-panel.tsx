@@ -81,7 +81,7 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSin
   } = useThrottledText();
 
   /**
-   * 声で話す（#279）。**往復の実装は「話す」の全画面と同じ `useVoiceConversation()`。**
+   * 声で話す（#279）。**往復の実装は音声バーの `useVoiceConversation()`。**
    *
    * 聞き取った発言も返事も、文字で送ったものと同じ `entries` / `answer` へ流し込む。
    * 記録の流れが1本のまま続くので、声と文字を行き来しても読み返しかたが変わらない。
@@ -393,7 +393,7 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSin
       <div className="px-4 pb-4 pt-2 md:px-7 md:pb-5">
         {/*
           秘書の一言（#279）。お知らせ（#93）・ひとりごと（#101）・話題（#144）の輪を、
-          「話す」画面の吹き出しと同じ輪から出す（問い合わせは声かけ `useNudges()` の1本を使い回す。
+          秘書の一言の輪と同じ輪から出す（問い合わせは声かけ `useNudges()` の1本を使い回す。
           同じ口を2本で叩かない）。**既定が「書く」になった以上、
           ここに出し先が無いとこの輪ごと——ニュースの仕入れの起点も含めて——動かなくなる。**
         */}

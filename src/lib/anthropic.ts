@@ -458,7 +458,7 @@ export function noticeSystemPrompt(): string {
     "3行目以降は書かない。前置きも説明も付けない",
   ];
 
-  const intro = `${SECRETARY_INTRO}\n\n利用者は「話す」画面を開いて待っています。各アプリから届いた「知らせたいこと」の候補をこれから渡すので、その中から1つ選び、あなたの言葉で短く伝えてください。`;
+  const intro = `${SECRETARY_INTRO}\n\n利用者はMorrowの画面を開いて待っています。各アプリから届いた「知らせたいこと」の候補をこれから渡すので、その中から1つ選び、あなたの言葉で短く伝えてください。`;
 
   return `${intro}\n\n${rules.map((rule) => `- ${rule}`).join("\n")}`;
 }

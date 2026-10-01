@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { cache } from "react";
 
 import type { ChatEntry } from "@/components/chat/types";
+import { markAutoReplies } from "@/lib/auto-request";
 import { dayEnd, dayHeading, dayStart, jstDayKey, jstTimeLabel, monthLabel } from "@/lib/day-key";
 import { rolloverIfIdle } from "@/lib/context-break";
 import { db } from "@/lib/db";
@@ -217,9 +218,11 @@ function mergeEntries(
     createdAt: Date;
   }[],
   breaks: { id: string; at: Date; kind: string }[] = [],
+  /** 範囲の直前の発言。自動配信の返答を見分ける文脈にだけ使い、並べない（#422）。 */
+  before: { role: "USER" | "ASSISTANT"; content: string; proactive: boolean } | null = null,
 ): ChatEntry[] {
   const rows: { at: number; tie: number; entry: ChatEntry }[] = [
-    ...messages.map((message) => ({
+    ...markAutoReplies(messages, before).map((message) => ({
       at: message.createdAt.getTime(),
       tie: 1,
       entry: {
@@ -286,6 +289,9 @@ const TOOL_CALL_FIELDS = {
 
 const BREAK_FIELDS = { id: true, at: true, kind: true } as const;
 
+/** 自動配信の返答を見分けるための文脈（#422）。並べないので本文と役割と印だけ。 */
+const CONTEXT_FIELDS = { role: true, content: true, proactive: true } as const;
+
 /** ある期間の発言と記録を、時刻順に混ぜて返す。 */
 async function entriesBetween(
   conversationId: string,
@@ -295,7 +301,7 @@ async function entriesBetween(
   const createdAt = { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) };
   const range = from || to ? { createdAt } : {};
 
-  const [messages, toolCalls, breaks] = await Promise.all([
+  const [messages, toolCalls, breaks, before] = await Promise.all([
     db.message.findMany({
       where: { conversationId, ...range },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -311,9 +317,17 @@ async function entriesBetween(
       orderBy: [{ at: "asc" }, { id: "asc" }],
       select: BREAK_FIELDS,
     }),
+    // 範囲の直前の1件（#422）。日付の境目で依頼文だけが前の日に落ちても、返答を見分けられるように。
+    from
+      ? db.message.findFirst({
+          where: { conversationId, createdAt: { lt: from } },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          select: CONTEXT_FIELDS,
+        })
+      : null,
   ]);
 
-  return mergeEntries(messages, toolCalls, breaks);
+  return mergeEntries(messages, toolCalls, breaks, before);
 }
 
 /** その日1日ぶんの記録。 */
@@ -338,10 +352,13 @@ export async function entriesForToday(conversationId: string, now: Date): Promis
   const messages = await db.message.findMany({
     where: { conversationId, createdAt: { lt: from } },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: CARRY_OVER_MIN_ENTRIES - today.length,
+    // 1件余分に引き、いちばん古い1件は並べずに文脈にだけ使う（#422）。引き継ぎの切れ目で
+    // 自動の依頼文だけが落ちると、先頭の返答に「秘書から」が付かなくなる。
+    take: CARRY_OVER_MIN_ENTRIES - today.length + 1,
     select: MESSAGE_FIELDS,
   });
 
+  const before = messages.length > CARRY_OVER_MIN_ENTRIES - today.length ? (messages.pop() ?? null) : null;
   if (messages.length === 0) return today;
 
   // いちばん古い発言と同じ時刻まで遡って、その間の書き込みだけを混ぜる。
@@ -358,5 +375,5 @@ export async function entriesForToday(conversationId: string, now: Date): Promis
     select: BREAK_FIELDS,
   });
 
-  return [...mergeEntries(messages, toolCalls, breaks), ...today];
+  return [...mergeEntries(messages.reverse(), toolCalls, breaks, before), ...today];
 }

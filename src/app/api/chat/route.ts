@@ -24,6 +24,7 @@ import { readJsonObject } from "@/lib/json-body";
 import { writeToolsAllowed } from "@/lib/mcp/write-tools";
 import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
 import { TOOL_CALL_INPUT_LIMIT, TOOL_CALL_OUTPUT_LIMIT, truncateToolText } from "@/lib/tool-call";
+import { currentSettingsForChat } from "@/lib/settings-summary";
 import { topicsForChat } from "@/lib/topics";
 
 /**
@@ -206,6 +207,7 @@ function buildCodexPrompt(
   writeToolsWithheld: boolean,
   connectedHints: string[],
   suggestion: SuggestionConnections,
+  settings: string,
 ): string {
   // 繋いでいる接続の名前と「書き込みの道具を止めている」ことを体裁の指示に含める（#46・#78）。
   // 接続の増減はまれなので、プレフィックスの先頭側が変わることは受け入れる。
@@ -265,6 +267,14 @@ function buildCodexPrompt(
             "求めたときの材料にする。頼まれていないのに持ち出さない。要点は仕入れたときの要約なので、" +
             "詳しく聞かれたら出典の記事を案内し、書かれていない細部を作らない）:",
           topics,
+        ]),
+    ...(settings === ""
+      ? []
+      : [
+          "---",
+          "いまの設定（ニュースの種類と定時のお知らせ。利用者が設定の変更を頼んだとき、既存のものを指す名前・曜日・時刻の" +
+            "手掛かりにする。頼まれていないのに持ち出さない）:",
+          settings,
         ]),
     "---",
     "直近の利用者の発言に対する、秘書としての返答だけを書いてください。" +
@@ -362,6 +372,8 @@ export async function POST(request: Request) {
 
   // 仕入れてある話題（#144）。DBを引くだけで、無ければ空文字（プロンプトの形は変わらない）。
   const topics = await topicsForChat(user.id);
+  // 設定の変更案（#352）は音声では出さないので、声の往復には載せない。
+  const settings = style === "voice" ? "" : await currentSettingsForChat(user.id);
 
   // 継続記憶（#323）。引けなかった回は、空にせず「確認できない」と伝える（覚えていないと断定させない）。
   let memoryBlock = "";
@@ -412,6 +424,7 @@ export async function POST(request: Request) {
       notion: servers.some((server) => findPreset(server.url)?.id === "notion"),
       aide: servers.some((server) => findPreset(server.url)?.id === "aide"),
     },
+    settings,
   );
 
   // 次に割り込んでくるリクエストへ「この生成の後片付けが終わった」と伝えるための錠（#48）。

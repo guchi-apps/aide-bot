@@ -34,6 +34,8 @@ async function applyTopicCategory(
   const rows = await tx.topicCategory.findMany({ where: { userId }, orderBy: { sortOrder: "asc" } });
 
   if (change.action === "add") {
+    // 押し直しても二重に増えない（同じ名前が既にあれば何もしない）。
+    if (rows.some((row) => row.label === change.label)) return;
     if (rows.length >= MAX_TOPIC_CATEGORIES) {
       throw new SettingsApplyError(`種類は${MAX_TOPIC_CATEGORIES}件までです。不要なものを削除してください。`);
     }
@@ -85,8 +87,21 @@ async function applyScheduledPush(
   categories: CategoryRow[],
 ): Promise<void> {
   if (change.action === "add") {
-    const count = await tx.scheduledPush.count({ where: { userId } });
-    if (count >= SCHEDULED_PUSH_LIMIT) {
+    const existing = await tx.scheduledPush.findMany({ where: { userId } });
+    const category = resolveCategoryKey(categories, change.category);
+    // 押し直しても二重に増えない（同じ曜日・時刻・種類があれば何もしない）。
+    if (
+      existing.some(
+        (row) =>
+          row.daysMask === daysToMask(change.days) &&
+          row.hour === change.hour &&
+          row.minute === change.minute &&
+          row.category === category,
+      )
+    ) {
+      return;
+    }
+    if (existing.length >= SCHEDULED_PUSH_LIMIT) {
       throw new SettingsApplyError(`定時のお知らせは${SCHEDULED_PUSH_LIMIT}件までです。不要なものを削除してください。`);
     }
     await tx.scheduledPush.create({
@@ -95,7 +110,7 @@ async function applyScheduledPush(
         daysMask: daysToMask(change.days),
         hour: change.hour,
         minute: change.minute,
-        category: resolveCategoryKey(categories, change.category),
+        category,
         enabled: change.enabled ?? true,
       },
     });
@@ -132,7 +147,7 @@ async function applyScheduledPush(
 /**
  * 検証済みの設定変更をDBへ反映する（#346・#352）。**呼ぶのは利用者が「変更する」を押した入口だけ**。
  * 書く列・規則は設定の画面と同じ（`api/settings/*`）。**1件でも失敗したら全体を巻き戻し**、
- * 理由を `SettingsApplyError` で投げる（押し直しで二重に追加しないため）。
+ * 理由を `SettingsApplyError` で投げる。追加は同じ内容が既にあれば何もしない（押し直しても二重に増えない）。
  */
 export async function applySettingsChanges(userId: string, changes: SettingsChange[]): Promise<void> {
   // 種類の初期投入（初回だけ書く）はトランザクションの外で済ませる。

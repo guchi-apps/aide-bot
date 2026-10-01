@@ -11,7 +11,7 @@ const RETRY_MESSAGE = "変更できませんでした。もう一度お試しく
 /**
  * 秘書が出した設定の変更案（#346）。**押すまで何も変わらない**。反映は
  * `POST /api/settings/actions` が検証し直して行う。再読み込みすると押す前の見た目に戻るが、
- * 同じ値を書くだけなので何度押しても同じ結果になる。
+ * 同じ値を書くだけ、追加は同じ内容が既にあれば何もしないので、何度押しても同じ結果になる。
  */
 export function SettingsProposalCard({ changes }: { changes: SettingsChange[] }) {
   const [state, setState] = useState<State>("idle");

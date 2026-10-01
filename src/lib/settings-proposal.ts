@@ -287,7 +287,7 @@ function clock(hour: number, minute: number): string {
   return `${hour}:${String(minute).padStart(2, "0")}`;
 }
 
-function daysLabel(days: readonly number[]): string {
+export function daysLabel(days: readonly number[]): string {
   const mask = daysToMask(days);
   return mask === 0b1111111 ? "毎日" : maskToDays(mask).map((day) => WEEKDAYS[day]).join("・");
 }

@@ -31,10 +31,13 @@ export function progressFor(open: boolean, dx: number, width: number): number {
   return Math.min(1, Math.max(0, (base + dx) / width));
 }
 
-/** 指を離したとき、開いた状態にするか。 */
-export function shouldSettleOpen(progress: number, velocity: number): boolean {
+/**
+ * 指を離したとき、開いた状態にするか。開閉どちらから始めても「幅の3分の1以上動かしたら切り替わる」
+ * 形に揃える（開いた状態からは、開き具合が3分の2を下回ったら閉じる）。
+ */
+export function shouldSettleOpen(progress: number, velocity: number, startOpen = false): boolean {
   if (Math.abs(velocity) >= FLING_VELOCITY) return velocity > 0;
-  return progress >= SETTLE_RATIO;
+  return startOpen ? progress > 1 - SETTLE_RATIO : progress >= SETTLE_RATIO;
 }
 
 /**

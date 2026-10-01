@@ -33,6 +33,9 @@ test("shouldSettleOpen: 3分の1が境目、速い動きは向きに従う", () 
   assert.equal(shouldSettleOpen(0.1, 0.5), true);
   assert.equal(shouldSettleOpen(0.9, -0.5), false);
   assert.equal(shouldSettleOpen(0.1, 0.39), false);
+  // 開いた状態から始めた場合は、3分の1以上閉じ方向へ動かしたら閉じる
+  assert.equal(shouldSettleOpen(0.67, 0, true), true);
+  assert.equal(shouldSettleOpen(0.66, 0, true), false);
 });
 
 test("matchesOpenDirection: 閉じていれば右、開いていれば左だけ", () => {

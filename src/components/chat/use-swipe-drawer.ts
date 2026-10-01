@@ -106,7 +106,7 @@ export function useSwipeDrawer({ open, onOpenChange, getWidth }: Options): numbe
       gesture.current = null;
       if (!g || g.axis !== "horizontal") return;
       setDragProgress(null);
-      const next = shouldSettleOpen(g.progress, g.velocity);
+      const next = shouldSettleOpen(g.progress, g.velocity, g.startOpen);
       if (next !== latest.current.open) latest.current.onOpenChange(next);
     };
 

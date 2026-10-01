@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth-user";
 import { readJsonObject } from "@/lib/json-body";
-import { applySettingsChanges } from "@/lib/settings-apply";
+import { SettingsApplyError, applySettingsChanges } from "@/lib/settings-apply";
 import { MAX_CHANGES, validateChange, type SettingsChange } from "@/lib/settings-proposal";
 
 /**
@@ -32,6 +32,14 @@ export async function POST(request: Request) {
     changes.push(change);
   }
 
-  await applySettingsChanges(user.id, changes);
+  try {
+    await applySettingsChanges(user.id, changes);
+  } catch (error) {
+    // 曖昧な指定・上限超過は理由を返す（それ以外はそのまま500）。
+    if (error instanceof SettingsApplyError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    throw error;
+  }
   return NextResponse.json({ ok: true });
 }

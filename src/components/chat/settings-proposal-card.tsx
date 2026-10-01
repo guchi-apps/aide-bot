@@ -6,6 +6,8 @@ import { describeChange, type SettingsChange } from "@/lib/settings-proposal";
 
 type State = "idle" | "applying" | "applied" | "dismissed" | "failed";
 
+const RETRY_MESSAGE = "変更できませんでした。もう一度お試しください。";
+
 /**
  * 秘書が出した設定の変更案（#346）。**押すまで何も変わらない**。反映は
  * `POST /api/settings/actions` が検証し直して行う。再読み込みすると押す前の見た目に戻るが、
@@ -13,6 +15,7 @@ type State = "idle" | "applying" | "applied" | "dismissed" | "failed";
  */
 export function SettingsProposalCard({ changes }: { changes: SettingsChange[] }) {
   const [state, setState] = useState<State>("idle");
+  const [error, setError] = useState(RETRY_MESSAGE);
   const rows = changes.flatMap(describeChange);
 
   async function apply() {
@@ -23,7 +26,14 @@ export function SettingsProposalCard({ changes }: { changes: SettingsChange[] })
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ changes }),
       });
-      setState(response.ok ? "applied" : "failed");
+      if (response.ok) {
+        setState("applied");
+        return;
+      }
+      // 曖昧な指定・上限超過などは、サーバーが理由を返す（400）。
+      const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+      setError(response.status === 400 && typeof body?.error === "string" ? body.error : RETRY_MESSAGE);
+      setState("failed");
     } catch {
       setState("failed");
     }
@@ -38,8 +48,8 @@ export function SettingsProposalCard({ changes }: { changes: SettingsChange[] })
         </span>
       </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
-        {rows.map((row) => (
-          <div key={row.label} className="contents">
+        {rows.map((row, index) => (
+          <div key={`${index}:${row.label}`} className="contents">
             <dt className="text-muted">{row.label}</dt>
             <dd className="font-bold">{row.value}</dd>
           </div>
@@ -64,7 +74,7 @@ export function SettingsProposalCard({ changes }: { changes: SettingsChange[] })
           </button>
           {state === "failed" && (
             <span role="alert" className="text-xs text-red-600">
-              変更できませんでした。もう一度お試しください。
+              {error}
             </span>
           )}
         </div>

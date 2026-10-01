@@ -4,6 +4,7 @@ import { Menu, X } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { cn } from "@/lib/utils";
 
 import { ConversationRail } from "./conversation-rail";
 import type { DayRow } from "./types";

@@ -7,7 +7,7 @@ import type { BubblePayload } from "@/components/voice/use-notice";
 /**
  * 秘書から話しかけてきた発言を取り続ける（声かけ。#278）。「書く」画面から使う。
  *
- * 取得口は増やさず、「話す」画面の吹き出しが使っている `/api/notices/current` へ `?since=`
+ * 取得口は増やさず、秘書の一言の輪が使っている `/api/notices/current` へ `?since=`
  * を付けて相乗りさせている。**`/api/*` は素通しの判定より前に必ず `auth.getUser()` を通る**
  * （`src/lib/supabase/middleware.ts`）ため、口を1つ増やすと問い合わせ1回ごとにSupabaseへの
  * 往復が1つ増える（#93・#101と同じ理由）。

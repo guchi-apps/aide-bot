@@ -7,7 +7,7 @@ import type { ChatToolCall } from "@/components/chat/types";
 import { parseStreamEvent, readString } from "@/lib/sse";
 
 /**
- * 相談を送って返答を受け取るところ。「話す」と「書く」で共有する。
+ * 相談を送って返答を受け取るところ。声と文字で共有する。
  *
  * `POST /api/chat` への送信、Server-Sent Eventsの読み取り、中断、新しいスレッドが
  * 作られたときの遷移、一覧の取り直しまでをここに閉じる。画面ごとに違うのは受け取った

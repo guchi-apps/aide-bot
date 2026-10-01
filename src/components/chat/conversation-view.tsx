@@ -2,28 +2,18 @@
 
 import dynamic from "next/dynamic";
 
-import { useTalkMode } from "./talk-mode-context";
 import type { ChatEntry } from "./types";
 
 /**
- * **使わない側のパネルは読み込まない**（#228）。「話す」は秘書の立ち絵・吹き出し・
- * 声の設定・今日の記録、「書く」はMarkdown（`react-markdown` 一式）を引き連れているが、開いている
- * モードで使うのはどちらか一方だけ。静的にimportすると、使わない側のぶんも毎回読み込む。
+ * 今日の記録は常に「書く」画面（`ChatPanel`）。声で話すときは、入力欄の「話しかける」から開く
+ * 音声バー（`voice-bar.tsx`）を使う（#433で秘書の立ち絵の全画面「話す」を廃止した）。
  *
- * **サーバー側の描画（SSR）は既定のまま残している。** 最初のHTMLは今のモードで描かれ、そのモードの
- * チャンクだけがページに添えられる。`ssr: false` にすると、開いた直後が空白になって出直す。
- * 切り替えたときだけ、もう一方のチャンクを取りに行く（読み込む間は枠だけを出す）。
- *
- * **音声の往復（`useVoiceConversation()`）は「書く」の音声バーも使うので、どちらのモードでも
- * 読み込まれる。** ここで外れるのは、立ち絵・吹き出し・声の全画面の見た目・Markdownだけ。
+ * **サーバー側の描画（SSR）は既定のまま残している。** `ssr: false` にすると、開いた直後が空白になって出直す。
+ * Markdown（`react-markdown` 一式）は初回のHTMLに添えず、後から読み込む。
  */
 function PanelPlaceholder() {
   return <div className="flex min-h-0 flex-1" aria-busy="true" />;
 }
-
-const VoicePanel = dynamic(() => import("@/components/voice/voice-panel").then((m) => m.VoicePanel), {
-  loading: PanelPlaceholder,
-});
 
 const ChatPanel = dynamic(() => import("./chat-panel").then((m) => m.ChatPanel), {
   loading: PanelPlaceholder,
@@ -41,21 +31,16 @@ type Props = {
 };
 
 /**
- * 今日の記録。「話す」と「書く」で見た目も操作も変わるが、書き込む先は同じ連続セッション。
+ * 今日の記録。書き込む先は利用者につき1本の連続セッション。
  *
- * どちらも表示の元は同じ `initialEntries` で、直前のやり取りは送信のたびの
- * `router.refresh()` で取り直されている。
+ * 表示の元は `initialEntries` で、直前のやり取りは送信のたびの `router.refresh()` で取り直されている。
  *
  * **#157で「新しい相談」が無くなり、`key` の付け替えも要らなくなった。** #155で足していた
  * `useNewConversationEpoch()` は「`/` を開いたまま新しいスレッドを始める」ための仕掛けで、
  * スレッドを分けなくなった今は始める対象そのものが無い。
  */
 export function ConversationView({ initialEntries, todayKey, compactedCount, contextSince }: Props) {
-  const { mode } = useTalkMode();
-
-  return mode === "voice" ? (
-    <VoicePanel initialEntries={initialEntries} todayKey={todayKey} />
-  ) : (
+  return (
     <ChatPanel
       initialEntries={initialEntries}
       todayKey={todayKey}

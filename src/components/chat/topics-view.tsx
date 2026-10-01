@@ -41,7 +41,7 @@ export function TopicsView({ board, now, seenAt, schedules, hasDevice }: Props) 
               ? `最終取得 ${jstTimeLabel(lastFetchedAt)}（${elapsedLabel(lastFetchedAt, now)}）`
               : enabledCategories.length === 0
                 ? "仕入れを止めています"
-                : "「話す」画面を開くと仕入れます"}
+                : "今日の記録（トップ）を開くと仕入れます"}
           </span>
         </div>
 
@@ -76,8 +76,8 @@ export function TopicsView({ board, now, seenAt, schedules, hasDevice }: Props) 
         {topics.length === 0 ? (
           <p className="rounded-xl border border-border bg-surface px-4 py-3 text-xs leading-relaxed text-muted">
             {enabledCategories.length === 0
-              ? "仕入れを止めています。下の種類を1つ以上チェックすると、次に「話す」画面を開いたときに仕入れます。"
-              : "まだ話題がありません。「話す」画面を開くと仕入れが始まり、30秒ほどで並びます（画面は読み込み直してください）。"}
+              ? "仕入れを止めています。下の種類を1つ以上チェックすると、次に今日の記録（トップ）を開いたときに仕入れます。"
+              : "まだ話題がありません。今日の記録（トップ）を開くと仕入れが始まり、30秒ほどで並びます（画面は読み込み直してください）。"}
           </p>
         ) : (
           <TopicTabs categories={categories} allTopics={topics} byCategory={byCategory} mergedCount={mergedCount} seenAt={seenAt} now={now} />

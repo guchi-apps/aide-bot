@@ -45,7 +45,7 @@ export function TopicsView({ board, now, seenAt, schedules, hasDevice }: Props) 
           </span>
         </div>
 
-        <details open className="group rounded-xl border border-border bg-surface">
+        <details className="group rounded-xl border border-border bg-surface">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3.5 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
             <svg
               viewBox="0 0 24 24"
@@ -61,7 +61,11 @@ export function TopicsView({ board, now, seenAt, schedules, hasDevice }: Props) 
             </svg>
             <span className="text-[0.8125rem] font-bold">通知する時間</span>
             <span className="ml-auto text-right text-[0.6875rem] text-muted">
-              {schedules.length > 0 ? `${schedules.length}件登録中・変更する` : "未登録・追加する"}
+              {schedules.length > 0
+                ? hasDevice
+                  ? `${schedules.length}件登録中・変更する`
+                  : `${schedules.length}件登録中・通知する端末が未登録`
+                : "未登録・追加する"}
             </span>
           </summary>
           <div className="border-t border-border px-4 py-3.5">

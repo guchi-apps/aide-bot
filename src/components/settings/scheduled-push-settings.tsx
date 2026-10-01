@@ -123,7 +123,7 @@ export function ScheduledPushSettingsCard({ initial, hasDevice, categories }: Pr
           const days = maskToDays(row.daysMask);
           return (
             <div key={row.id} className={cn("flex flex-col gap-3 rounded-lg border border-border px-4 py-3", !row.enabled && "opacity-60")}>
-              <fieldset className="flex flex-wrap gap-1.5" disabled={busy}>
+              <fieldset className="grid min-w-0 grid-cols-[repeat(7,minmax(0,2.25rem))] gap-1.5" disabled={busy}>
                 <legend className="sr-only">曜日</legend>
                 {WEEKDAYS.map((name, day) => {
                   const on = days.includes(day);
@@ -137,7 +137,7 @@ export function ScheduledPushSettingsCard({ initial, hasDevice, categories }: Pr
                         if (next.length > 0) void patch(row.id, { days: next });
                       }}
                       className={cn(
-                        "size-9 rounded-full border text-sm font-medium",
+                        "aspect-square w-full rounded-full border text-sm font-medium",
                         on ? "border-accent bg-accent-surface text-accent" : "border-border text-muted",
                       )}
                     >

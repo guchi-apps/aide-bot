@@ -2,11 +2,13 @@
 
 import { Menu, X } from "lucide-react";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { cn } from "@/lib/utils";
 
 import { ConversationRail } from "./conversation-rail";
 import type { DayRow } from "./types";
+import { useSwipeDrawer } from "./use-swipe-drawer";
 import { useVisualViewportFit } from "./use-visual-viewport";
 
 type Props = {
@@ -58,6 +60,14 @@ export function ChatShell({
   const pathname = usePathname();
   const [drawerOpen, setDrawerOpen] = useState(false);
   useVisualViewportFit();
+  // 右スワイプで開き、左スワイプで閉じる（#434）。触っている間だけ指に追従する開き具合が入る。
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const dragProgress = useSwipeDrawer({
+    open: drawerOpen,
+    onOpenChange: setDrawerOpen,
+    getWidth: () => drawerRef.current?.offsetWidth ?? 0,
+  });
+  const openAmount = dragProgress ?? (drawerOpen ? 1 : 0);
 
   const isUsage = pathname === "/usage";
   // 過去の日（`/d/<date>`。#157）。今日の記録は `/` で、この形のURLを持たない。
@@ -127,20 +137,31 @@ export function ChatShell({
         />
       </aside>
 
-      {drawerOpen && (
-        <div className="md:hidden">
+      {/* 閉じている間も描画して位置だけ動かす（#434。指に追従させるため）。`inert` で操作もフォーカスも止める。 */}
+      <div className="md:hidden" inert={!drawerOpen && dragProgress === null}>
           <button
             type="button"
             aria-label="日付の一覧を閉じる"
+            tabIndex={drawerOpen ? 0 : -1}
             onClick={() => setDrawerOpen(false)}
             // ライト・ダークのどちらでも背後を沈ませたいので、テーマ変数ではなく黒を敷く。
-            className="fixed inset-0 z-40 bg-black/50"
+            className={cn(
+              "fixed inset-0 z-40 bg-black/50",
+              dragProgress === null && "transition-opacity duration-200 motion-reduce:transition-none",
+            )}
+            style={{ opacity: openAmount, pointerEvents: openAmount > 0 ? "auto" : "none" }}
           />
           <div
+            ref={drawerRef}
             role="dialog"
             aria-modal="true"
             aria-label="日付の一覧"
-            className="fixed inset-y-0 left-0 z-50 w-[calc(100%_-_72px)] max-w-[320px] border-r border-border shadow-2xl"
+            className={cn(
+              "fixed inset-y-0 left-0 z-50 w-[calc(100%_-_72px)] max-w-[320px] border-r border-border",
+              openAmount > 0 && "shadow-2xl",
+              dragProgress === null && "transition-transform duration-200 motion-reduce:transition-none",
+            )}
+            style={{ transform: `translateX(${(openAmount - 1) * 100}%)` }}
           >
             <ConversationRail
               days={days}
@@ -170,8 +191,7 @@ export function ChatShell({
               <span className="sr-only">閉じる</span>
             </button>
           </div>
-        </div>
-      )}
+      </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center gap-2.5 border-b border-border bg-surface px-3 pb-2.5 pt-[calc(env(safe-area-inset-top)+0.625rem)] md:bg-transparent md:px-7 md:py-3.5">

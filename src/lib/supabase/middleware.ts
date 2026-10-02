@@ -12,7 +12,8 @@ import { getRequestOrigin } from "@/lib/request-origin";
 import { safeInternalPath } from "@/lib/safe-path";
 import { signOutThisApp } from "@/lib/supabase/sign-out";
 
-const publicPaths = ["/login", "/auth/signin", "/auth/callback"];
+// /auth/native/* はiOSアプリの認証シート（Cookie無し）とログイン前のWKWebViewから呼ばれる（#441）。
+const publicPaths = ["/login", "/auth/signin", "/auth/callback", "/auth/native"];
 
 function isPublicPath(pathname: string): boolean {
   return publicPaths.some((p) => pathname === p || pathname.startsWith(`${p}/`));

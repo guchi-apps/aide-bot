@@ -135,6 +135,24 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   `ios/ExportOptions.plist`（upload）と別**——uploadのまま使うと二重アップロード防止が効かない。ASCのAPIキーは
   `apps/AppStoreConnect`（マニフェストの `ASC_*`）。**subpcにXcodeは無い**ので、手動ビルド・実機確認はMacで本人が行う
 
+### iOSアプリへのAPNs通知（#475）
+
+WKWebViewにはPushManagerが無いので、殻がAPNsのトークンを取って `POST /api/push/apns` へ登録し、`sendPushToUser()`
+（`src/lib/push/subscriptions.ts`）が**Web Pushと並べて**APNsへも送る。詳細・手作業は `ios/README.md`。
+
+- **「通知を送れる端末があるか」は `countSubscriptions()`・`usersWithSubscriptions()` を必ず通す**（Web購読＋`ApnsDevice`の合算）。
+  `pushSubscription` だけを数えると、アプリだけで受け取る利用者が起きた合図（#233）で `no_device` に断られ、設定・話題の画面も
+  「端末なし」のままになる。**`sendPushToUser()` のVAPID未設定の早期returnはWeb Push側だけ**（APNsだけの構成でも送る）
+- **認証情報（`APNS_KEY_ID`・`APNS_TEAM_ID`・`APNS_KEY_P8`）は3つ揃わないとAPNsの経路ごと無効**（`apnsCredentials()` がnull。
+  登録APIも503）。外部（Apple Developer）で発行する値で機械生成できない。未設定でもWeb Pushは止まらない
+- **依存は足していない**（Node標準の `http2`・`crypto`）。DB・ネットワークに触れない部分は `apns-core.ts` に切り出し、
+  `test/apns.test.ts` が固定する。送信本体（`apns.ts`）はPrismaを引くので読めない——手元では `APNS_ORIGIN_OVERRIDE`（テスト専用）を
+  自己署名のHTTP/2スタブへ向け、`NODE_TLS_REJECT_UNAUTHORIZED=0` で確かめられる（410で行が消えること・`apns-topic` 等のヘッダ）
+- **失効の判定は `shouldDeleteToken()`**（410と、トークン無効の400だけ消す）。`DeviceTokenNotForTopic`・`BadEnvironment` は設定の問題で、消しても直らない
+- アプリの端末の見分けはUAの `MorrowIOS/`（`deviceLabelFromUserAgent()`・`notification-settings.tsx`）。アプリ内ではWeb Pushの購読UIを出さず、状態と「試しに送る」だけ
+- 通知の遷移先（`url`）は殻の `AppConfig.notificationTarget()` が `isInternalPath()` と同じ考え方で検査する（`//`・`\`・制御文字を弾く）。
+  `ios/scripts/check-consistency.mjs` が一部を照合する
+
 ## Route Handlerのリクエスト本文（#262）
 
 **本文はJSONの `null` でも「読めた」ことになる。** `request.json()` は本文が `null` なら `null` を返す

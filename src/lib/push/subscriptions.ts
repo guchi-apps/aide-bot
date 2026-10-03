@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import webpush from "web-push";
 
 import { db } from "@/lib/db";
+import { countApnsDevices, sendApnsToUser, usersWithApnsDevices } from "@/lib/push/apns";
+import { deviceLabelFromUserAgent } from "@/lib/push/subscriptions-core";
 import { VAPID_SUBJECT, isPushConfigured, pushPrivateKey, pushPublicKey } from "@/lib/push/config";
 
 /**
@@ -44,43 +46,6 @@ export function endpointHash(endpoint: string): string {
 }
 
 /**
- * User-Agentから端末の覚え書きを作る。
- *
- * 設定の画面に「登録済みの端末」を件数で出すため、どれがどれか分かる程度で足りる。
- * 厳密に判定しようとすると当たらない端末が必ず出るので、素直に代表的な語を拾うだけにする。
- */
-export function deviceLabelFromUserAgent(userAgent: string | null): string {
-  const ua = userAgent ?? "";
-
-  const os = /iPhone/.test(ua)
-    ? "iPhone"
-    : /iPad/.test(ua)
-      ? "iPad"
-      : /Android/.test(ua)
-        ? "Android"
-        : /Macintosh/.test(ua)
-          ? "Mac"
-          : /Windows/.test(ua)
-            ? "Windows"
-            : /Linux/.test(ua)
-              ? "Linux"
-              : "不明な端末";
-
-  // 判定の順は大事。ChromeもEdgeも Safari を名乗り、EdgeはChromeも名乗る。
-  const browser = /Edg\//.test(ua)
-    ? "Edge"
-    : /Chrome\//.test(ua)
-      ? "Chrome"
-      : /Firefox\//.test(ua)
-        ? "Firefox"
-        : /Safari\//.test(ua)
-          ? "Safari"
-          : "";
-
-  return (browser === "" ? os : `${os} / ${browser}`).slice(0, 120);
-}
-
-/**
  * 購読を保存する（同じendpointなら上書き）。
  *
  * 上書きにするのは、同じ端末で許可を取り直すと鍵だけが変わることがあるため。行を増やすと
@@ -117,12 +82,20 @@ export async function deleteSubscription(userId: string, endpoint: string): Prom
   });
 }
 
-/** この利用者が登録している端末の数。設定の画面に出す。 */
-export function countSubscriptions(userId: string): Promise<number> {
-  return db.pushSubscription.count({ where: { userId } });
+/**
+ * この利用者が通知を受け取れる端末の数（Web Push購読＋iOSアプリのAPNsトークン。#475）。
+ * 「端末があるか」の判定（起きた合図・設定・話題の画面）は必ずこれを通す——Web購読だけを数えると、
+ * アプリだけで受け取る利用者が「端末なし」として締め出される。
+ */
+export async function countSubscriptions(userId: string): Promise<number> {
+  const [web, apns] = await Promise.all([
+    db.pushSubscription.count({ where: { userId } }),
+    countApnsDevices(userId),
+  ]);
+  return web + apns;
 }
 
-/** 通知を送れる相手（購読を1件以上持っている利用者）のID。 */
+/** 通知を送れる相手（Web購読かiOSアプリの端末を1件以上持っている利用者）のID。 */
 export async function usersWithSubscriptions(): Promise<string[]> {
   const rows = await db.pushSubscription.findMany({
     distinct: ["userId"],
@@ -130,7 +103,8 @@ export async function usersWithSubscriptions(): Promise<string[]> {
     orderBy: { userId: "asc" },
   });
 
-  return rows.map((row) => row.userId);
+  const ids = new Set([...rows.map((row) => row.userId), ...(await usersWithApnsDevices())]);
+  return [...ids].sort();
 }
 
 let configured = false;
@@ -151,14 +125,30 @@ function ensureVapid(): void {
  * ホーム画面から消された購読は二度と復活しないため、残しておくと毎回失敗し続ける。
  */
 export async function sendPushToUser(userId: string, payload: PushPayload): Promise<number> {
+  // Web PushとAPNs（iOSアプリ。#475）は互いに独立。片方の失敗・未設定でもう片方を止めない
+  const [web, apns] = await Promise.all([
+    sendWebPushToUser(userId, payload),
+    sendApnsToUser(userId, payload).catch((error) => {
+      console.error(`[aide-bot] APNsの送信で想定外の失敗: ${error instanceof Error ? error.message : "不明"}`);
+      return 0;
+    }),
+  ]);
+
+  return web + apns;
+}
+
+/** Web Pushの購読へ送る。VAPIDが未設定なら（APNsだけの構成でも）ここだけ飛ばす。 */
+async function sendWebPushToUser(userId: string, payload: PushPayload): Promise<number> {
+  const subscriptions = await db.pushSubscription.findMany({ where: { userId } });
+  if (subscriptions.length === 0) return 0;
+
   if (!isPushConfigured()) {
-    console.error("[aide-bot] VAPIDの鍵が未設定のため通知を送れない");
+    console.error("[aide-bot] VAPIDの鍵が未設定のためWeb Pushを送れない");
     return 0;
   }
 
   ensureVapid();
 
-  const subscriptions = await db.pushSubscription.findMany({ where: { userId } });
   const body = JSON.stringify(payload);
   let delivered = 0;
 

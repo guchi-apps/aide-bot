@@ -61,6 +61,21 @@ export function checkConsistency() {
     problems.push("AppConfig.baseURL が本番URLではありません（開発用のまま？）");
   }
 
+  // APNs（#475）: トピック（Bundle ID）・環境・通知の遷移先の判定・entitlements
+  const apnsCore = read("src/lib/push/apns-core.ts");
+  const topic = apnsCore.match(/APNS_TOPIC = "([^"]+)"/)?.[1];
+  if (topic !== "com.gucchii.morrow") problems.push(`APNs の topic が Bundle ID と一致しません: ${topic}`);
+  if (!/CODE_SIGN_ENTITLEMENTS = Morrow\.entitlements;/.test(pbxproj)) problems.push("pbxproj が Morrow.entitlements を指していません");
+  if (!read("ios/Morrow.entitlements").includes("<key>aps-environment</key>")) problems.push("Morrow.entitlements に aps-environment がありません");
+  if (!webViewModel.includes("/api/push/apns")) problems.push("WebViewModel.swift が /api/push/apns を使っていません");
+  for (const env of ["production", "sandbox"]) {
+    if (!read("ios/Morrow/PushRegistration.swift").includes(`"${env}"`)) problems.push(`PushRegistration.swift に ${env} がありません`);
+    if (!apnsCore.includes(`"${env}"`)) problems.push(`apns-core.ts に ${env} がありません`);
+  }
+  if (!/hasPrefix\("\/\/"\)/.test(appConfig) || !appConfig.includes("0x20")) {
+    problems.push("AppConfig.notificationTarget が // と制御文字を弾いていません");
+  }
+
   return problems;
 }
 

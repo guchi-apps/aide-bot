@@ -83,6 +83,7 @@ model User {
   toolCalls         ToolCall[]
   mcpConnections    McpConnection[]
   pushSubscriptions PushSubscription[]
+  apnsDevices       ApnsDevice[]
   notificationLogs  NotificationLog[]
   scheduledPushes   ScheduledPush[]
   notices           Notice[]
@@ -364,6 +365,35 @@ model PushSubscription {
   lastNotifiedAt DateTime?
 
   @@unique([endpointHash])
+  @@index([userId, createdAt])
+}
+
+/**
+ * iOSアプリ（WKWebViewの殻。#441）のAPNsデバイストークン（#475）。**端末ごとに1行**。
+ *
+ * WKWebViewにはPushManagerが無くWeb Pushが使えないため、殻がAPNsのトークンを取って
+ * サーバーへ登録し、`sendPushToUser()` がWeb Pushと並べて送る。
+ * トークンは長さが可変（32バイト以上）なのでSHA-256の64文字を一意制約に使う
+ * （`PushSubscription.endpointHash` と同じ手）。
+ */
+model ApnsDevice {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// デバイストークン（16進。APNsへ送るときの宛先）。
+  token String @db.VarChar(200)
+  /// `token` のSHA-256（hex 64文字）。一意制約はこちらに張る。
+  tokenHash String @db.VarChar(64)
+  /// `production`（TestFlight・App Store）か `sandbox`（Xcodeからの実機ビルド）。トークンは環境ごとに別物。
+  environment String @db.VarChar(16)
+  deviceLabel String @db.VarChar(120)
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  lastNotifiedAt DateTime?
+
+  @@unique([tokenHash])
   @@index([userId, createdAt])
 }
 

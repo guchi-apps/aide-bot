@@ -107,6 +107,28 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   認証を抜けても開発DBが空なら画面は空のままで検証にならない
 - シークレットの実値はコミット・PR本文・Issueコメント・ログのいずれにも書かない
 
+## iOSアプリ（#441）
+
+`ios/` に、Webを開くSwiftUI＋WKWebViewの殻を持つ（Bundle ID `com.gucchii.morrow`・iOS 18以上。方式はYoteiFlowの
+`ios/` を移植）。**画面・機能はWebが正本**で、殻は「開く・Googleログインを認証シートで往復する・通信失敗で再試行させる」だけ。
+詳細・手順は `ios/README.md`。
+
+- **GoogleはWebView内ではログインできない**（`disallowed_useragent`）。認証シート（`ASWebAuthenticationSession`）と
+  WKWebViewはCookieを共有しないので、`GET /auth/native/start`（PKCEのchallengeを持って開始）→ `/auth/callback?native=1`
+  （**許可判定・User作成は既存と同じ箇所**。通ったら一度限り・60秒の引き継ぎコードだけを `morrow://auth-callback` で返す）→
+  WebViewから `POST /auth/native/consume`（コード＋verifier）で通常のSupabase Cookieを受け取る。**トークンはURL・ログ・
+  Swiftに出さない**。失敗の理由は区別せず同じ拒否。consumeでも許可リストを再確認する（#246）
+- **`/auth/native` はmiddlewareの公開パス**（認証シートはCookie無し、consumeはログイン前に呼ぶ）。**認証の判定を足すときは
+  ここも見ること**
+- **引き継ぎ行（`NativeAuthHandoff`）のトークンは暗号化して置く**（`src/lib/native-auth/cipher.ts`）。専用の鍵は無いので、
+  サーバーだけが持つ `VAPID_PRIVATE_KEY` からHKDFで用途専用の鍵を導く。**未設定ならログインの引き継ぎごと閉じる**
+  （平文に落とさない）。VAPID鍵を差し替えると、その時点で発行済みの引き継ぎ行（60秒）が読めなくなるだけ
+- ログアウトはWebのフォーム（`/auth/signout`）のまま `signOutThisApp()`（scope: local）を通る。共有Supabaseの他アプリ・他端末は巻き込まない
+- **戻り先スキーム・横取りするパス・同一オリジン判定・エフェメラルはSwift（`ios/Morrow/`）とTS（`native-app.ts`）で二重に持つ**。
+  `test/ios-consistency.test.ts`（`ios/scripts/check-consistency.mjs`）が照合する。**本番URL以外をコミットしない**
+- Web更新はデプロイだけで反映され、殻（`ios/`）を変えたときだけ新しいビルドをTestFlightへ上げる。**subpcにXcodeは無い**ので、
+  ビルド・署名・アップロード・実機確認はMacで本人が行う
+
 ## Route Handlerのリクエスト本文（#262）
 
 **本文はJSONの `null` でも「読めた」ことになる。** `request.json()` は本文が `null` なら `null` を返す

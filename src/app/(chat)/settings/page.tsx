@@ -15,6 +15,7 @@ import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
 import { hasNotionConnection } from "@/lib/home-profile";
 import { pushPublicKey } from "@/lib/push/config";
 import { normalizeFrequency } from "@/lib/proactive-labels";
+import { isApnsConfigured } from "@/lib/push/apns";
 import { countSubscriptions } from "@/lib/push/subscriptions";
 
 export const metadata = { title: "設定" };
@@ -82,7 +83,11 @@ export default async function SettingsPage({ searchParams }: Props) {
         {/* VAPIDの公開鍵はここでpropsとして渡す（#79）。`NEXT_PUBLIC_*` に置くとビルド時に
             バンドルへ焼き込まれ、鍵を差し替えるたびに再ビルドが要る。理由の詳細は
             `@/lib/push/config` のコメント。 */}
-        <NotificationSettings publicKey={pushPublicKey()} initialDeviceCount={deviceCount} />
+        <NotificationSettings
+          publicKey={pushPublicKey()}
+          initialDeviceCount={deviceCount}
+          apnsConfigured={isApnsConfigured()}
+        />
 
         <ProactiveSettingsCard
           hasDevice={deviceCount > 0}

@@ -8,7 +8,7 @@
 // 印は処理済み・内部グループへの割当てが済んだあとにだけ付けるので、途中で失敗した配布の
 // 変更も、次のリリースの判定に残る（リリースごとの差分ではなく、配布済みとの差分で見る）。
 //
-// 配布物に入るのは Morrow/・Morrow.xcodeproj/ だけ。README・scripts は
+// 配布物に入るのは Morrow/・Morrow.xcodeproj/・Morrow.entitlements（#475）だけ。README・scripts は
 // 入らないので除外し、pbxproj の版番号の行（MARKETING_VERSION・CURRENT_PROJECT_VERSION）だけの
 // 差分も数えない（リリースのバンプで毎回書き換わる・#535）。
 // ios-rebuild-notice.yml も同じ判定を呼ぶ（食い違わせない）。
@@ -23,6 +23,7 @@ export const TAG_PREFIX = "ios-testflight/";
 export const DISTRIBUTED_PATHSPEC = [
   "ios/Morrow",
   "ios/Morrow.xcodeproj",
+  "ios/Morrow.entitlements",
   ":(exclude,glob)**/*.md",
 ];
 

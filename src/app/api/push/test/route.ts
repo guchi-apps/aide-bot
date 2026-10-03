@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth-user";
+import { isApnsConfigured } from "@/lib/push/apns";
 import { isPushConfigured } from "@/lib/push/config";
 import { sendPushToUser } from "@/lib/push/subscriptions";
 
@@ -22,7 +23,8 @@ export async function POST() {
     return NextResponse.json({ error: "ログインが必要です。" }, { status: 401 });
   }
 
-  if (!isPushConfigured()) {
+  // Web Push（VAPID）かiOSアプリ（APNs。#475）のどちらかが使える状態であればよい
+  if (!isPushConfigured() && !isApnsConfigured()) {
     return NextResponse.json(
       { error: "通知に必要な設定がサーバー側にありません。管理者に連絡してください。" },
       { status: 503 },

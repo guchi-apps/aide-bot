@@ -9,6 +9,7 @@ import { parseChoice, type Choice } from "@/lib/notice-choice";
 import { currentNoticeWhere, isWithinShowWindow, pendingNoticeWhere } from "@/lib/notice-conditions";
 import { recordRun, shouldGenerate, type LastRun } from "@/lib/notice-schedule";
 import { safeNoticeUrl } from "@/lib/notice-url";
+import { isPushKindEnabled } from "@/lib/push/kinds-server";
 import { sendPushToUser } from "@/lib/push/subscriptions";
 
 /**
@@ -178,6 +179,9 @@ async function notifyUrgentNotice(userId: string, notice: Notice): Promise<void>
   const now = new Date();
 
   if (!isWithinShowWindow(notice, now)) return;
+
+  // 通知の種類ごとのオフ（#488）。吹き出し・一覧には出るので、Pushと記録への追記だけを止める。
+  if (!(await isPushKindEnabled(userId, "urgent-notice"))) return;
 
   const existing = await db.notificationLog.findUnique({
     where: {

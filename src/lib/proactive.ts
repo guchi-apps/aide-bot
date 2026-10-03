@@ -15,6 +15,7 @@ import {
   proactiveGate,
 } from "@/lib/proactive-rule";
 import { normalizeFrequency, type ProactiveSettings } from "@/lib/proactive-labels";
+import { parseDisabledKinds } from "@/lib/push/kinds";
 import { sendPushToUser, usersWithSubscriptions } from "@/lib/push/subscriptions";
 
 /**
@@ -209,12 +210,19 @@ export async function runProactiveSuggestions(now = new Date()): Promise<Proacti
       proactiveAvoidWork: true,
       proactiveFrequency: true,
       proactiveCheckedAt: true,
+      pushDisabledKinds: true,
     },
   });
 
   const outcomes: ProactiveOutcome[] = [];
 
   for (const row of rows) {
+    // 通知の種類ごとのオフ（#488）。判定（モデル呼び出し）ごと止める
+    if (parseDisabledKinds(row.pushDisabledKinds).has("proactive-suggestion")) {
+      outcomes.push({ userId: row.id, status: "skipped", delivered: 0, detail: "通知の種類がオフ" });
+      continue;
+    }
+
     if (inFlight.has(row.id)) {
       outcomes.push({ userId: row.id, status: "skipped", delivered: 0, detail: "判定中" });
       continue;

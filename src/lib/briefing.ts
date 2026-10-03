@@ -11,6 +11,8 @@ import { appendSecretaryExchange, primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
 import { listConnectedServers, toCodexMcpServers } from "@/lib/mcp/connections";
 import { ingestNotice } from "@/lib/notices";
+import { disabledPushKinds } from "@/lib/push/kinds-server";
+import type { PushKind } from "@/lib/push/kinds";
 import { countSubscriptions, sendPushToUser, usersWithSubscriptions } from "@/lib/push/subscriptions";
 import { SCHEDULED_PUSH_TOPIC_LIMIT, composeScheduledBody } from "@/lib/scheduled-push-rule";
 import { refreshTopicsForSchedule, topicsForMorningBriefing } from "@/lib/topics";
@@ -216,10 +218,91 @@ async function runFor(
   }
 }
 
+/**
+ * 朝のニュースを別の会話・別の通知で届ける。失敗しても、すでに届いた見通しの記録を巻き戻さず、
+ * 同じ日に見通しだけを再送しない。仕入れが失敗しても、残っている話題は試す。
+ */
+async function deliverMorningTopics(
+  userId: string,
+  conversationId: string,
+  dedupeKey: string,
+  now: Date,
+): Promise<void> {
+  try {
+    const topics = await topicsForMorningBriefing(userId, SCHEDULED_PUSH_TOPIC_LIMIT, now);
+    if (topics.length > 0) {
+      const body = composeScheduledBody(topics.map((topic) => topic.title));
+      const topicsSavedAt = new Date();
+
+      await appendSecretaryExchange(conversationId, MORNING_TOPICS_REQUEST, body, topicsSavedAt);
+
+      const topicsDelivered = await sendPushToUser(userId, {
+        title: MORNING_TOPICS_TITLE,
+        body,
+        url: "/",
+        tag: MORNING_TOPICS_KIND,
+      });
+
+      await db.notificationLog.create({
+        data: {
+          userId,
+          kind: MORNING_TOPICS_KIND,
+          dedupeKey,
+          title: MORNING_TOPICS_TITLE,
+          body,
+          conversationId: conversationId,
+          deliveredCount: topicsDelivered,
+        },
+      });
+
+      // まとめた記事も同じ出来事なので、グループ全体へ印を付ける。以降の声かけ・定時の
+      // お知らせではこの話題を選ばない。
+      await db.topic.updateMany({
+        where: { id: { in: topics.flatMap((topic) => topic.mergedIds) } },
+        data: { spokenAt: topicsSavedAt },
+      });
+    }
+  } catch (error) {
+    console.error("[aide-bot] 朝のニュース通知に失敗した", error);
+  }
+}
+
+/** 朝の見通しがオフで、朝のニュースだけがオンの利用者。ニュースの記録（`NotificationLog`）で1日1本を守る。 */
+async function deliverTopicsOnly(
+  userId: string,
+  now: Date,
+  dedupeKey: string,
+  disabled: Set<PushKind>,
+): Promise<BriefingOutcome> {
+  if (disabled.has("morning-topics")) {
+    return { userId, status: "skipped", delivered: 0, detail: "通知の種類がオフ" };
+  }
+
+  const existing = await db.notificationLog.findUnique({
+    where: { userId_kind_dedupeKey: { userId, kind: MORNING_TOPICS_KIND, dedupeKey } },
+    select: { id: true },
+  });
+  if (existing) return { userId, status: "skipped", delivered: 0, detail: `${dedupeKey} は送信済み` };
+
+  await refreshTopicsForSchedule(userId, now).catch((error) => {
+    console.error("[aide-bot] 朝のニュースの仕入れに失敗した", error);
+  });
+
+  const conversation = await primaryConversation(userId);
+  await deliverMorningTopics(userId, conversation.id, dedupeKey, now);
+  return { userId, status: "sent", delivered: 0, detail: "朝の見通しはオフ" };
+}
+
 async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
   // 抑制の鍵は日本時間の日付。VPSはJSTだが、CIやマイグレーションの実行環境はUTCで動くことが
   // あり、日付の境目だけがずれると**同じ日に2本出る**（#79）。
   const dedupeKey = jstDayKey(now);
+
+  // 通知の種類ごとのオフ（#488）。見通しがオフなら生成そのものをしない（モデルを呼ばない）。
+  const disabled = await disabledPushKinds(userId);
+  if (disabled.has("morning-briefing")) {
+    return await deliverTopicsOnly(userId, now, dedupeKey, disabled);
+  }
 
   if (await handledOn(userId, dedupeKey)) {
     return { userId, status: "skipped", delivered: 0, detail: `${dedupeKey} は送信済み` };
@@ -227,9 +310,12 @@ async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
 
   // 話題の仕入れは見通しの生成と並行させる。順に待つと最大330秒となり、このRoute Handlerの
   // 300秒上限を超える。見通しが黙る回でも仕入れだけは残るが、次に画面や定時のお知らせから使える。
-  const topicRefresh = refreshTopicsForSchedule(userId, now).catch((error) => {
-    console.error("[aide-bot] 朝のニュースの仕入れに失敗した", error);
-  });
+  // ニュースがオフなら仕入れ（重い）も走らせない（#488）。
+  const topicRefresh = disabled.has("morning-topics")
+    ? Promise.resolve()
+    : refreshTopicsForSchedule(userId, now).catch((error) => {
+        console.error("[aide-bot] 朝のニュースの仕入れに失敗した", error);
+      });
 
   let text: string;
   try {
@@ -319,45 +405,10 @@ async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
     },
   });
 
-  // ニュースは見通しとは別の会話・別の通知で届ける。失敗しても、すでに届いた見通しの記録を
-  // 巻き戻さず、同じ日に見通しだけを再送しない。仕入れが失敗しても、残っている話題は試す。
+  // ニュースは見通しとは別の会話・別の通知で届ける。種類がオフなら送らない（#488）。
   await topicRefresh;
-  try {
-    const topics = await topicsForMorningBriefing(userId, SCHEDULED_PUSH_TOPIC_LIMIT, now);
-    if (topics.length > 0) {
-      const body = composeScheduledBody(topics.map((topic) => topic.title));
-      const topicsSavedAt = new Date();
-
-      await appendSecretaryExchange(conversation.id, MORNING_TOPICS_REQUEST, body, topicsSavedAt);
-
-      const topicsDelivered = await sendPushToUser(userId, {
-        title: MORNING_TOPICS_TITLE,
-        body,
-        url: "/",
-        tag: MORNING_TOPICS_KIND,
-      });
-
-      await db.notificationLog.create({
-        data: {
-          userId,
-          kind: MORNING_TOPICS_KIND,
-          dedupeKey,
-          title: MORNING_TOPICS_TITLE,
-          body,
-          conversationId: conversation.id,
-          deliveredCount: topicsDelivered,
-        },
-      });
-
-      // まとめた記事も同じ出来事なので、グループ全体へ印を付ける。以降の声かけ・定時の
-      // お知らせではこの話題を選ばない。
-      await db.topic.updateMany({
-        where: { id: { in: topics.flatMap((topic) => topic.mergedIds) } },
-        data: { spokenAt: topicsSavedAt },
-      });
-    }
-  } catch (error) {
-    console.error("[aide-bot] 朝のニュース通知に失敗した", error);
+  if (!disabled.has("morning-topics")) {
+    await deliverMorningTopics(userId, conversation.id, dedupeKey, now);
   }
 
   return { userId, status: "sent", delivered };
@@ -397,7 +448,7 @@ export async function runMorningBriefing(now = new Date()): Promise<BriefingOutc
 
 export type WakeSignalCheck =
   | { accepted: true; message: string }
-  | { accepted: false; status: "too_early" | "running" | "already_sent" | "no_device"; message: string };
+  | { accepted: false; status: "too_early" | "running" | "already_sent" | "no_device" | "disabled"; message: string };
 
 /**
  * 起きた合図（#233）で朝の見通しを作ってよいかを、**生成を仕掛ける前に**確かめる。
@@ -413,6 +464,15 @@ export async function checkWakeSignal(userId: string, now: Date): Promise<WakeSi
       accepted: false,
       status: "too_early",
       message: "4時より前の合図なので、朝のお知らせはまだお届けしません。",
+    };
+  }
+
+  // 通知の種類ごとのオフ（#488）。オフのまま「お届けしますね」と返すと、何も届かない
+  if ((await disabledPushKinds(userId)).has("morning-briefing")) {
+    return {
+      accepted: false,
+      status: "disabled",
+      message: "朝の見通しの通知がオフになっているため、お届けしません。設定の画面でオンにできます。",
     };
   }
 

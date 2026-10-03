@@ -227,14 +227,12 @@ async function deliverMorningTopics(
   conversationId: string,
   dedupeKey: string,
   now: Date,
-): Promise<void> {
+): Promise<number | undefined> {
   try {
     const topics = await topicsForMorningBriefing(userId, SCHEDULED_PUSH_TOPIC_LIMIT, now);
     if (topics.length > 0) {
       const body = composeScheduledBody(topics.map((topic) => topic.title));
       const topicsSavedAt = new Date();
-
-      await appendSecretaryExchange(conversationId, MORNING_TOPICS_REQUEST, body, topicsSavedAt);
 
       const topicsDelivered = await sendPushToUser(userId, {
         title: MORNING_TOPICS_TITLE,
@@ -242,6 +240,11 @@ async function deliverMorningTopics(
         url: "/",
         tag: MORNING_TOPICS_KIND,
       });
+
+      // Pushが全滅した回は、会話・抑制記録・話題のどれも消費しない。
+      if (topicsDelivered === 0) return 0;
+
+      await appendSecretaryExchange(conversationId, MORNING_TOPICS_REQUEST, body, topicsSavedAt);
 
       await db.notificationLog.create({
         data: {
@@ -261,10 +264,12 @@ async function deliverMorningTopics(
         where: { id: { in: topics.flatMap((topic) => topic.mergedIds) } },
         data: { spokenAt: topicsSavedAt },
       });
+      return topicsDelivered;
     }
   } catch (error) {
     console.error("[aide-bot] 朝のニュース通知に失敗した", error);
   }
+  return undefined;
 }
 
 /** 朝の見通しがオフで、朝のニュースだけがオンの利用者。ニュースの記録（`NotificationLog`）で1日1本を守る。 */
@@ -289,8 +294,12 @@ async function deliverTopicsOnly(
   });
 
   const conversation = await primaryConversation(userId);
-  await deliverMorningTopics(userId, conversation.id, dedupeKey, now);
-  return { userId, status: "sent", delivered: 0, detail: "朝の見通しはオフ" };
+  const delivered = await deliverMorningTopics(userId, conversation.id, dedupeKey, now);
+  if (delivered === 0) {
+    return { userId, status: "failed", delivered: 0, detail: "朝のニュースを届けられる端末がありません" };
+  }
+  if (delivered === undefined) return { userId, status: "silent", delivered: 0, detail: "届ける話題がありません" };
+  return { userId, status: "sent", delivered, detail: "朝の見通しはオフ" };
 }
 
 async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
@@ -357,8 +366,6 @@ async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
   // `now` のまま。
   const savedAt = new Date();
 
-  await appendSecretaryExchange(conversation.id, MORNING_BRIEFING_REQUEST, text, savedAt);
-
   const delivered = await sendPushToUser(userId, {
     title: BRIEFING_TITLE,
     // 押した先は今日の記録。**追記した先がそこ**なので、開けば見通しがいちばん下にある
@@ -367,6 +374,10 @@ async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
     url: "/",
     tag: MORNING_BRIEFING_KIND,
   });
+
+  if (delivered > 0) {
+    await appendSecretaryExchange(conversation.id, MORNING_BRIEFING_REQUEST, text, savedAt);
+  }
 
   // 同じ内容を、秘書の吹き出しの受け皿へも積む（#93）。
   //
@@ -379,31 +390,35 @@ async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
   //
   // 期限を切っておくのは、朝の見通しが夕方の吹き出しに出てこないようにするため
   // （吹き出し側の表示は60分で引っ込むが、候補として選ばれ直すのはこちらで止める）。
-  try {
-    await ingestNotice(userId, {
-      source: "aide-bot",
-      kind: MORNING_BRIEFING_KIND,
-      dedupeKey,
-      body: text,
-      url: "/",
-      expiresAt: new Date(now.getTime() + BRIEFING_NOTICE_LIFETIME_MS),
-    });
-  } catch (error) {
-    // 積めなくても通知は届いている。#51・#79と同じで、記録の失敗で本筋を止めない。
-    console.error("[aide-bot] 朝の見通しをお知らせの受け皿へ積めなかった", error);
+  if (delivered > 0) {
+    try {
+      await ingestNotice(userId, {
+        source: "aide-bot",
+        kind: MORNING_BRIEFING_KIND,
+        dedupeKey,
+        body: text,
+        url: "/",
+        expiresAt: new Date(now.getTime() + BRIEFING_NOTICE_LIFETIME_MS),
+      });
+    } catch (error) {
+      // 積めなくても通知は届いている。#51・#79と同じで、記録の失敗で本筋を止めない。
+      console.error("[aide-bot] 朝の見通しをお知らせの受け皿へ積めなかった", error);
+    }
   }
 
-  await db.notificationLog.create({
-    data: {
-      userId,
-      kind: MORNING_BRIEFING_KIND,
-      dedupeKey,
-      title: BRIEFING_TITLE,
-      body: text,
-      conversationId: conversation.id,
-      deliveredCount: delivered,
-    },
-  });
+  if (delivered > 0) {
+    await db.notificationLog.create({
+      data: {
+        userId,
+        kind: MORNING_BRIEFING_KIND,
+        dedupeKey,
+        title: BRIEFING_TITLE,
+        body: text,
+        conversationId: conversation.id,
+        deliveredCount: delivered,
+      },
+    });
+  }
 
   // ニュースは見通しとは別の会話・別の通知で届ける。種類がオフなら送らない（#488）。
   await topicRefresh;
@@ -411,7 +426,9 @@ async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
     await deliverMorningTopics(userId, conversation.id, dedupeKey, now);
   }
 
-  return { userId, status: "sent", delivered };
+  return delivered > 0
+    ? { userId, status: "sent", delivered }
+    : { userId, status: "failed", delivered, detail: "朝の見通しを届けられる端末がありません" };
 }
 
 /**

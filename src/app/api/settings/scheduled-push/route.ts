@@ -77,22 +77,27 @@ export async function POST(request: Request) {
     return badRequest("曜日・時刻・話題の種類を指定してください。");
   }
 
-  const count = await db.scheduledPush.count({ where: { userId: user.id } });
-  if (count >= SCHEDULED_PUSH_LIMIT) {
-    return badRequest(`登録できるのは${SCHEDULED_PUSH_LIMIT}件までです。`);
-  }
+  const { daysMask, hour, minute, category } = data;
 
-  const created = await db.scheduledPush.create({
-    data: {
-      userId: user.id,
-      daysMask: data.daysMask,
-      hour: data.hour,
-      minute: data.minute,
-      category: data.category,
-      enabled: data.enabled ?? true,
-    },
-    select: SELECT,
+  // countとcreateを別々に流すと、同時のPOSTが両方「上限未満」を見て1件超えて登録できる（#471）。
+  // 利用者の行をロックして、同じ利用者の登録を直列にする。
+  const created = await db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM User WHERE id = ${user.id} FOR UPDATE`;
+    const count = await tx.scheduledPush.count({ where: { userId: user.id } });
+    if (count >= SCHEDULED_PUSH_LIMIT) return null;
+    return tx.scheduledPush.create({
+      data: {
+        userId: user.id,
+        daysMask,
+        hour,
+        minute,
+        category,
+        enabled: data.enabled ?? true,
+      },
+      select: SELECT,
+    });
   });
+  if (!created) return badRequest(`登録できるのは${SCHEDULED_PUSH_LIMIT}件までです。`);
 
   return NextResponse.json({ schedule: created }, { status: 201 });
 }

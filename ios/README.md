@@ -30,20 +30,43 @@
 
 ## TestFlight で配布する
 
-**ビルドとアップロードは Mac でしかできません。** TestFlight のビルドは90日で期限切れになるため、そのたびに新しいビルドを上げます。
+**mainへのデプロイ後に、GitHub Actions（macOSランナー）が自動でTestFlightの内部テストへ配布します**（#448。YoteiFlow・kurashioと同じ方式）。Mac での手動アップロード（下記）は予備の経路です。TestFlight のビルドは90日で期限切れになるため、期限が近いときは `ios-testflight.yml` を手動実行します。
+
+### 自動配布の流れ
+
+`Deploy to Production`（main）成功 → `ios-testflight-trigger.yml` が `ios-testflight.yml` を起動 → 判定（`ios/scripts/ios-changes.mjs`）→ 署名・アーカイブ・書き出し・アップロード → 処理待ち・内部グループへ配布（`ios/scripts/asc-api.mjs`）→ 印のタグ `ios-testflight/<ビルド番号>` ＋ Signaly通知。
+
+- **配るのは `ios/Morrow/`・`ios/Morrow.xcodeproj/` に実質的な変更があるときだけ**（README・scripts・版番号の行だけの差分は数えない）。Webだけの更新ではビルドしない。比べる相手は最後に配布し終えたタグ。タグが無い初回は必ず配る
+- 判定だけ見たいときは Actions →「iOS TestFlight」→ Run workflow で `dry_run` にチェック。sha を指定すればそのコミット（main上のもの）を配る
+- iOSの失敗はWebのデプロイとは別のrunで赤くなる（Webの本番反映は済んでいる）。失敗した run は「Re-run failed jobs」か同じ shaで手動実行し直す（アップロード済みのビルドは二重に上げない）
+- ビルド番号は `run_number*100+run_attempt`。署名はクラウド署名（APIキー＋`-allowProvisioningUpdates`）。使い捨てランナーで作られた Development 証明書は署名の前後で失効させる（溜まると上限に達する）
+- CIの書き出しは `ios/scripts/ExportOptions.plist`（`destination=export`。IPAを書き出してから `altool` で上げる）。手動経路は `ios/ExportOptions.plist`（`destination=upload`）
+- `develop`→`main` のPRには、`ios/` に配布物の変更があると `ios-rebuild-notice.yml` がコメントで知らせる
+- 内部グループが複数あるときは repository variable `TESTFLIGHT_GROUP` にグループ名を入れる
+
+### 自動配布の初期設定（手作業）
+
+1. 下記「初回だけ」の App Store Connect のアプリ登録と内部グループ作成
+2. GitHub の secret `ASC_KEY_ID`・`ASC_ISSUER_ID`・`ASC_KEY_P8`（`.github/secrets-manifest.tsv` に行がある。値は 1Password の `apps/AppStoreConnect`）。個人アカウントで `scripts/sync-github-secrets.sh --dry-run` → 本実行（またはActionsの Sync Secrets）
+3. 未登録のままでも Web のデプロイは失敗せず、iOS配布のジョブだけが認証エラーで止まる
+4. APIキーが失効したら、App Store Connect で新しいキーを作って 1Password を更新し、同期し直す
+
+### 手動で上げる（予備）
+
+**この経路のビルドとアップロードは Mac でしかできません。**
 
 | 項目 | 値・運用 |
 |---|---|
 | App Store Connect のアプリ | 名前 `Morrow`・Bundle ID `com.gucchii.morrow`・チーム `6AA3WFTR94`（初回だけ手作業） |
 | 輸出コンプライアンス | `INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO`（標準のHTTPS通信のみ） |
 | アイコン | `AppIcon.appiconset` の1024px（アルファ無し）。`public/icon.svg`（承認済みのMマーク）から書き出したもの |
-| 版番号（`MARKETING_VERSION`） | `package.json` の `version` と揃える。上げる前に `node ios/scripts/sync-version.mjs`（冪等）して差分をコミットする |
-| ビルド番号（`CURRENT_PROJECT_VERSION`） | アップロードのたびに増える必要がある。スクリプトが Archive 時に日時（`YYYYMMDDHHMM`）で上書きする（`IOS_BUILD_NUMBER` で固定も可） |
+| 版番号（`MARKETING_VERSION`） | `package.json` の `version` と揃える。`pnpm version`（リリースの版上げ）が `package.json` の `scripts.version` から `sync-version.mjs` を実行して同じコミットへ含める。手動でも `node ios/scripts/sync-version.mjs`（冪等）。自動配布はずれていると止まる |
+| ビルド番号（`CURRENT_PROJECT_VERSION`） | アップロードのたびに増える必要がある。自動配布は run 番号から決める。手動スクリプトが Archive 時に日時（`YYYYMMDDHHMM`）で上書きする（`IOS_BUILD_NUMBER` で固定も可） |
 
 ### 初回だけ（手作業・本人の操作）
 
 1. [App Store Connect](https://appstoreconnect.apple.com/) → マイApp → 「+」→ 新規App。プラットフォーム iOS・名前 Morrow・プライマリ言語 日本語・Bundle ID `com.gucchii.morrow`・SKU は任意（例 `morrow`）。Bundle ID が候補に出ない場合は Developer サイトの Identifiers で `com.gucchii.morrow` を先に登録する
-2. App Store Connect API キーは**新しく作らず共用**する（APIキーはチーム単位）。1Password の `apps/MyRoom` の `asc-key-id`・`asc-issuer-id`・`asc-key-p8` を `ios/asc.env.tpl` が参照している
+2. App Store Connect API キーは**新しく作らず共用**する（APIキーはチーム単位）。1Password の `apps/AppStoreConnect` の `key-id`・`issuer-id`・`key-p8` を `ios/asc.env.tpl` が参照している
 3. TestFlight →「内部テスト」にグループを作り、自分を追加
 4. サーバー側の確認（下記「Supabase側の設定」）
 

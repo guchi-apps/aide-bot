@@ -274,6 +274,21 @@ extension WebViewModel: WKUIDelegate {
         return nil
     }
 
+    /// マイク・カメラの要求（Web Speech API・`getUserMedia`）。Morrow自身のオリジンにだけ許可し、
+    /// 他のオリジンは拒否する。許可してもOSのマイク許可（初回のダイアログ）は別に出る
+    func webView(
+        _ webView: WKWebView,
+        requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+        initiatedByFrame frame: WKFrameInfo,
+        type: WKMediaCaptureType
+    ) async -> WKPermissionDecision {
+        guard type == .microphone,
+              origin.protocol == AppConfig.baseURL.scheme,
+              origin.host == AppConfig.baseURL.host
+        else { return .deny }
+        return .grant
+    }
+
     /// `window.confirm()`（削除の確認など）。UIDelegateで実装しないと常に false が返り、実行できない
     func webView(
         _ webView: WKWebView,

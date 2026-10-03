@@ -5,6 +5,7 @@ import { BriefingTimePicker } from "@/components/settings/briefing-time-picker";
 import { ConnectionList } from "@/components/settings/connection-list";
 import { HomeProfileCard } from "@/components/settings/home-profile-card";
 import { ProactiveSettingsCard } from "@/components/settings/proactive-settings";
+import { PushKindsCard } from "@/components/settings/push-kinds-card";
 import { NotificationSettings } from "@/components/settings/notification-settings";
 import { WakeTriggerCard } from "@/components/settings/wake-trigger-card";
 import { WriteToolPicker } from "@/components/settings/write-tool-picker";
@@ -15,6 +16,7 @@ import { selectedWriteToolPolicy } from "@/lib/mcp/write-tools-server";
 import { hasNotionConnection } from "@/lib/home-profile";
 import { pushPublicKey } from "@/lib/push/config";
 import { normalizeFrequency } from "@/lib/proactive-labels";
+import { parseDisabledKinds } from "@/lib/push/kinds";
 import { isApnsConfigured } from "@/lib/push/apns";
 import { countSubscriptions } from "@/lib/push/subscriptions";
 
@@ -88,6 +90,8 @@ export default async function SettingsPage({ searchParams }: Props) {
           initialDeviceCount={deviceCount}
           apnsConfigured={isApnsConfigured()}
         />
+
+        <PushKindsCard initialDisabled={[...parseDisabledKinds(user.pushDisabledKinds)]} />
 
         <ProactiveSettingsCard
           hasDevice={deviceCount > 0}

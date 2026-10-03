@@ -75,6 +75,9 @@ model User {
   /// 最後に提案の判定を試みた時刻。モデルを呼ぶ回の間隔をあけるための印（送った・黙った・失敗のどれでも進める）。
   proactiveCheckedAt DateTime?
 
+  /// オフにした通知の種類（#488）。`src/lib/push/kinds.ts` のキーをカンマで繋ぐ。空文字なら全部オン。
+  pushDisabledKinds String @default("") @db.VarChar(200)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

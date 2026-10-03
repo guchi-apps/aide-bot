@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth-user";
 import { isApnsConfigured } from "@/lib/push/apns";
 import { isPushConfigured } from "@/lib/push/config";
+import { readJsonObject } from "@/lib/json-body";
+import { PUSH_KIND_INFO, isPushKind } from "@/lib/push/kinds";
 import { sendPushToUser } from "@/lib/push/subscriptions";
 
 /**
@@ -17,7 +19,7 @@ import { sendPushToUser } from "@/lib/push/subscriptions";
 
 export const dynamic = "force-dynamic";
 
-export async function POST() {
+export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: "ログインが必要です。" }, { status: 401 });
@@ -31,12 +33,24 @@ export async function POST() {
     );
   }
 
-  const delivered = await sendPushToUser(user.id, {
-    title: "テスト通知",
-    body: "この形で朝の見通しが届きます。押すと相談の画面が開きます。",
-    url: "/settings",
-    tag: "push-test",
-  });
+  // 種類を指定したら、その種類と同じタイトル・遷移先の見本を送る（#488）。
+  // 種類がオフでも送れる（確かめたいのは届き方）。本文なしは従来どおりの1本。
+  const body = await readJsonObject(request);
+  const kind = body?.kind;
+
+  if (kind !== undefined && !isPushKind(kind)) {
+    return NextResponse.json({ error: "通知の種類の指定が正しくありません。" }, { status: 400 });
+  }
+
+  const sample = kind
+    ? PUSH_KIND_INFO[kind].sample
+    : {
+        title: "テスト通知",
+        body: "この形で朝の見通しが届きます。押すと相談の画面が開きます。",
+        url: "/settings",
+      };
+
+  const delivered = await sendPushToUser(user.id, { ...sample, tag: `push-test${kind ? `:${kind}` : ""}` });
 
   return NextResponse.json({ delivered });
 }

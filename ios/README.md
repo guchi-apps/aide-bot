@@ -161,6 +161,6 @@ WKWebViewにはWeb Pushが無いため、アプリはAPNsで通知を受ける�
 ### 手作業（本人の操作）
 
 1. Apple Developer の Identifiers で `com.gucchii.morrow` に **Push Notifications** を有効にする（CIのクラウド署名で自動更新されない場合）
-2. Keys で **APNs認証キー（.p8）** を作る（App Store Connect APIキーとは別物）。Key ID・Team ID（`6AA3WFTR94`）・.p8を1Passwordの `apps/aide-bot` に `apns-key-id`・`apns-team-id`・`apns-key-p8`（`AuthKey_XXXX.p8` の中身をbase64で1行）として登録し、`scripts/sync-github-secrets.sh` で同期してデプロイ
+2. Keys で **APNs認証キー（.p8）** を作る（App Store Connect APIキーとは別物）。Key ID・Team ID（`6AA3WFTR94`）・.p8は1Passwordの `apps/AppStoreConnect` の「Apple Push Notification service (APNs)」セクションに `apns-key-id`・`apns-team-id`・`apns-auth-key`（`AuthKey_XXXX.p8` の中身をbase64で1行）として登録し、`scripts/sync-github-secrets.sh` で同期してデプロイ
 3. 3つのどれかが欠けるとAPNsの経路ごと無効（Web Pushだけが動く）。設定画面のアプリ内表示にもその旨が出る
 4. 実機（TestFlight）で通知の許可 → 設定画面の「試しに送る」で受信を確かめる。**subpcには Xcode が無いので、受信確認は Mac・実機で行う**

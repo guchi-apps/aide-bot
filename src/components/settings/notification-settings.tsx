@@ -218,48 +218,13 @@ export function NotificationSettings({ publicKey, initialDeviceCount, apnsConfig
     }
   }, []);
 
-  const sendTest = useCallback(async () => {
-    setBusy(true);
-    setMessage(null);
-
-    try {
-      const response = await fetch("/api/push/test", { method: "POST" });
-      const result = (await response.json().catch(() => ({}))) as {
-        delivered?: number;
-        error?: string;
-      };
-
-      if (!response.ok) throw new Error(result.error ?? "テスト通知を送れませんでした。");
-
-      setMessage(
-        result.delivered && result.delivered > 0
-          ? { tone: "info", text: `${result.delivered}台へ送りました。数秒で届きます。` }
-          : {
-              tone: "error",
-              text: "送り先が1台もありませんでした。もう一度オンにし直してください。",
-            },
-      );
-    } catch (error) {
-      setMessage({
-        tone: "error",
-        text: error instanceof Error ? error.message : "テスト通知を送れませんでした。",
-      });
-    } finally {
-      setBusy(false);
-    }
-  }, []);
-
   return (
     <section className="flex flex-col gap-5">
       <header>
         <h3 className="text-sm font-medium">秘書からのお知らせ</h3>
         <p className="mt-1.5 text-[0.8125rem] leading-relaxed text-muted">
-          毎朝1回、その日の予定・天気・部屋やシステムの状況をまとめて届けます。押すとその相談が
-          開くので、そのまま続きを聞けます。
-          <b className="font-medium text-foreground">
-            {" "}
-            届くのは1日1本まで。知らせることが無い日は届きません。
-          </b>
+          秘書からの通知を、この端末で受け取るかどうかを決めます。どんな通知を受け取るかは、
+          下の「通知の種類」で選べます。押すとその相談が開くので、そのまま続きを聞けます。
         </p>
       </header>
 
@@ -273,17 +238,6 @@ export function NotificationSettings({ publicKey, initialDeviceCount, apnsConfig
                 : "サーバー側の設定が済むまで、アプリへは通知を送れません"}
             </span>
           </div>
-
-          {apnsConfigured && deviceCount > 0 && (
-            <button
-              type="button"
-              onClick={sendTest}
-              disabled={busy}
-              className="whitespace-nowrap rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-rail-active disabled:opacity-50"
-            >
-              試しに送る
-            </button>
-          )}
         </div>
       ) : publicKey === "" ? (
         <Notice tone="error">
@@ -319,17 +273,6 @@ export function NotificationSettings({ publicKey, initialDeviceCount, apnsConfig
           </div>
 
           <div className="flex shrink-0 items-center gap-1.5">
-            {state.subscribed && (
-              <button
-                type="button"
-                onClick={sendTest}
-                disabled={busy}
-                className="whitespace-nowrap rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-rail-active disabled:opacity-50"
-              >
-                試しに送る
-              </button>
-            )}
-
             <button
               type="button"
               onClick={state.subscribed ? disable : enable}

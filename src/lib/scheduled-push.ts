@@ -7,6 +7,7 @@ import {
   isDue,
   scheduledDedupeKey,
 } from "@/lib/scheduled-push-rule";
+import { isPushKindEnabled } from "@/lib/push/kinds-server";
 import { sendPushToUser, usersWithSubscriptions } from "@/lib/push/subscriptions";
 import { topicCategoryShort } from "@/lib/topic-categories";
 import { listTopicCategories } from "@/lib/topic-category-store";
@@ -38,7 +39,12 @@ export type ScheduledPushOutcome = {
 const inFlight = new Set<string>();
 
 export async function runScheduledPushes(now = new Date()): Promise<ScheduledPushOutcome[]> {
-  const userIds = await usersWithSubscriptions();
+  const subscribed = await usersWithSubscriptions();
+  // 通知の種類ごとのオフ（#488）。オフの利用者は仕入れも送信もしない
+  const userIds: string[] = [];
+  for (const id of subscribed) {
+    if (await isPushKindEnabled(id, "scheduled-push")) userIds.push(id);
+  }
   if (userIds.length === 0) return [];
 
   const schedules = await db.scheduledPush.findMany({

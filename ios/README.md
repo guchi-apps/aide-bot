@@ -8,7 +8,7 @@
 | 表示名 | Morrow |
 | Bundle ID | `com.gucchii.morrow` |
 | 署名 | Automatic（Apple Developer Program のチーム `6AA3WFTR94`。kurashio・YoteiFlow と同じチーム） |
-| 対応 | iPhone・縦向き・iOS 18以上 |
+| 対応 | iPhone（縦向き）・iPad（縦横・全向き）・iOS 18以上。iPadでもiPhone互換モードにならず、Web側の `md`（768px以上）の2カラム表示になる（#482） |
 | 認証シートの戻り先 | `morrow://auth-callback` |
 | Push Notifications | 使う（#475。APNs）。`Morrow.entitlements` の `aps-environment` |
 | Associated Domains / App Group | 使わない（初版スコープ外） |

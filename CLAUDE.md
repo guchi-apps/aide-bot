@@ -1555,6 +1555,10 @@ ops-dashboardの「アプリ別のAI利用」（ops-dashboard#325）が、`GET /
   スクロールを0へ戻す。**指で拡大している間（`scale` ≠ 1）は触らない**（拡大でも高さが縮む）。
   手元ではCDPの `Page.addScriptToEvaluateOnNewDocument` で偽の `visualViewport`（`EventTarget` に
   `height`・`scale`）を差し込み、`resize` を投げれば配線までは確かめられる。効いたかは実機（`pnpm dev:https`）で見る
+  **#476: キーボードが出ても会話欄が縮まない報告があった**（iPhoneのPWA。縮み・末尾スクロールの両方が効いていない画面）。
+  検出（`isKeyboardOpen()`）を、入力欄にフォーカス中は60px超の縮みでも拾う形に広げ、フォーカス直後に150/400/800ms後にも
+  見直す（resizeが遅れる・届かない端末向け）。記録の末尾にも余白（`h-3`）を足した。**原因は実機で確定していない**ので、
+  直ったかは `pnpm dev:https` でiPhoneのPWAを開いて確かめること
 - **localStorageの値をuseStateの初期値やuseEffectで入れない。** ESLintの
   `react-hooks/set-state-in-effect` に掛かり、ハイドレーションもずれる。
   `useSyncExternalStore`（`src/lib/speech/voice-settings.ts`）で外部ストアとして扱う

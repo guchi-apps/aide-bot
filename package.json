@@ -12,6 +12,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "pnpm lint && pnpm typecheck && pnpm test:unit",
+    "version": "node ios/scripts/sync-version.mjs && git add ios/Morrow.xcodeproj/project.pbxproj",
     "test:unit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./test/register-alias.mjs --test \"test/**/*.test.ts\"",
     "postinstall": "prisma generate",
     "env:init": "cp -n .env.local.example .env.local && echo '.env.local を編集してください（DB / Supabase / 許可メール）'",

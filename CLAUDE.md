@@ -144,7 +144,8 @@ WKWebViewにはPushManagerが無いので、殻がAPNsのトークンを取っ�
   `pushSubscription` だけを数えると、アプリだけで受け取る利用者が起きた合図（#233）で `no_device` に断られ、設定・話題の画面も
   「端末なし」のままになる。**`sendPushToUser()` のVAPID未設定の早期returnはWeb Push側だけ**（APNsだけの構成でも送る）
 - **認証情報（`APNS_KEY_ID`・`APNS_TEAM_ID`・`APNS_KEY_P8`）は3つ揃わないとAPNsの経路ごと無効**（`apnsCredentials()` がnull。
-  登録APIも503）。外部（Apple Developer）で発行する値で機械生成できない。未設定でもWeb Pushは止まらない
+  登録APIも503）。外部（Apple Developer）で発行する値で機械生成できない。正は `apps/AppStoreConnect` の
+  「Apple Push Notification service (APNs)」セクション（`apns-key-id`・`apns-team-id`・`apns-auth-key`）に置く。未設定でもWeb Pushは止まらない
 - **依存は足していない**（Node標準の `http2`・`crypto`）。DB・ネットワークに触れない部分は `apns-core.ts` に切り出し、
   `test/apns.test.ts` が固定する。送信本体（`apns.ts`）はPrismaを引くので読めない——手元では `APNS_ORIGIN_OVERRIDE`（テスト専用）を
   自己署名のHTTP/2スタブへ向け、`NODE_TLS_REJECT_UNAUTHORIZED=0` で確かめられる（410で行が消えること・`apns-topic` 等のヘッダ）

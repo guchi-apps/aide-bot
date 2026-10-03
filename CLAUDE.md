@@ -109,7 +109,7 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 
 ## iOSアプリ（#441）
 
-`ios/` に、Webを開くSwiftUI＋WKWebViewの殻を持つ（Bundle ID `com.gucchii.morrow`・iOS 18以上。方式はYoteiFlowの
+`ios/` に、Webを開くSwiftUI＋WKWebViewの殻を持つ（Bundle ID `com.gucchii.morrow`・iOS 18以上。**対象デバイスはiPhone＋iPad（`TARGETED_DEVICE_FAMILY = "1,2"`。#482）。`1` だけだとiPadがiPhone互換モードになりiPhoneサイズで表示される。**方式はYoteiFlowの
 `ios/` を移植）。**画面・機能はWebが正本**で、殻は「開く・Googleログインを認証シートで往復する・通信失敗で再試行させる」だけ。
 詳細・手順は `ios/README.md`。
 

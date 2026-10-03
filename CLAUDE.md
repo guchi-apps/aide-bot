@@ -126,8 +126,14 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 - ログアウトはWebのフォーム（`/auth/signout`）のまま `signOutThisApp()`（scope: local）を通る。共有Supabaseの他アプリ・他端末は巻き込まない
 - **戻り先スキーム・横取りするパス・同一オリジン判定・エフェメラルはSwift（`ios/Morrow/`）とTS（`native-app.ts`）で二重に持つ**。
   `test/ios-consistency.test.ts`（`ios/scripts/check-consistency.mjs`）が照合する。**本番URL以外をコミットしない**
-- Web更新はデプロイだけで反映され、殻（`ios/`）を変えたときだけ新しいビルドをTestFlightへ上げる。**subpcにXcodeは無い**ので、
-  ビルド・署名・アップロード・実機確認はMacで本人が行う
+- Web更新はデプロイだけで反映され、殻（`ios/`）を変えたときだけ新しいビルドをTestFlightへ上げる。**#448から、mainの
+  `Deploy to Production` 成功後に `ios-testflight-trigger.yml` → `ios-testflight.yml`（macOSランナー）が自動で内部テストへ
+  配る**（YoteiFlow・kurashioと同じ方式）。`ios/Morrow/`・`ios/Morrow.xcodeproj/` に実質的な差分があるときだけビルドし
+  （判定は `ios/scripts/ios-changes.mjs`。`ios-rebuild-notice.yml` も同じ関数）、配った印はタグ `ios-testflight/<ビルド番号>`。
+  **`MARKETING_VERSION` は `package.json` と一致が必須**（ずれると配布ジョブが止まる）。`scripts.version` が
+  `sync-version.mjs` を呼ぶので版上げで揃う。**CIの書き出しは `ios/scripts/ExportOptions.plist`（export）で、手動用
+  `ios/ExportOptions.plist`（upload）と別**——uploadのまま使うと二重アップロード防止が効かない。ASCのAPIキーは
+  `apps/AppStoreConnect`（マニフェストの `ASC_*`）。**subpcにXcodeは無い**ので、手動ビルド・実機確認はMacで本人が行う
 
 ## Route Handlerのリクエスト本文（#262）
 

@@ -8,7 +8,9 @@ on:
 
 concurrency:
   group: deploy-aide-bot-production
-  cancel-in-progress: true
+  # SSH 中の配布を打ち切ると、旧成果物を削除した後で PM2 の再起動前に止まりうる。
+  # 後続のデプロイは待機させ、実行中のデプロイは完了させる。
+  cancel-in-progress: false
 
 jobs:
   tag:

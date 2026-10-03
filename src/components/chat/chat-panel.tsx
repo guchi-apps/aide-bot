@@ -386,7 +386,8 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSin
             </p>
           )}
 
-          <div ref={bottomRef} />
+          {/* 最新の発言が入力欄に接しないよう、末尾に余白を残す（#476）。 */}
+          <div ref={bottomRef} className="h-3" />
         </div>
       </div>
 

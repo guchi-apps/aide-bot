@@ -4,6 +4,7 @@ import { runCodexRecorded } from "@/lib/codex-run";
 import { dayStart, jstDayKey } from "@/lib/day-key";
 import { appendSecretaryExchange, primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
+import { allowedUserIds } from "@/lib/allowed-user-ids";
 import { listConnectedServers, toCodexMcpServers } from "@/lib/mcp/connections";
 import { findPreset } from "@/lib/mcp/presets";
 import {
@@ -197,7 +198,7 @@ async function runFor(user: ProactiveUser, now: Date): Promise<ProactiveOutcome>
  * **1人が失敗しても他は続ける。** 例外は外へ出さない（呼び出し元は `after()`）。
  */
 export async function runProactiveSuggestions(now = new Date()): Promise<ProactiveOutcome[]> {
-  const userIds = await usersWithSubscriptions();
+  const userIds = await allowedUserIds(await usersWithSubscriptions());
   const rows = await db.user.findMany({
     where: { id: { in: userIds } },
     select: {

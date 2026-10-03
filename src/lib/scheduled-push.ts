@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { allowedUserIds } from "@/lib/allowed-user-ids";
 import {
   SCHEDULED_PUSH_ALL,
   SCHEDULED_PUSH_KIND,
@@ -39,7 +40,7 @@ export type ScheduledPushOutcome = {
 const inFlight = new Set<string>();
 
 export async function runScheduledPushes(now = new Date()): Promise<ScheduledPushOutcome[]> {
-  const subscribed = await usersWithSubscriptions();
+  const subscribed = await allowedUserIds(await usersWithSubscriptions());
   // 通知の種類ごとのオフ（#488）。オフの利用者は仕入れも送信もしない
   const userIds: string[] = [];
   for (const id of subscribed) {
@@ -126,6 +127,12 @@ export async function runScheduledPushes(now = new Date()): Promise<ScheduledPus
         url: "/topics",
         tag: `${SCHEDULED_PUSH_KIND}:${schedule.id}`,
       });
+
+      // 全端末への送信に失敗した日は抑制記録も話題の消費印も残さず、次の起動で再試行する。
+      if (delivered === 0) {
+        outcomes.push({ ...base, status: "failed", delivered, detail: "通知を届けられる端末がありません" });
+        continue;
+      }
 
       await db.notificationLog.create({
         data: { userId: schedule.userId, kind: SCHEDULED_PUSH_KIND, dedupeKey, title, body, deliveredCount: delivered },

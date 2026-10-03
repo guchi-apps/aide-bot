@@ -1,6 +1,7 @@
 import { NextResponse, after } from "next/server";
 
 import { checkWakeSignal, runWakeBriefing } from "@/lib/briefing";
+import { isAllowedEmail } from "@/lib/allowed-users";
 import { db } from "@/lib/db";
 import { bearerToken, hashWakeToken } from "@/lib/wake-token";
 
@@ -38,11 +39,11 @@ export async function POST(request: Request) {
   const user = token
     ? await db.user.findUnique({
         where: { wakeTokenHash: hashWakeToken(token) },
-        select: { id: true, briefingHour: true, briefingMinute: true },
+        select: { id: true, email: true, briefingHour: true, briefingMinute: true },
       })
     : null;
 
-  if (!user) {
+  if (!user || !isAllowedEmail(user.email)) {
     return NextResponse.json(
       {
         ok: false,

@@ -127,6 +127,12 @@ export async function runScheduledPushes(now = new Date()): Promise<ScheduledPus
         tag: `${SCHEDULED_PUSH_KIND}:${schedule.id}`,
       });
 
+      // 全端末への送信に失敗した日は抑制記録も話題の消費印も残さず、次の起動で再試行する。
+      if (delivered === 0) {
+        outcomes.push({ ...base, status: "failed", delivered, detail: "通知を届けられる端末がありません" });
+        continue;
+      }
+
       await db.notificationLog.create({
         data: { userId: schedule.userId, kind: SCHEDULED_PUSH_KIND, dedupeKey, title, body, deliveredCount: delivered },
       });

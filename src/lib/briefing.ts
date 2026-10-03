@@ -9,6 +9,7 @@ import { runCodexRecorded } from "@/lib/codex-run";
 import { jstDayKey } from "@/lib/day-key";
 import { appendSecretaryExchange, primaryConversation } from "@/lib/day-log";
 import { db } from "@/lib/db";
+import { allowedUserIds, isAllowedUserId } from "@/lib/allowed-user-ids";
 import { listConnectedServers, toCodexMcpServers } from "@/lib/mcp/connections";
 import { ingestNotice } from "@/lib/notices";
 import { disabledPushKinds } from "@/lib/push/kinds-server";
@@ -202,6 +203,10 @@ async function runFor(
   now: Date,
   options: { ignoreScheduledTime?: boolean } = {},
 ): Promise<BriefingOutcome> {
+  if (!(await isAllowedUserId(userId))) {
+    return { userId, status: "skipped", delivered: 0, detail: "許可リスト対象外" };
+  }
+
   if (!options.ignoreScheduledTime && jstMinuteOfDay(now) < briefingHour * 60 + briefingMinute) {
     return { userId, status: "skipped", delivered: 0, detail: "設定時刻前" };
   }
@@ -438,7 +443,7 @@ async function deliverFor(userId: string, now: Date): Promise<BriefingOutcome> {
  * 止まる形にはしない。
  */
 export async function runMorningBriefing(now = new Date()): Promise<BriefingOutcome[]> {
-  const userIds = await usersWithSubscriptions();
+  const userIds = await allowedUserIds(await usersWithSubscriptions());
   const users = await db.user.findMany({
     where: { id: { in: userIds } },
     select: { id: true, briefingHour: true, briefingMinute: true },
@@ -525,6 +530,7 @@ export async function checkWakeSignal(userId: string, now: Date): Promise<WakeSi
  */
 export async function runWakeBriefing(user: BriefingUser, now: Date): Promise<void> {
   try {
+    if (!(await isAllowedUserId(user.id))) return;
     const { status, delivered, detail } = await runFor(user, now, { ignoreScheduledTime: true });
     console.info(
       `[aide-bot] 起きた合図からの朝の見通し: ${status}（${delivered}台）${detail ? ` ${detail}` : ""}`,

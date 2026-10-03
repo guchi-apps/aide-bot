@@ -1,6 +1,7 @@
 import { modelFor } from "@/lib/chat-model-server";
 import { runCodexRecorded } from "@/lib/codex-run";
 import { db } from "@/lib/db";
+import { allowedUserIds, isAllowedUserId } from "@/lib/allowed-user-ids";
 import { listConnectedServers, toCodexMcpServers } from "@/lib/mcp/connections";
 import { MCP_PRESETS } from "@/lib/mcp/presets";
 import { SECRETARY_INTRO } from "@/lib/persona";
@@ -187,6 +188,8 @@ export async function refreshHomeProfile(userId: string, now = new Date()): Prom
  * 戻り値はcronのログに出す一言。
  */
 export async function refreshHomeProfileIfStale(userId: string, now = new Date()): Promise<string> {
+  if (!(await isAllowedUserId(userId))) return "許可リスト対象外";
+
   const user = await db.user.findUnique({
     where: { id: userId },
     select: { homeProfileFetchedAt: true },
@@ -222,10 +225,11 @@ export async function refreshHomeProfileIfStale(userId: string, now = new Date()
  */
 export async function refreshHomeProfiles(now = new Date()): Promise<Record<string, string>> {
   const users = await db.user.findMany({ select: { id: true } });
+  const userIds = await allowedUserIds(users.map((user) => user.id));
   const outcomes: Record<string, string> = {};
 
-  for (const user of users) {
-    outcomes[user.id] = await refreshHomeProfileIfStale(user.id, now);
+  for (const userId of userIds) {
+    outcomes[userId] = await refreshHomeProfileIfStale(userId, now);
   }
 
   return outcomes;

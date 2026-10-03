@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { allowedUserIds } from "@/lib/allowed-user-ids";
 import {
   SCHEDULED_PUSH_ALL,
   SCHEDULED_PUSH_KIND,
@@ -39,7 +40,7 @@ export type ScheduledPushOutcome = {
 const inFlight = new Set<string>();
 
 export async function runScheduledPushes(now = new Date()): Promise<ScheduledPushOutcome[]> {
-  const subscribed = await usersWithSubscriptions();
+  const subscribed = await allowedUserIds(await usersWithSubscriptions());
   // 通知の種類ごとのオフ（#488）。オフの利用者は仕入れも送信もしない
   const userIds: string[] = [];
   for (const id of subscribed) {

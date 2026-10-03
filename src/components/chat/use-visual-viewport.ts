@@ -29,15 +29,20 @@ export function useVisualViewportFit() {
 
     const root = document.documentElement;
     let frame = 0;
+    // innerHeightもキーボードで縮む端末（#476の指摘）では差分が出ないので、キーボードが無いとき
+    // （フォーカス外）に観測した visualViewport.height の最大値も比べる基準にする。
+    let restingHeight = viewport.height;
 
     const apply = () => {
       frame = 0;
       if (!shouldApplyVisualViewport(viewport.scale)) return;
 
+      const focused = isEditableFocused(document.activeElement);
+      if (!focused) restingHeight = Math.max(restingHeight, viewport.height);
       const keyboardOpen = isKeyboardOpen(
-        window.innerHeight,
+        Math.max(window.innerHeight, focused ? restingHeight : 0),
         viewport.height,
-        isEditableFocused(document.activeElement),
+        focused,
       );
       if (keyboardOpen) {
         const height = `${Math.round(viewport.height)}px`;

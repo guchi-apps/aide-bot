@@ -109,7 +109,7 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
 
 ## iOSアプリ（#441）
 
-`ios/` に、Webを開くSwiftUI＋WKWebViewの殻を持つ（Bundle ID `com.gucchii.morrow`・iOS 18以上。方式はYoteiFlowの
+`ios/` に、Webを開くSwiftUI＋WKWebViewの殻を持つ（Bundle ID `com.gucchii.morrow`・iOS 18以上。**対象デバイスはiPhone＋iPad（`TARGETED_DEVICE_FAMILY = "1,2"`。#482）。`1` だけだとiPadがiPhone互換モードになりiPhoneサイズで表示される。**方式はYoteiFlowの
 `ios/` を移植）。**画面・機能はWebが正本**で、殻は「開く・Googleログインを認証シートで往復する・通信失敗で再試行させる」だけ。
 詳細・手順は `ios/README.md`。
 
@@ -134,6 +134,24 @@ curl -s -b /tmp/cookies.txt -o /dev/null -w '%{http_code}\n' http://localhost:<�
   `sync-version.mjs` を呼ぶので版上げで揃う。**CIの書き出しは `ios/scripts/ExportOptions.plist`（export）で、手動用
   `ios/ExportOptions.plist`（upload）と別**——uploadのまま使うと二重アップロード防止が効かない。ASCのAPIキーは
   `apps/AppStoreConnect`（マニフェストの `ASC_*`）。**subpcにXcodeは無い**ので、手動ビルド・実機確認はMacで本人が行う
+
+### iOSアプリへのAPNs通知（#475）
+
+WKWebViewにはPushManagerが無いので、殻がAPNsのトークンを取って `POST /api/push/apns` へ登録し、`sendPushToUser()`
+（`src/lib/push/subscriptions.ts`）が**Web Pushと並べて**APNsへも送る。詳細・手作業は `ios/README.md`。
+
+- **「通知を送れる端末があるか」は `countSubscriptions()`・`usersWithSubscriptions()` を必ず通す**（Web購読＋`ApnsDevice`の合算）。
+  `pushSubscription` だけを数えると、アプリだけで受け取る利用者が起きた合図（#233）で `no_device` に断られ、設定・話題の画面も
+  「端末なし」のままになる。**`sendPushToUser()` のVAPID未設定の早期returnはWeb Push側だけ**（APNsだけの構成でも送る）
+- **認証情報（`APNS_KEY_ID`・`APNS_TEAM_ID`・`APNS_KEY_P8`）は3つ揃わないとAPNsの経路ごと無効**（`apnsCredentials()` がnull。
+  登録APIも503）。外部（Apple Developer）で発行する値で機械生成できない。未設定でもWeb Pushは止まらない
+- **依存は足していない**（Node標準の `http2`・`crypto`）。DB・ネットワークに触れない部分は `apns-core.ts` に切り出し、
+  `test/apns.test.ts` が固定する。送信本体（`apns.ts`）はPrismaを引くので読めない——手元では `APNS_ORIGIN_OVERRIDE`（テスト専用）を
+  自己署名のHTTP/2スタブへ向け、`NODE_TLS_REJECT_UNAUTHORIZED=0` で確かめられる（410で行が消えること・`apns-topic` 等のヘッダ）
+- **失効の判定は `shouldDeleteToken()`**（410と、トークン無効の400だけ消す）。`DeviceTokenNotForTopic`・`BadEnvironment` は設定の問題で、消しても直らない
+- アプリの端末の見分けはUAの `MorrowIOS/`（`deviceLabelFromUserAgent()`・`notification-settings.tsx`）。アプリ内ではWeb Pushの購読UIを出さず、状態と「試しに送る」だけ
+- 通知の遷移先（`url`）は殻の `AppConfig.notificationTarget()` が `isInternalPath()` と同じ考え方で検査する（`//`・`\`・制御文字を弾く）。
+  `ios/scripts/check-consistency.mjs` が一部を照合する
 
 ## Route Handlerのリクエスト本文（#262）
 
@@ -1555,6 +1573,10 @@ ops-dashboardの「アプリ別のAI利用」（ops-dashboard#325）が、`GET /
   スクロールを0へ戻す。**指で拡大している間（`scale` ≠ 1）は触らない**（拡大でも高さが縮む）。
   手元ではCDPの `Page.addScriptToEvaluateOnNewDocument` で偽の `visualViewport`（`EventTarget` に
   `height`・`scale`）を差し込み、`resize` を投げれば配線までは確かめられる。効いたかは実機（`pnpm dev:https`）で見る
+  **#476: キーボードが出ても会話欄が縮まない報告があった**（iPhoneのPWA。縮み・末尾スクロールの両方が効いていない画面）。
+  検出（`isKeyboardOpen()`）を、入力欄にフォーカス中は60px超の縮みでも拾う形に広げ、フォーカス直後に150/400/800ms後にも
+  見直す（resizeが遅れる・届かない端末向け）。記録の末尾にも余白（`h-3`）を足した。**原因は実機で確定していない**ので、
+  直ったかは `pnpm dev:https` でiPhoneのPWAを開いて確かめること
 - **localStorageの値をuseStateの初期値やuseEffectで入れない。** ESLintの
   `react-hooks/set-state-in-effect` に掛かり、ハイドレーションもずれる。
   `useSyncExternalStore`（`src/lib/speech/voice-settings.ts`）で外部ストアとして扱う

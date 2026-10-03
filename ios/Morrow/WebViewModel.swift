@@ -18,6 +18,9 @@ final class WebViewModel: NSObject, ObservableObject {
     /// 最後に開こうとしたメインフレームのURL。読み込みに失敗すると `webView.url` は
     /// 直前に表示できていた画面のままなので、再試行はこちらを開き直す
     private var lastRequestedURL: URL?
+    /// サーバーへ送り終えたデバイストークン（APNs。#475）。起動ごとに1回送れば足りる
+    private var uploadedPushToken: String?
+    private var isUploadingPushToken = false
 
     override init() {
         let configuration = WKWebViewConfiguration()
@@ -51,6 +54,12 @@ final class WebViewModel: NSObject, ObservableObject {
         }
         pathMonitor.start(queue: .main)
         load(AppConfig.baseURL)
+
+        let push = PushRegistration.shared
+        push.openHandler = { [weak self] target in self?.openNotificationTarget(target) }
+        push.tokenHandler = { [weak self] in
+            Task { @MainActor in await self?.uploadPushTokenIfNeeded() }
+        }
     }
 
     func retry() {
@@ -100,6 +109,61 @@ final class WebViewModel: NSObject, ObservableObject {
 
     private func openExternally(_ url: URL) {
         UIApplication.shared.open(url)
+    }
+
+    /// 通知を押したときの遷移。アプリ内の画面は同じWebViewで、外部のURLはSafari等で開く
+    fileprivate func openNotificationTarget(_ raw: String) {
+        guard let url = AppConfig.notificationTarget(raw) else { return }
+        if AppConfig.isAppURL(url) {
+            load(url)
+        } else {
+            openExternally(url)
+        }
+    }
+}
+
+// MARK: - 通知（APNs。#475）
+
+extension WebViewModel {
+    /// ログイン後の画面が開けたら、通知の許可確認とトークンの送信を行う。
+    /// ログイン画面では許可を求めない（何のアプリか分からないうちに許可を迫らない）
+    fileprivate func pushCheckpoint() {
+        guard let url = webView.url, AppConfig.isAppURL(url), !url.path.hasPrefix("/login") else { return }
+        PushRegistration.shared.startIfNeeded()
+        Task { await uploadPushTokenIfNeeded() }
+    }
+
+    /// トークンを、WebViewの中（ログインCookieが届く側）から `/api/push/apns` へ送る。
+    /// 未ログイン（401）の回は送り済みにせず、次に画面が開けたときにやり直す
+    @MainActor
+    fileprivate func uploadPushTokenIfNeeded() async {
+        guard
+            let token = PushRegistration.shared.token,
+            token != uploadedPushToken,
+            !isUploadingPushToken,
+            let url = webView.url, AppConfig.isAppURL(url), !url.path.hasPrefix("/login")
+        else { return }
+
+        isUploadingPushToken = true
+        defer { isUploadingPushToken = false }
+
+        let script = """
+        const response = await fetch('/api/push/apns', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ token: token, environment: environment })
+        });
+        return { status: response.status };
+        """
+        let value = try? await webView.callAsyncJavaScript(
+            script,
+            arguments: ["token": token, "environment": PushRegistration.environment],
+            contentWorld: .page
+        )
+        if (value as? [String: Any])?["status"] as? Int == 200 {
+            uploadedPushToken = token
+        }
     }
 }
 
@@ -236,6 +300,7 @@ extension WebViewModel: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         isRetrying = false
         failure = nil
+        pushCheckpoint()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -272,6 +337,21 @@ extension WebViewModel: WKUIDelegate {
             }
         }
         return nil
+    }
+
+    /// マイク・カメラの要求（Web Speech API・`getUserMedia`）。Morrow自身のオリジンにだけ許可し、
+    /// 他のオリジンは拒否する。許可してもOSのマイク許可（初回のダイアログ）は別に出る
+    func webView(
+        _ webView: WKWebView,
+        requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+        initiatedByFrame frame: WKFrameInfo,
+        type: WKMediaCaptureType
+    ) async -> WKPermissionDecision {
+        guard type == .microphone,
+              origin.protocol == AppConfig.baseURL.scheme,
+              origin.host == AppConfig.baseURL.host
+        else { return .deny }
+        return .grant
     }
 
     /// `window.confirm()`（削除の確認など）。UIDelegateで実装しないと常に false が返り、実行できない

@@ -29,12 +29,21 @@ export function useVisualViewportFit() {
 
     const root = document.documentElement;
     let frame = 0;
+    // innerHeightもキーボードで縮む端末（#476の指摘）では差分が出ないので、キーボードが無いとき
+    // （フォーカス外）に観測した visualViewport.height の最大値も比べる基準にする。
+    let restingHeight = viewport.height;
 
     const apply = () => {
       frame = 0;
       if (!shouldApplyVisualViewport(viewport.scale)) return;
 
-      const keyboardOpen = isKeyboardOpen(window.innerHeight, viewport.height);
+      const focused = isEditableFocused(document.activeElement);
+      if (!focused) restingHeight = Math.max(restingHeight, viewport.height);
+      const keyboardOpen = isKeyboardOpen(
+        Math.max(window.innerHeight, focused ? restingHeight : 0),
+        viewport.height,
+        focused,
+      );
       if (keyboardOpen) {
         const height = `${Math.round(viewport.height)}px`;
         const changed = root.style.getPropertyValue("--app-height") !== height;
@@ -58,12 +67,22 @@ export function useVisualViewportFit() {
     viewport.addEventListener("scroll", schedule);
     // キーボードを閉じてもresizeが遅れて届く・届かない端末があるので、フォーカスが外れた回も見る。
     window.addEventListener("focusout", schedule);
+    // 入力欄へフォーカスした直後はresizeが遅れる・1度も届かない端末（#476）があるので、
+    // キーボードが出きるまでのあいだ数回見直す。
+    const timers: number[] = [];
+    const onFocusIn = () => {
+      schedule();
+      for (const delay of FOCUS_RECHECK_MS) timers.push(window.setTimeout(schedule, delay));
+    };
+    window.addEventListener("focusin", onFocusIn);
     apply();
 
     return () => {
       viewport.removeEventListener("resize", schedule);
       viewport.removeEventListener("scroll", schedule);
       window.removeEventListener("focusout", schedule);
+      window.removeEventListener("focusin", onFocusIn);
+      for (const timer of timers) window.clearTimeout(timer);
       if (frame) cancelAnimationFrame(frame);
       root.style.removeProperty("--app-height");
       delete root.dataset.keyboard;
@@ -77,9 +96,32 @@ export function useVisualViewportFit() {
  */
 const KEYBOARD_MIN_HEIGHT = 120;
 
+/** 入力欄にフォーカスしている間は、ツールバーとの取り違えが起きにくいので、より小さい縮みも拾う（#476）。 */
+const KEYBOARD_MIN_HEIGHT_FOCUSED = 60;
+
+/** フォーカス直後にキーボードの出きるのを待つ見直しの間隔（ミリ秒）。 */
+const FOCUS_RECHECK_MS = [150, 400, 800];
+
 /** Safariのツールバー程度の縮みは、キーボードとして扱わない。 */
-export function isKeyboardOpen(layoutHeight: number, visualHeight: number) {
-  return layoutHeight - visualHeight > KEYBOARD_MIN_HEIGHT;
+export function isKeyboardOpen(
+  layoutHeight: number,
+  visualHeight: number,
+  editableFocused = false,
+) {
+  const min = editableFocused ? KEYBOARD_MIN_HEIGHT_FOCUSED : KEYBOARD_MIN_HEIGHT;
+  return layoutHeight - visualHeight > min;
+}
+
+/** 文字を入力する要素にフォーカスしているか（画面キーボードが出る要素）。 */
+export function isEditableFocused(element: Element | null) {
+  if (!element) return false;
+  if (element instanceof HTMLTextAreaElement) return true;
+  if (element instanceof HTMLInputElement) {
+    return !["button", "checkbox", "radio", "submit", "range", "file", "color"].includes(
+      element.type,
+    );
+  }
+  return element instanceof HTMLElement && element.isContentEditable;
 }
 
 /** 指で拡大している間は、キーボード表示と取り違えない。 */

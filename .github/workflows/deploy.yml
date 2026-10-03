@@ -111,6 +111,9 @@ jobs:
       SIGNALY_WEBHOOK_URL: ${{ secrets.SIGNALY_WEBHOOK_URL }}
       VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
       VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+      APNS_KEY_ID: ${{ secrets.APNS_KEY_ID }}
+      APNS_TEAM_ID: ${{ secrets.APNS_TEAM_ID }}
+      APNS_KEY_P8: ${{ secrets.APNS_KEY_P8 }}
       BRIEFING_TRIGGER_TOKEN: ${{ secrets.BRIEFING_TRIGGER_TOKEN }}
       NOTICE_INGEST_TOKEN: ${{ secrets.NOTICE_INGEST_TOKEN }}
       OPS_API_TOKEN: ${{ secrets.OPS_API_TOKEN }}
@@ -196,6 +199,9 @@ jobs:
       SIGNALY_WEBHOOK_URL: ${{ secrets.SIGNALY_WEBHOOK_URL }}
       VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
       VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+      APNS_KEY_ID: ${{ secrets.APNS_KEY_ID }}
+      APNS_TEAM_ID: ${{ secrets.APNS_TEAM_ID }}
+      APNS_KEY_P8: ${{ secrets.APNS_KEY_P8 }}
       BRIEFING_TRIGGER_TOKEN: ${{ secrets.BRIEFING_TRIGGER_TOKEN }}
       NOTICE_INGEST_TOKEN: ${{ secrets.NOTICE_INGEST_TOKEN }}
       OPS_API_TOKEN: ${{ secrets.OPS_API_TOKEN }}
@@ -248,6 +254,9 @@ jobs:
           ALLOWED_GOOGLE_EMAILS: ${{ env.ALLOWED_GOOGLE_EMAILS }}
           VAPID_PUBLIC_KEY: ${{ env.VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ env.VAPID_PRIVATE_KEY }}
+          APNS_KEY_ID: ${{ env.APNS_KEY_ID }}
+          APNS_TEAM_ID: ${{ env.APNS_TEAM_ID }}
+          APNS_KEY_P8: ${{ env.APNS_KEY_P8 }}
           BRIEFING_TRIGGER_TOKEN: ${{ env.BRIEFING_TRIGGER_TOKEN }}
           NOTICE_INGEST_TOKEN: ${{ env.NOTICE_INGEST_TOKEN }}
           OPS_API_TOKEN: ${{ env.OPS_API_TOKEN }}
@@ -262,7 +271,7 @@ jobs:
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: ${{ env.SSH_PORT }}
           # ここに無い変数はSSH先に存在しない。env: と同じ名前を必ず並べる。
-          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,ALLOWED_GOOGLE_EMAILS,VAPID_PUBLIC_KEY,VAPID_PRIVATE_KEY,BRIEFING_TRIGGER_TOKEN,NOTICE_INGEST_TOKEN,OPS_API_TOKEN,SHARED_TOKEN_API_SECRET,ISSUE_DECK_URL,NOTION_API_TOKEN,TASK_API_TOKEN,TARGET_DIR
+          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,ALLOWED_GOOGLE_EMAILS,VAPID_PUBLIC_KEY,VAPID_PRIVATE_KEY,APNS_KEY_ID,APNS_TEAM_ID,APNS_KEY_P8,BRIEFING_TRIGGER_TOKEN,NOTICE_INGEST_TOKEN,OPS_API_TOKEN,SHARED_TOKEN_API_SECRET,ISSUE_DECK_URL,NOTION_API_TOKEN,TASK_API_TOKEN,TARGET_DIR
           script: |
             set -euo pipefail
             cd "${TARGET_DIR}"
@@ -295,6 +304,10 @@ jobs:
             # 401 で閉じたままになる。
             update_env VAPID_PUBLIC_KEY "$VAPID_PUBLIC_KEY"
             update_env VAPID_PRIVATE_KEY "$VAPID_PRIVATE_KEY"
+            # iOSアプリへのAPNs通知（#475）。3つのどれかが空だとAPNsの経路ごと無効になる。
+            update_env APNS_KEY_ID "$APNS_KEY_ID"
+            update_env APNS_TEAM_ID "$APNS_TEAM_ID"
+            update_env APNS_KEY_P8 "$APNS_KEY_P8"
             update_env BRIEFING_TRIGGER_TOKEN "$BRIEFING_TRIGGER_TOKEN"
             # お知らせの受け皿（#93）。空だと他アプリからの POST /api/notices が401で
             # 閉じたままになり、秘書の吹き出しに出るものが積まれない。

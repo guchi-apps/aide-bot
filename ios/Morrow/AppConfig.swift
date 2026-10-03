@@ -17,6 +17,20 @@ enum AppConfig {
         return "Mobile/15E148 MorrowIOS/\(version)"
     }
 
+    /// 通知の `url`（サーバーの `PushPayload.url`）から開く先を決める。アプリ内のパス（`/` 始まり）か
+    /// `http(s)` の絶対URLだけ。`//host`・`/\host`・制御文字や空白を含む値は、同一オリジンのパスに
+    /// 見えて外へ出るので受け付けない（`src/lib/safe-path.ts` の `isInternalPath()` と同じ考え方）
+    static func notificationTarget(_ raw: String) -> URL? {
+        if raw.unicodeScalars.contains(where: { $0.value <= 0x20 || $0.value == 0x7f }) { return nil }
+
+        if raw.hasPrefix("/") {
+            guard !raw.hasPrefix("//"), !raw.contains("\\") else { return nil }
+            return URL(string: raw, relativeTo: baseURL)?.absoluteURL
+        }
+        guard let url = URL(string: raw), ["http", "https"].contains(url.scheme ?? "") else { return nil }
+        return url
+    }
+
     /// このURLがアプリで開くべきWeb版の画面か（ホスト・スキーム・ポートまで一致）。
     /// 一致しないURLはWebViewへ読み込まず、Safari等で開く
     static func isAppURL(_ url: URL) -> Bool {

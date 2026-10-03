@@ -8,9 +8,10 @@
 | 表示名 | Morrow |
 | Bundle ID | `com.gucchii.morrow` |
 | 署名 | Automatic（Apple Developer Program のチーム `6AA3WFTR94`。kurashio・YoteiFlow と同じチーム） |
-| 対応 | iPhone・縦向き・iOS 18以上 |
+| 対応 | iPhone（縦向き）・iPad（縦横・全向き）・iOS 18以上。iPadでもiPhone互換モードにならず、Web側の `md`（768px以上）の2カラム表示になる（#482） |
 | 認証シートの戻り先 | `morrow://auth-callback` |
-| Associated Domains / Push / App Group | 使わない（初版スコープ外） |
+| Push Notifications | 使う（#475。APNs）。`Morrow.entitlements` の `aps-environment` |
+| Associated Domains / App Group | 使わない（初版スコープ外） |
 
 ## 更新が要る場所
 
@@ -138,12 +139,28 @@ PRのマージとTestFlight確認は別です。**この表が埋まるまで #4
 | Webの既存会話を読め、iOSから送った発言・返答がWebにも残る | 未確認 |
 | 完全終了して開き直してもログイン・会話が復元される／ログアウトで再ログインへ誘導される | 未確認 |
 | 日本語入力・変換確定（意図せず送信しない）・送信・返答表示 | 未確認 |
-| キーボード表示中に入力欄と最新の会話が使える | 未確認 |
+| キーボード表示中に入力欄と最新の会話が使える | 3.12.1（202610031350）: NG（入力欄が隠れる。#476で対応） |
 | 機内モードで再試行画面が出て、戻すと自動で読み込まれる | 未確認 |
 | Safari・PWA・PCの既存ログイン・会話・通知が今までどおり動く（アプリのログインでSafari側がログアウトされない） | 未確認 |
 | TestFlightから初回インストールでき、上記が通る | 未確認 |
-| 音声バー（マイク）が出るか・動くか | 未確認 |
+| 音声バー（マイク）が出るか・動くか | 3.12.1（202610031350）: NG（出るが、利用目的の宣言とWebViewの許可が無く使えない。#477で対応）。対応後のビルドで再確認する（未確認） |
 
 ## 初版スコープ外（後続Issue）
 
 ネイティブプッシュ通知・通知からの画面遷移 / 共有メニューから文章・URLを渡す機能 / App Intents・ショートカット・ウィジェット / 音声入出力のネイティブ実装・常時マイク / TestFlight配布のCI自動化 / App Store公開 / 会話画面のSwift化。
+
+## プッシュ通知（APNs。#475）
+
+WKWebViewにはWeb Pushが無いため、アプリはAPNsで通知を受ける。**送る中身・時刻はサーバーが決める**（朝の見通し・急ぎのお知らせ・先回りの提案・定時のお知らせが `sendPushToUser()` からWeb Pushと並んで届く）。
+
+- 殻（`PushRegistration.swift`）: ログイン後の画面が開けたら通知の許可を1回確認 → デバイストークンを取り、`WebViewModel` が WebView の中から `POST /api/push/apns` へ送る（未ログインの回は次に画面が開けたときにやり直す）。通知を押すと `url`（アプリ内のパスか外部URL）を `AppConfig.notificationTarget()` で検査して開く
+- サーバー: `ApnsDevice`（端末ごとに1行）・`src/lib/push/apns.ts`。依存は足さず、Node標準の `http2`・`crypto` でES256のJWTを作る。失効（410など）したトークンはその場で消す
+- **環境の区別**: Xcodeから入れるDebugビルドは sandbox、TestFlight・App Store（Release）は production のトークン。`PushRegistration.environment` が送り分ける。Debugで試す端末へはsandboxのAPNsへ送る
+- 通知を止めるのはiPhoneの設定アプリ（アプリ内の設定画面は状態と「試しに送る」だけ）
+
+### 手作業（本人の操作）
+
+1. Apple Developer の Identifiers で `com.gucchii.morrow` に **Push Notifications** を有効にする（CIのクラウド署名で自動更新されない場合）
+2. Keys で **APNs認証キー（.p8）** を作る（App Store Connect APIキーとは別物）。Key ID・Team ID（`6AA3WFTR94`）・.p8を1Passwordの `apps/aide-bot` に `apns-key-id`・`apns-team-id`・`apns-key-p8`（`AuthKey_XXXX.p8` の中身をbase64で1行）として登録し、`scripts/sync-github-secrets.sh` で同期してデプロイ
+3. 3つのどれかが欠けるとAPNsの経路ごと無効（Web Pushだけが動く）。設定画面のアプリ内表示にもその旨が出る
+4. 実機（TestFlight）で通知の許可 → 設定画面の「試しに送る」で受信を確かめる。**subpcには Xcode が無いので、受信確認は Mac・実機で行う**

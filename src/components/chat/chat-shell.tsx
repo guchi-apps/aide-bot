@@ -116,7 +116,8 @@ export function ChatShell({
 
   return (
     <div className="flex h-[calc(var(--app-height)_-_var(--app-bottom-inset))] w-full overflow-hidden">
-      <aside className="hidden w-[276px] shrink-0 border-r border-border md:block">
+      {/* iPadは横向き（1024px以上）で初めて一覧を常設する。縦向きまで2カラムにすると、本文がスマホより狭くなる。 */}
+      <aside className="hidden w-[276px] shrink-0 border-r border-border lg:block">
         <ConversationRail
           days={days}
           activeDate={activeDate}
@@ -138,7 +139,7 @@ export function ChatShell({
       </aside>
 
       {/* 閉じている間も描画して位置だけ動かす（#434。指に追従させるため）。`inert` で操作もフォーカスも止める。 */}
-      <div className="md:hidden" inert={!drawerOpen && dragProgress === null}>
+      <div className="lg:hidden" inert={!drawerOpen && dragProgress === null}>
           <button
             type="button"
             aria-label="日付の一覧を閉じる"
@@ -194,17 +195,17 @@ export function ChatShell({
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-2.5 border-b border-border bg-surface px-3 pb-2.5 pt-[calc(env(safe-area-inset-top)+0.625rem)] md:bg-transparent md:px-7 md:py-3.5">
+        <header className="flex items-center gap-2.5 border-b border-border bg-surface px-3 pb-2.5 pt-[calc(env(safe-area-inset-top)+0.625rem)] lg:bg-transparent lg:px-7 lg:py-3.5">
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
-            className="grid size-[34px] shrink-0 place-items-center rounded-[10px] border border-border bg-background transition-colors hover:bg-rail-active md:hidden"
+            className="grid size-[34px] shrink-0 place-items-center rounded-[10px] border border-border bg-background transition-colors hover:bg-rail-active lg:hidden"
           >
             <Menu className="size-4" aria-hidden="true" />
             <span className="sr-only">日付の一覧を開く</span>
           </button>
 
-          <h1 className="min-w-0 flex-1 truncate text-center text-sm font-medium md:text-left md:text-[0.9375rem]">
+          <h1 className="min-w-0 flex-1 truncate text-center text-sm font-medium lg:text-left lg:text-[0.9375rem]">
             {heading}
           </h1>
 

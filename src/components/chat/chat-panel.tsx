@@ -323,7 +323,7 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSin
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div
           className={cn(
-            "mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-5 md:px-7 md:py-6",
+            "mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-5 md:px-7 md:py-6 lg:max-w-[52rem] lg:px-10",
             isEmpty && "h-full justify-center",
           )}
         >
@@ -391,7 +391,7 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSin
         </div>
       </div>
 
-      <div className="px-4 pb-4 pt-2 md:px-7 md:pb-5">
+      <div className="px-4 pb-4 pt-2 md:px-7 md:pb-5 lg:px-10">
         {/*
           秘書の一言（#279）。お知らせ（#93）・ひとりごと（#101）・話題（#144）の輪を、
           秘書の一言の輪と同じ輪から出す（問い合わせは声かけ `useNudges()` の1本を使い回す。
@@ -422,7 +422,7 @@ export function ChatPanel({ initialEntries, todayKey, compactedCount, contextSin
           <VoiceBar voice={voice} onClose={closeVoice} />
         ) : (
           <form
-            className="mx-auto w-full max-w-3xl"
+            className="mx-auto w-full max-w-3xl lg:max-w-[52rem]"
             onSubmit={(event) => {
               event.preventDefault();
               send();
